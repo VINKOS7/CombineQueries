@@ -1,6 +1,6 @@
 using System.Reflection;
 
-using VQueries.Api.Extensions;
+using CombineQueries.Api.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 

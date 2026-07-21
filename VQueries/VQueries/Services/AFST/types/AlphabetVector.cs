@@ -1,4 +1,4 @@
-﻿namespace VQueries.Api.Services.AFST.types;
+﻿namespace CombineQueries.Api.Services.AFST.types;
 
 public enum AlphabetVector
 {

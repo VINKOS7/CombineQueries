@@ -1,6 +1,6 @@
 ﻿using Dotseed.Domain;
 
-namespace VQueries.Domain.Aggregates.Translator;
+namespace CombineQueries.Domain.Aggregates.Translator;
 
 public interface ITranslatorRepo : IRepository<Translator>
 {
@@ -11,6 +11,4 @@ public interface ITranslatorRepo : IRepository<Translator>
     Task<Guid> GetIdByAlphabetAsync(string alphabet);
 
     Task<Translator> GetByAlphabetAsync(string alphabet);
-
-    Task<IDictionary<char, string[]>> GetCombineQueriesAsync(Guid id, string symbols);
 }

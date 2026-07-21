@@ -4,7 +4,7 @@
   <Project Path="VQueries.Infra/VQueries.Infra.csproj">
     <BuildDependency Project="VQueries.Domain/VQueries.Domain.csproj" />
   </Project>
-  <Project Path="VQueries/VQueries.Api.csproj">
+  <Project Path="VQueries/CombineQueries.Api.csproj">
     <BuildDependency Project="VQueries.Domain/VQueries.Domain.csproj" />
     <BuildDependency Project="VQueries.Infra/VQueries.Infra.csproj" />
   </Project>

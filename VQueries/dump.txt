@@ -1,0 +1,1088 @@
+﻿=== TestCLient\CQUE.cs ===
+
+public class CQUE
+{
+    // СЖАТИЕ: Из 8 символов делает массив из 4 чисел (длина ровно в 2 раза меньше)
+    public int[] Compress(string input, string clientAlphabet)
+    {
+        if (string.IsNullOrEmpty(input) || input.Length % 2 != 0 || string.IsNullOrEmpty(clientAlphabet)) return new int[0];
+
+        int baseLen = clientAlphabet.Length;
+        int totalBlocks = input.Length / 2;
+        int[] res = new int[totalBlocks];
+
+        for (int b = 0; b < totalBlocks; b++)
+        {
+            int idx1 = clientAlphabet.IndexOf(input[b * 2]);
+            int idx2 = clientAlphabet.IndexOf(input[b * 2 + 1]);
+            if (idx1 < 0 || idx2 < 0) return new int[0];
+
+            // Формула плоской матрицы: переводим пару в один уникальный ID
+            res[b] = (idx1 * baseLen) + idx2;
+        }
+        return res;
+    }
+
+    // РАСЖАТИЕ: Из массива чисел восстанавливает исходную строку текста
+    public string Decompress(int[] input, string clientAlphabet)
+    {
+        if (input == null || input.Length == 0 || string.IsNullOrEmpty(clientAlphabet)) return "";
+
+        int baseLen = clientAlphabet.Length;
+        char[] res = new char[input.Length * 2];
+        int resIdx = 0;
+
+        for (int b = 0; b < input.Length; b++)
+        {
+            int id = input[b];
+
+            // Обратная математика матрицы: достаем координаты X и Y из ID
+            int idx1 = id / baseLen;
+            int idx2 = id % baseLen;
+
+            res[resIdx] = clientAlphabet[idx1];
+            res[resIdx + 1] = clientAlphabet[idx2];
+            resIdx += 2;
+        }
+        return new string(res);
+    }
+}
+
+
+
+=== TestCLient\Program.cs ===
+
+using System;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        var cque = new CQUE();
+        string alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
+
+        // Входная строка клиента (8 символов)
+        string original = "robawsvi";
+
+        // Кодируем: на выходе получаем массив чисел (ровно 4 элемента)
+        int[] encoded = cque.Compress(original, alphabet);
+
+        // Декодируем обратно в строку
+        string decoded = cque.Decompress(encoded, alphabet);
+
+        Console.WriteLine($"Original      ({original.Length} chrs): {original}");
+        Console.WriteLine($"Compressed IDs ({encoded.Length} items): {IntArrayToString(encoded)}");
+        Console.WriteLine($"Decompress    ({decoded.Length} chrs): {decoded}");
+
+        Console.ReadLine();
+    }
+
+    public static string IntArrayToString(int[] array)
+    {
+        if (array == null || array.Length == 0) return "";
+
+        char[] res = new char[array.Length];
+
+        for (int i = 0; i < array.Length; i++) res[i] = (char) array[i];
+        return new string(res);
+    }
+}
+
+
+=== TestCLient\TestCLient.csproj ===
+
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
+
+
+
+=== VQueries\Controllers\Translator\Handlers\Init\InitHandler.cs ===
+
+using MediatR;
+
+using CombineQueries.Api.Services.AFST;
+using CombineQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Translator.types;
+
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.Init;
+
+public class InitHandler : IRequestHandler<InitRequest, InitResponse>
+{
+    private readonly ILogger<InitHandler> _logger;
+    private readonly ITranslatorRepo _translatorRepo;
+    private readonly IAFST _aFST;
+
+    public InitHandler(ITranslatorRepo translatorRepo, ILogger<InitHandler> logger, IAFST aFST)
+    {
+        _logger = logger;
+        _translatorRepo = translatorRepo;
+        _aFST = aFST;
+    }
+
+    public async Task<InitResponse> Handle(InitRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var id = _translatorRepo.GetIdByAlphabetAsync(request.Alphabet);
+
+            var webAlphabet = Translator.ATRFrom(request.Alphabet);
+
+            _aFST.SetContext(new SetContextCommand<char> () { Alphabet = request.Alphabet, ArenaTreeContext = Translator.ATRFrom(request.Alphabet) });
+
+            if (await id != Guid.Empty) return new () { ShortDomain = "http://v.ro" };
+            else
+            {
+                var translator = Translator.From(new InitCommand<char> { Runes = Translator.ATRFrom(request.Alphabet), BaseForwardUrl = request.baseForwardUrl, Alphabet = request.Alphabet });
+
+                await _translatorRepo.AddAsync(translator);
+
+                await _translatorRepo.UnitOfWork.SaveChangesAsync(cancellationToken);
+
+                _logger.LogInformation($"attempt init alphabet - success: added new with ID: { translator.Id }");
+
+                return new () { ShortDomain = "http://v.ro" };
+            }
+        }
+        catch (Exception ex) 
+        {
+            _logger.LogError(ex.Message);
+
+            throw;
+        }
+    }
+}
+
+
+
+=== VQueries\Controllers\Translator\Handlers\Init\InitRequest.cs ===
+
+using MediatR;
+using Newtonsoft.Json;
+using CombineQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Translator.types;
+
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.Init;
+
+public record InitRequest : IRequest<InitResponse>
+{
+    [JsonProperty("alphabet")] public required string Alphabet { get; set; }
+    [JsonProperty("baseQuery")] public required string baseForwardUrl { get; set; }
+
+    [JsonProperty("name")] public string? Name { get; set; }
+    [JsonProperty("description")] public string? Description { get; set; }
+}
+
+public record InitCommand<TSymbol> : IAddTranslator<TSymbol>
+{
+    public required string Alphabet { get; set; }
+    public required string BaseForwardUrl { get; set; }
+    public required IArenaTreeRunes<TSymbol> Runes { get; set; }
+    public string? Name { get; set; }
+    public string? Description { get; set; }
+}
+
+
+=== VQueries\Controllers\Translator\Handlers\Init\InitResponse.cs ===
+
+using Newtonsoft.Json;
+
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.Init;
+
+public record InitResponse
+{
+    [JsonProperty("shortDomain")] required public string? ShortDomain { get; set; }
+}
+
+
+=== VQueries\Controllers\Translator\Handlers\Merge\MergeHandler.cs ===
+
+using MediatR;
+
+using CombineQueries.Api.Services.AFST;
+using CombineQueries.Domain.Aggregates.Translator;
+
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.CQMergeSend;
+
+public class MergeHandler : IRequestHandler<MergeRequest, MergeResponse>
+{
+    private readonly ILogger<MergeHandler> _logger;
+    private readonly IAFST _alphabetFST;
+    private readonly ITranslatorRepo _translatorRepo;
+
+    public MergeHandler(ILogger<MergeHandler> logger, HttpClient client, ITranslatorRepo translator, IAFST alphabetFST)
+    {
+        _logger = logger;
+        _translatorRepo = translator;
+        _alphabetFST = alphabetFST;
+    }
+
+    public async Task<MergeResponse> Handle(MergeRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var translator = _translatorRepo.GetByAlphabetAsync(_alphabetFST.Alphabet ?? throw new Exception("CRIT: rootAlphabet is null"));
+
+            _alphabetFST.UnrunedCombine.Add((await translator).Unruned(request.Runes));
+
+            _logger.LogInformation("attempt merge CombineQuery: success");
+
+            return new MergeResponse() { delta = "mmaybe parts server context" };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex.ToString());
+
+            throw;
+        }
+    }
+}
+
+
+
+=== VQueries\Controllers\Translator\Handlers\Merge\MergeRequest.cs ===
+
+using MediatR;
+using Newtonsoft.Json;
+
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.CQMergeSend;
+
+public record MergeRequest : IRequest<MergeResponse>
+{
+    [JsonProperty("runes")] public string Runes { get; set; }
+}
+
+
+
+=== VQueries\Controllers\Translator\Handlers\Merge\MergeResponse.cs ===
+
+using Newtonsoft.Json;
+
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.CQMergeSend;
+
+public record MergeResponse
+{
+    [JsonProperty("response")] public string delta { get; set; }
+}
+
+
+=== VQueries\Controllers\Translator\Handlers\Send\SendHandler.cs ===
+
+using CombineQueries.Api.Services.AFST;
+using CombineQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Translator.types;
+using MediatR;
+
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.Send;
+
+public class SendHandler : IRequestHandler<SendRequest, SendResponse>
+{
+    private readonly ILogger<SendHandler> _logger;
+    private readonly IAFST _afst;
+    private readonly ITranslatorRepo _translatorRepo;
+
+    private readonly HttpClient _httpClient;
+    public SendHandler(ILogger<SendHandler> logger, HttpClient client, ITranslatorRepo translator, IAFST alphabetFST)
+    {
+        _logger = logger;
+        _httpClient = client;
+        _translatorRepo = translator;
+        _afst = alphabetFST;
+    }
+
+    public async Task<SendResponse> Handle(SendRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (_afst.Alphabet is null || _afst.ArenaTreeContext is null) throw new Exception("CRIT: /init не вызван");
+
+            var response = await _httpClient.GetAsync(string.Concat(_afst.UnrunedCombine) + UnrunedCombine(_afst.Alphabet, _afst.ArenaTreeContext, request.Runes));
+
+            _afst.UnrunedCombine.Clear();
+
+            _logger.LogInformation("attempt send merged CombineQuery: success");
+
+            return new SendResponse { Response = await response.Content.ReadAsStringAsync() };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex.ToString());
+            throw;
+        }
+    }
+
+    // wireValue = matchedNode.Id * (alphabet.Length+1) + symbolIndex — тот же трюк с флэттингом пары,
+    // что и в самом начале (idx1*baseLen+idx2), только по оси "узел дерева" вместо "символ алфавита".
+    // symbolIndex == alphabet.Length — сентинел "без расширения" (финальный хвост без роста).
+    private static string UnrunedCombine(string alphabet, IArenaTreeRunes<char> runes, string wireRunes)
+    {
+        int wireValue = 0;
+        foreach (var c in wireRunes)
+        {
+            int digit = alphabet.IndexOf(c);
+
+            if (digit < 0) throw new Exception($"domain error: symbol '{c}' not in alphabet");
+            
+            wireValue = wireValue * alphabet.Length + digit;
+        }
+
+        int symbolSpan = alphabet.Length + 1;
+        var node = runes.Get(wireValue / symbolSpan);
+        int symbolIndex = wireValue % symbolSpan;
+
+        var chars = new Stack<char>();
+        var walk = node;
+
+        while (walk.ParentId != -1)
+        {
+            chars.Push(walk.ParentSymbol!);
+            walk = runes.Get(walk.ParentId);
+        }
+
+        string prefix = new string(chars.ToArray());
+
+        if (symbolIndex < alphabet.Length)
+        {
+            char ext = alphabet[symbolIndex];
+            runes.From(node, ext);
+            return prefix;
+        }
+
+        return prefix;
+    }
+}
+
+
+=== VQueries\Controllers\Translator\Handlers\Send\SendRequest.cs ===
+
+using MediatR;
+using Newtonsoft.Json;
+
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.Send;
+
+public record SendRequest : IRequest<SendResponse>
+{
+    [JsonProperty("runes")] public string Runes { get; set; }
+}
+
+
+
+=== VQueries\Controllers\Translator\Handlers\Send\SendResponse.cs ===
+
+using Newtonsoft.Json;
+
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.Send;
+
+public record SendResponse
+{
+    [JsonProperty("response")] public string Response { get; set; }
+}
+
+
+=== VQueries\Controllers\Translator\TranslatorController.cs ===
+
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+
+using MediatR;
+
+using CombineQueries.Api.Controllers.TranslatorController.Handlers.Init;
+using CombineQueries.Api.Controllers.TranslatorController.Handlers.CQMergeSend;
+
+namespace CombineQueries.Api.Controllers.TranslatorController;
+
+[Route("translator")]
+public class TranslatorController : Controller
+{
+    private readonly IMediator _mediator;
+
+    public TranslatorController(IMediator mediator) => _mediator = mediator;
+
+    [AllowAnonymous] [HttpGet("alphabet/init")] public Task<InitResponse> Init(InitRequest request) => _mediator.Send(request);
+
+    [AllowAnonymous] [HttpGet("runes/single")] public Task<MergeResponse> Send(MergeRequest request) => _mediator.Send(request);
+
+    [AllowAnonymous] [HttpGet("runes/combine")] public Task<MergeResponse> Merged(MergeRequest request) => _mediator.Send(request);
+}
+
+
+
+=== VQueries\Extensions\ApplicationExtensions.cs ===
+
+using CombineQueries.Api.Services.AFST;
+
+namespace CombineQueries.Api.Extensions;
+
+public static class ApplicationExtensions
+{
+    public static IServiceCollection ConfigureApplicationServices(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddScoped<HttpClient>(); // yes, i know about D from SOLID and it is broken this principle. But is not comers code, maybe fix later
+        services.AddScoped<IAFST, AFST>();
+
+        return services;
+    }
+}
+
+
+=== VQueries\Extensions\EntityFrameworkExtensions.cs ===
+
+using Microsoft.EntityFrameworkCore;
+
+using MediatR;
+
+using CombineQueries.Infra.Repos;
+
+namespace CombineQueries.Api.Extensions;
+
+public static class EntityFrameworkCoreExtensions
+{
+    public static IServiceCollection ConfigureEntityFramework(this IServiceCollection services, IConfiguration configuration)
+    {
+        string connectionString = configuration.GetConnectionString("Context");
+        services
+            .AddEntityFrameworkNpgsql()
+            .AddDbContext<Context>(
+                options => options
+                    .UseNpgsql(
+                        connectionString,
+                        b => b.MigrationsAssembly("VQueries")
+                    )
+                    .EnableSensitiveDataLogging()
+            );
+
+        return services;
+    }
+
+    public static void RunMigrations(this WebApplication app, IConfiguration configuration)
+    {
+        var mediator = app.Services.GetRequiredService<IMediator>();
+        string connectionString = configuration.GetConnectionString("Context");
+
+        var options = new DbContextOptionsBuilder<Context>()
+            .UseNpgsql(
+                connectionString,
+                b => b
+                    .MigrationsAssembly(typeof(Program).Assembly.FullName)
+                    .MigrationsHistoryTable(
+                        "__EFMigrationsHistory",
+                "public"))
+            .Options;
+
+        using var context = new Context(options, mediator);
+        // aot moment)))))))))))))))))))))))))
+        //context.Database.Migrate();
+    }
+}
+
+
+=== VQueries\Extensions\InfrastructureExtensions.cs ===
+
+using CombineQueries.Infra.Repos.TranslatorRepo;
+using CombineQueries.Domain.Aggregates.Translator;
+
+namespace CombineQueries.Api.Extensions;
+
+public static class InfrastructureExtensions
+{
+    public static IServiceCollection ConfigureInfrastructureServices(this IServiceCollection services)
+    {
+        services.AddScoped<ITranslatorRepo, TranslatorRepo>();
+
+        return services;
+    }
+}
+
+
+
+=== VQueries\Properties\launchSettings.json ===
+
+{
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "launchUrl": "swagger",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "dotnetRunMessages": true,
+      "applicationUrl": "http://localhost:5017"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker",
+      "launchBrowser": true,
+      "launchUrl": "{Scheme}://{ServiceHost}:{ServicePort}/swagger",
+      "environmentVariables": {
+        "ASPNETCORE_HTTP_PORTS": "8080"
+      },
+      "publishAllPorts": true,
+      "useSSL": false
+    }
+  },
+  "$schema": "https://json.schemastore.org/launchsettings.json"
+}
+
+
+=== VQueries\Services\AFST\types\AlphabetVector.cs ===
+
+namespace CombineQueries.Api.Services.AFST.types;
+
+public enum AlphabetVector
+{
+    Next = 1,
+    Back = -1,
+}
+
+
+=== VQueries\Services\AFST\AFST.cs ===
+
+using CombineQueries.Domain.Aggregates.Translator.types;
+
+namespace CombineQueries.Api.Services.AFST;
+
+public class AFST : IAFST
+{
+    public string? Alphabet { get; private set; }
+    public IArenaTreeRunes<char>? ArenaTreeContext { get; private set; }
+    public IList<string> UnrunedCombine { get; } = new List<string>();
+
+    public void SetContext(ISetContextCommand<char> command)
+    {
+        Alphabet = command.Alphabet;
+        ArenaTreeContext = command.ArenaTreeContext;
+        UnrunedCombine.Clear();
+    }
+}
+
+
+=== VQueries\Services\AFST\IAFST.cs ===
+
+using CombineQueries.Domain.Aggregates.Translator.types;
+namespace CombineQueries.Api.Services.AFST;
+
+public interface IAFST
+{
+    string? Alphabet { get; }
+    IArenaTreeRunes<char>? ArenaTreeContext { get; }
+    IList<string> UnrunedCombine { get; }
+    void SetContext(ISetContextCommand<char> command);
+}
+
+
+=== VQueries\Services\AFST\ISetContextCommand.cs ===
+
+using CombineQueries.Domain.Aggregates.Translator.types;
+
+namespace CombineQueries.Api.Services.AFST;
+
+public interface ISetContextCommand<TRunes>
+{
+    string Alphabet { get; init; }
+    IArenaTreeRunes<TRunes> ArenaTreeContext { get; init; }
+}
+
+public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
+{
+    public IArenaTreeRunes<TRunes> ArenaTreeContext { get; init; }
+    public string Alphabet { get; init; }
+}
+
+
+=== VQueries\appsettings.Development.json ===
+
+{
+  "ConnectionStrings": {
+    "Context": "Server=localhost;Database=VQueries; User ID=postgres; password=123;"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  }
+}
+
+
+
+=== VQueries\appsettings.json ===
+
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+
+
+=== VQueries\CombineQueries.Api.csproj ===
+
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot>true</PublishAot>
+    <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dotseed.Context" Version="0.1.2" />
+    <PackageReference Include="Dotseed.Domain" Version="0.1.1" />
+    <PackageReference Include="MediatR" Version="14.2.0" />
+    <PackageReference Include="Microsoft.AspNet.SignalR.Client" Version="2.4.3" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
+    <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.23.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.2.3" />
+    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VQueries.Domain\VQueries.Domain.csproj" />
+    <ProjectReference Include="..\VQueries.Infra\VQueries.Infra.csproj" />
+  </ItemGroup>
+  
+</Project>
+
+
+
+=== VQueries\Dictionary.json ===
+
+
+
+=== VQueries\Program.cs ===
+
+using System.Reflection;
+
+using CombineQueries.Api.Extensions;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container.
+
+builder.Services.AddControllers();
+// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+//SecretKey
+builder.Services.Configure<SecretKey>
+    (builder.Configuration.GetSection("SecretKey"));
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll",
+        builder =>
+        {
+            builder.SetIsOriginAllowedToAllowWildcardSubdomains();
+            builder.AllowAnyHeader();
+            builder.AllowAnyMethod();
+            builder.WithOrigins(
+                "http://localhost:3000",
+                "chrome-extension://*");
+        });
+});
+builder.Services.ConfigureEntityFramework(builder.Configuration);
+
+builder.Services.AddEndpointsApiExplorer();
+
+builder.Services.AddSwaggerGen();
+
+builder.Services.ConfigureApplicationServices(builder.Configuration);
+
+builder.Services.ConfigureInfrastructureServices();
+
+builder.Services.AddMediatR(cfg =>
+    cfg.RegisterServicesFromAssemblies(Assembly.GetExecutingAssembly()));
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline.
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+
+app.UseAuthorization();
+
+app.UseCors("AllowAll");
+
+app.MapControllers();
+
+app.RunMigrations(builder.Configuration);
+
+app.Run();
+
+
+=== VQueries\SecretKey.cs ===
+
+internal class SecretKey
+{
+}
+
+
+=== VQueries.Domain\Aggregates\Translator\types\ArenaTreeRunes.cs ===
+
+using static System.Net.Mime.MediaTypeNames;
+
+namespace CombineQueries.Domain.Aggregates.Translator.types;
+
+public interface IArenaTreeRunes<TSymbol>
+{
+    public IRune<TSymbol>? Root { get; }
+    public IRune<TSymbol> Get(int id);
+    public IRune<TSymbol> From(IRune<TSymbol> move, TSymbol symbol);
+}
+
+public class ArenaTreeRunes<TSymbol> : IArenaTreeRunes<TSymbol>
+{
+    private readonly List<IRune<TSymbol>> _runes = new();
+    public IRune<TSymbol>? Root { get; }
+
+    public IRune<TSymbol> From(IRune<TSymbol> move, TSymbol symbol)
+    {
+        if (move.Next.TryGetValue(symbol, out var childId)) return _runes[childId];
+
+        var node = new Rune<TSymbol>
+        {
+            Id = _runes.Count,
+            ParentId = move.Id,
+            ParentSymbol = symbol
+        };
+
+        _runes.Add(node);
+
+        move.Next[symbol] = node.Id;
+
+        return node;
+    }
+
+    public IRune<TSymbol>? Get(int id) => _runes[id];
+}
+
+
+
+=== VQueries.Domain\Aggregates\Translator\types\Rune.cs ===
+
+namespace CombineQueries.Domain.Aggregates.Translator.types;
+
+public interface IRune<TSymbol> where TSymbol : notnull
+{
+    int Id { get; set; }
+    int ParentId { get; set; }
+    bool IsTerminal { get; set; }
+    TSymbol? ParentSymbol { get; set; }
+    IDictionary<TSymbol, int> Next { get; set; }
+    void ResetNext();
+}
+
+public record Rune<TSymbol> : IRune<TSymbol> where TSymbol : notnull
+{
+    public required int Id { get; set; }
+    public int ParentId { get; set; } = -1;
+    public required TSymbol? ParentSymbol { get; set; }
+
+    public IDictionary<TSymbol, int> Next { get; set; } = new Dictionary<TSymbol, int>();
+    public bool IsTerminal { get; set; }
+
+    public void ResetNext() => Next = new Dictionary<TSymbol, int>();
+}
+
+
+=== VQueries.Domain\Aggregates\Translator\IAddTranslator.cs ===
+
+using CombineQueries.Domain.Aggregates.Translator.types;
+
+namespace CombineQueries.Domain.Aggregates.Translator;
+
+public interface IAddTranslator<TSymbol>
+{
+    public string Alphabet { get; }
+    public IArenaTreeRunes<TSymbol> Runes { get; set; }
+
+    public string BaseForwardUrl { get; set; }
+
+    public string? Name { get; set; }
+
+    public string? Description { get; set; }
+}
+
+
+
+=== VQueries.Domain\Aggregates\Translator\ITranslatorRepo.cs ===
+
+using Dotseed.Domain;
+
+namespace CombineQueries.Domain.Aggregates.Translator;
+
+public interface ITranslatorRepo : IRepository<Translator>
+{
+    Task AddAsync(Translator translator);
+
+    Task<bool> IsHasAsync(Guid id);
+
+    Task<Guid> GetIdByAlphabetAsync(string alphabet);
+
+    Task<Translator> GetByAlphabetAsync(string alphabet);
+}
+
+
+
+=== VQueries.Domain\Aggregates\Translator\Translator.cs ===
+
+using Dotseed.Domain;
+using CombineQueries.Domain.Aggregates.Translator.types;
+
+namespace CombineQueries.Domain.Aggregates.Translator;
+
+internal static class IntExtns
+{
+    public static string ArrayToString(this int[] array)
+    {
+        if (array == null || array.Length == 0) return "";
+
+        char[] res = new char[array.Length];
+
+        for (int i = 0; i < array.Length; i++) res[i] = (char)array[i];
+
+        return new string(res);
+    }
+}
+
+public class Translator : Entity, IAggregateRoot
+{
+    public Guid Id { get; set; } = new();
+
+    public required string BaseForwardUrl { get; set; }
+    public required string Alphabet { get; set; }
+    public required IArenaTreeRunes<char> Runes { get; set; }
+
+    public string? Name { get; set; }
+    public string? Description { get; set; }
+
+    public static Translator From(IAddTranslator<char> command) => new()
+    {
+        Alphabet = command.Alphabet,
+        BaseForwardUrl = command.BaseForwardUrl,
+        Runes = command.Runes,
+
+        Name = command.Name ?? string.Empty,
+        Description = command.Description ?? string.Empty,
+    };
+
+    public static IArenaTreeRunes<char> ATRFrom(string alphabet)
+    {
+        var arena = new ArenaTreeRunes<char>();
+
+        foreach (char c in alphabet) arena.From(new ArenaTreeRunes<char>().Root, c);
+
+        return arena;
+    }
+
+
+    public string Unruned(string runes)
+    {
+        int id = 0;
+
+        foreach (var c in runes)
+        {
+            int digit = Alphabet.IndexOf(c);
+
+            if (digit < 0) throw new Exception($"domain error: symbol '{c}' not in alphabet");
+
+            id = id * Alphabet.Length + digit;
+        }
+
+        var chars = new Stack<char>();
+        var node = Runes.Get(id);
+
+        while (node.ParentId != -1)
+        {
+            chars.Push(node.ParentSymbol);
+
+            node = Runes.Get(node.ParentId);
+        }
+
+        return new string(chars.ToArray());
+    }
+}
+
+
+=== VQueries.Domain\Aggregates\types\StringExtensions.cs ===
+
+public static class StringExtensions
+{
+    public static Dictionary<TKey, TValue> ToDictionary<TSource, TKey, TValue>(
+        this IEnumerable<TSource> source,
+        Func<TSource, int, TKey> keySelector,
+        Func<TSource, int, TValue> valueSelector)
+    {
+        if (source == null) throw new ArgumentNullException(nameof(source));
+        if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
+        if (valueSelector == null) throw new ArgumentNullException(nameof(valueSelector));
+
+        var dictionary = new Dictionary<TKey, TValue>();
+        int index = 0;
+
+        foreach (var item in source)
+        {
+            TKey key = keySelector(item, index);
+            TValue value = valueSelector(item, index);
+
+            dictionary.Add(key, value);
+            index++;
+        }
+
+        return dictionary;
+    }
+}
+
+
+=== VQueries.Domain\VQueries.Domain.csproj ===
+
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dotseed.Domain" Version="0.1.1" />
+  </ItemGroup>
+
+</Project>
+
+
+
+=== VQueries.Infra\Configures\TranslatorEntityConfiguration.cs ===
+
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using CombineQueries.Domain.Aggregates.Translator;
+
+namespace CombineQueries.Infra.Configures;
+
+public class TranslatorEntityConfiguration : IEntityTypeConfiguration<Translator>
+{
+    public void Configure(EntityTypeBuilder<Translator> builder)
+    {
+        //maybe OwnsMany better -- one translator - many runes alphs
+        builder.OwnsOne(b => b.Runes);
+        // for relatoinsships between tables
+        throw new NotImplementedException();
+    }
+}
+
+
+
+=== VQueries.Infra\Repos\TranslatorRepo\TranslatorRepo.cs ===
+
+using Microsoft.EntityFrameworkCore;
+using Dotseed.Domain;
+
+using CombineQueries.Domain.Aggregates.Translator;
+
+namespace CombineQueries.Infra.Repos.TranslatorRepo;
+
+public class TranslatorRepo : ITranslatorRepo
+{
+    private readonly Context _db;
+
+    public TranslatorRepo(Context db) => _db = db;
+
+    public IUnitOfWork UnitOfWork => _db;
+
+    public async Task AddAsync(Translator translator) => await _db.Translators.AddAsync(translator);
+
+    public async Task<Translator> GetByIdAsync(Guid id) => await _db.Translators.FirstAsync(t => t.Id == id);
+
+    public async Task<bool> IsHasAsync(Guid id) => _db.Translators.AnyAsync(t => t.Id == id).Result;
+
+    public async Task<Guid> GetIdByAlphabetAsync(string alphabet) => _db.Translators.FirstAsync(t => t.Alphabet == alphabet).Result.Id;
+
+    public async Task<Translator> GetByAlphabetAsync(string alphabet) => _db.Translators.FirstAsync(t => t.Alphabet == alphabet).Result;
+}
+
+
+
+=== VQueries.Infra\Repos\Context.cs ===
+
+using Microsoft.EntityFrameworkCore;
+using Dotseed.Context;
+using MediatR;
+
+using CombineQueries.Infra.Configures;
+using CombineQueries.Domain.Aggregates.Translator;
+
+namespace CombineQueries.Infra.Repos;
+
+//without event-bus
+public class Context : UnitOfWorkContext
+{
+    public DbSet<Translator> Translators { get; set; }
+    public Context(DbContextOptions options, IMediator mediator) : base(options, mediator) { }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        // modelBuilder.ApplyConfiguration(new TranslatorEntityConfiguration());
+    }
+
+    public override async Task<bool> SaveEntitiesAsync(CancellationToken cancellationToken = new CancellationToken())
+    {
+        await base.SaveEntitiesAsync(cancellationToken);
+
+        // await _integrationEventLogService.PublishStoredIntegrationEventsAsync();
+
+        return true;
+    }
+}
+
+
+=== VQueries.Infra\VQueries.Infra.csproj ===
+
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dotseed.Context" Version="0.1.2" />
+    <PackageReference Include="MediatR" Version="14.2.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VQueries.Domain\VQueries.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Services\" />
+  </ItemGroup>
+
+</Project>
+
+
+

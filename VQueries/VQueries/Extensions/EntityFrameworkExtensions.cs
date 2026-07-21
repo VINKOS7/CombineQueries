@@ -2,9 +2,9 @@
 
 using MediatR;
 
-using VQueries.Infra.Repos;
+using CombineQueries.Infra.Repos;
 
-namespace VQueries.Api.Extensions;
+namespace CombineQueries.Api.Extensions;
 
 public static class EntityFrameworkCoreExtensions
 {

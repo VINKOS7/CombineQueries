@@ -1,6 +1,6 @@
 ﻿using Newtonsoft.Json;
 
-namespace VQueries.Api.Controllers.TranslatorController.Handlers.Send;
+namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.Send;
 
 public record SendResponse
 {

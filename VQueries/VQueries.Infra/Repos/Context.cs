@@ -2,10 +2,10 @@
 using Dotseed.Context;
 using MediatR;
 
-using VQueries.Infra.Configures;
-using VQueries.Domain.Aggregates.Translator;
+using CombineQueries.Infra.Configures;
+using CombineQueries.Domain.Aggregates.Translator;
 
-namespace VQueries.Infra.Repos;
+namespace CombineQueries.Infra.Repos;
 
 //without event-bus
 public class Context : UnitOfWorkContext

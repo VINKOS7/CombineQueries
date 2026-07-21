@@ -1,19 +1,15 @@
-﻿namespace VQueries.Api.Services.AFST;
+﻿using CombineQueries.Domain.Aggregates.Translator.types;
+
+namespace CombineQueries.Api.Services.AFST;
 
 public interface ISetContextCommand<TRunes>
 {
-    int Dimension { get; }
-
-    TRunes Alphabet { get; }
-
-    string BaseQuery { get; }
+    string Alphabet { get; init; }
+    IArenaTreeRunes<TRunes> ArenaTreeContext { get; init; }
 }
 
 public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
 {
-    public int Dimension { get; init; }
-
-    public TRunes Alphabet { get; init; }
-
-    public string BaseQuery { get; init; }
+    public IArenaTreeRunes<TRunes> ArenaTreeContext { get; init; }
+    public string Alphabet { get; init; }
 }

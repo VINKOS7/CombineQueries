@@ -1,8 +1,8 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using VQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Translator;
 
-namespace VQueries.Infra.Configures;
+namespace CombineQueries.Infra.Configures;
 
 public class TranslatorEntityConfiguration : IEntityTypeConfiguration<Translator>
 {

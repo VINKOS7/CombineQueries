@@ -1,7 +1,7 @@
-﻿using VQueries.Infra.Repos.TranslatorRepo;
-using VQueries.Domain.Aggregates.Translator;
+﻿using CombineQueries.Infra.Repos.TranslatorRepo;
+using CombineQueries.Domain.Aggregates.Translator;
 
-namespace VQueries.Api.Extensions;
+namespace CombineQueries.Api.Extensions;
 
 public static class InfrastructureExtensions
 {

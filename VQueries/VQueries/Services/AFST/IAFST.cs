@@ -1,16 +1,10 @@
-﻿using Microsoft.EntityFrameworkCore.Infrastructure;
-using System.Collections;
-namespace VQueries.Api.Services.AFST;
+﻿using CombineQueries.Domain.Aggregates.Translator.types;
+namespace CombineQueries.Api.Services.AFST;
 
-public interface IAFST<TRunes>
+public interface IAFST
 {
-    int Dimension { get; }
-
-    ICollection<TRunes> Alphabets { get; }
-
-    TRunes Alphabet { get; }
-
-    void SetContext(ISetContextCommand<TRunes> alphabletFiniteStateTransreducer);
-
-    IList<string> SimpleUnrunedMerged { get; }
+    string? Alphabet { get; }
+    IArenaTreeRunes<char>? ArenaTreeContext { get; }
+    IList<string> UnrunedCombine { get; }
+    void SetContext(ISetContextCommand<char> command);
 }

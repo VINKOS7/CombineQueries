@@ -1,8 +1,11 @@
-﻿namespace VQueries.Domain.Aggregates.Translator;
+﻿using CombineQueries.Domain.Aggregates.Translator.types;
 
-public interface IAddTranslator
+namespace CombineQueries.Domain.Aggregates.Translator;
+
+public interface IAddTranslator<TSymbol>
 {
-    public IDictionary<char, string[]> Runes { get; set; }
+    public string Alphabet { get; }
+    public IArenaTreeRunes<TSymbol> Runes { get; set; }
 
     public string BaseForwardUrl { get; set; }
 

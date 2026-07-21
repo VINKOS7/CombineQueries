@@ -3,10 +3,10 @@ using Microsoft.AspNetCore.Authorization;
 
 using MediatR;
 
-using VQueries.Api.Controllers.TranslatorController.Handlers.AlphabetInit;
-using VQueries.Api.Controllers.TranslatorController.Handlers.CQMergeSend;
+using CombineQueries.Api.Controllers.TranslatorController.Handlers.Init;
+using CombineQueries.Api.Controllers.TranslatorController.Handlers.CQMergeSend;
 
-namespace VQueries.Api.Controllers.TranslatorController;
+namespace CombineQueries.Api.Controllers.TranslatorController;
 
 [Route("translator")]
 public class TranslatorController : Controller
@@ -15,9 +15,9 @@ public class TranslatorController : Controller
 
     public TranslatorController(IMediator mediator) => _mediator = mediator;
 
-    [AllowAnonymous] [HttpGet("alphabet/init")] public Task<AlphabetInitResponse> AlphabetInit(AlphabetInitRequest request) => _mediator.Send(request);
+    [AllowAnonymous] [HttpGet("alphabet/init")] public Task<InitResponse> Init(InitRequest request) => _mediator.Send(request);
 
-    [AllowAnonymous] [HttpGet("runes/single")] public Task<CQMergeResponse> SingleSend(CQMergeRequest request) => _mediator.Send(request);
+    [AllowAnonymous] [HttpGet("runes/single")] public Task<MergeResponse> Send(MergeRequest request) => _mediator.Send(request);
 
-    [AllowAnonymous] [HttpGet("runes/combine")] public Task<CQMergeResponse> CQMergedSend(CQMergeRequest request) => _mediator.Send(request);
+    [AllowAnonymous] [HttpGet("runes/combine")] public Task<MergeResponse> Merged(MergeRequest request) => _mediator.Send(request);
 }
