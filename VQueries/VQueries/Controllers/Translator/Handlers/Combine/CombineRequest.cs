@@ -3,7 +3,7 @@ using Newtonsoft.Json;
 
 namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.CQMergeSend;
 
-public record MergeRequest : IRequest<MergeResponse>
+public record CombineRequest : IRequest<CombineResponse>
 {
     [JsonProperty("runes")] public string Runes { get; set; }
 }

@@ -2,7 +2,7 @@
 
 namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.CQMergeSend;
 
-public record MergeResponse
+public record CombineResponse
 {
-    [JsonProperty("response")] public string delta { get; set; }
+    [JsonProperty("response")] public string? Response { get; set; }
 }

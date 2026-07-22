@@ -13,7 +13,7 @@
         {
             int idx1 = clientAlphabet.IndexOf(input[b * 2]);
             int idx2 = clientAlphabet.IndexOf(input[b * 2 + 1]);
-            if (idx1 < 0 || idx2 < 0) return new int[0];
+            if (idx1 < 0 || idx2 < 0) return [0];
 
             // Формула плоской матрицы: переводим пару в один уникальный ID
             res[b] = (idx1 * baseLen) + idx2;
@@ -42,6 +42,51 @@
             res[resIdx + 1] = clientAlphabet[idx2];
             resIdx += 2;
         }
+        return new string(res);
+    }
+
+    public int[] CompressRecursive(string input, string alphabet, int sizeChein, out List<string> alphabetLevels)
+    {
+        alphabetLevels = new List<string> { alphabet };
+
+        string currentAlphabet = alphabet;
+        int[] current = Compress(input, currentAlphabet);
+
+        while (current.Length > sizeChein && current.Length % 2 == 0 && current.Length > 0)
+        {
+            string asString = IntArrayToString(current);
+
+            currentAlphabet = currentAlphabet + asString;
+            alphabetLevels.Add(currentAlphabet);
+
+            current = Compress(asString, currentAlphabet);
+        }
+
+        return current;
+    }
+
+    public string DecompressRecursive(int[] compressed, List<string> alphabetLevels)
+    {
+        int[] current = compressed;
+
+        for (int level = alphabetLevels.Count - 1; level >= 1; level--)
+        {
+            string decoded = Decompress(current, alphabetLevels[level]);
+
+            current = new int[decoded.Length];
+
+            for (int i = 0; i < decoded.Length; i++) current[i] = decoded[i];
+        }
+
+        return Decompress(current, alphabetLevels[0]);
+    }
+
+    private static string IntArrayToString(int[] array)
+    {
+        if (array == null || array.Length == 0) return "";
+
+        char[] res = new char[array.Length];
+        for (int i = 0; i < array.Length; i++) res[i] = (char)array[i];
         return new string(res);
     }
 }
