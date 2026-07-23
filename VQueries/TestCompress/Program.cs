@@ -11,7 +11,7 @@
 
         int[] encoded = cque.CompressRecursive(input, alphabet, 2, out var alphabetLevels);//client 
 
-        string decoded = cque.DecompressRecursive(encoded, alphabetLevels).Where(s => s != (char) 34).ToString()!;//server
+        string decoded = string.Concat(cque.DecompressRecursive(encoded, alphabetLevels).Where(s => s != (char) 34));//server
 
         Console.WriteLine($"Compressed counts wires ({encoded.Length} items): {IntArrayToString(encoded)}, levels={alphabetLevels.Count}");
         Console.WriteLine($"Decompress undon input ({decoded.Length} chrs): {decoded}");

@@ -1,6 +1,6 @@
 <Solution>
   <Project Path="QueryRune/QueryRune.csproj" Id="52537bae-ada1-4527-9900-6fce8505ddde" />
-  <Project Path="TestCLient/TestCompress.csproj" Id="00276072-3a58-4791-94ad-9c355bb4a815" />
+  <Project Path="TestCompress/TestCompress.csproj" />
   <Project Path="VQueries.Domain/VQueries.Domain.csproj" />
   <Project Path="VQueries.Infra/VQueries.Infra.csproj">
     <BuildDependency Project="VQueries.Domain/VQueries.Domain.csproj" />
