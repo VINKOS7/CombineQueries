@@ -5,14 +5,13 @@
         var cque = new CQUE();
         string alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
 
-        // Входная строка клиента (8 символов)
-        string input = "navicororobawsvi";
+        string input = "navicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsvinavicororobawsv?!";
 
-        //client 
-        int[] encoded = cque.CompressRecursive(input, alphabet, 2, out var alphabetLevels);
+        if (input.Length % 2 is not 0) input = input + '"';
 
-        //server
-        string decoded = cque.DecompressRecursive(encoded, alphabetLevels);
+        int[] encoded = cque.CompressRecursive(input, alphabet, 2, out var alphabetLevels);//client 
+
+        string decoded = cque.DecompressRecursive(encoded, alphabetLevels).Where(s => s != (char) 34).ToString()!;//server
 
         Console.WriteLine($"Compressed counts wires ({encoded.Length} items): {IntArrayToString(encoded)}, levels={alphabetLevels.Count}");
         Console.WriteLine($"Decompress undon input ({decoded.Length} chrs): {decoded}");

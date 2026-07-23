@@ -1,6 +1,7 @@
 using System.Reflection;
-
+using System.Text.Json.Serialization;
 using CombineQueries.Api.Extensions;
+using Microsoft.AspNetCore.Mvc;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -39,3 +40,8 @@ app.UseCors("AllowAll");
 app.MapControllers();
 
 app.Run();
+
+public class QueryRune : Controller
+{
+    [JsonProperty]
+}
