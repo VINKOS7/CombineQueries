@@ -5,8 +5,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <PublishAot>true</PublishAot>
     <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+
+    <!--
+      PublishAot убран намеренно. Этот стек (MVC-контроллеры, EF Core, MediatR, Newtonsoft,
+      Swashbuckle) целиком построен на рефлексии и деревьях выражений, а AOT выключает
+      IsDynamicCodeSupported и CanEmitObjectArrayDelegate - отсюда и падение Swagger, и поломка
+      миграций EF. Обратно включать только если переедешь на minimal API + source-gen JSON.
+    -->
+    <PublishAot>false</PublishAot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,9 +30,18 @@
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
   </ItemGroup>
 
+  <!--
+    PublishAot=true выключает "расширенные" метаданные модели, и Swashbuckle падает на
+    NotSupportedException: IsConvertibleType is not initialized when IsEnhancedModelMetadataSupported is false.
+    Возвращаем переключатель вручную - иначе Swagger не поднимается даже в дев-режиме.
+  -->
   <ItemGroup>
-    <ProjectReference Include="..\VQueries.Domain\VQueries.Domain.csproj" />
-    <ProjectReference Include="..\VQueries.Infra\VQueries.Infra.csproj" />
+    <RuntimeHostConfigurationOption Include="Microsoft.AspNetCore.Mvc.ApiExplorer.IsEnhancedModelMetadataSupported" Value="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VQueries.Domain\CombineQueries.Domain.csproj" />
+    <ProjectReference Include="..\VQueries.Infra\CombineQueries.Infra.csproj" />
   </ItemGroup>
   
 </Project>

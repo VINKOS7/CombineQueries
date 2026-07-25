@@ -13,7 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\VQueries.Domain\VQueries.Domain.csproj" />
+    <ProjectReference Include="..\VQueries.Domain\CombineQueries.Domain.csproj" />
   </ItemGroup>
 
   <ItemGroup>

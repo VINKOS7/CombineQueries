@@ -1,93 +1,121 @@
-﻿public class CQUE
+using System.Text;
+
+public class CQUE
 {
-    // СЖАТИЕ:
-    public int[] Compress(string input, string clientAlphabet, int sizeChein)
+    // Основание паковки пары ФИКСИРОВАНО (не длина алфавита!). Если брать длину алфавита,
+    // она растёт по уровням -> compress и decompress используют РАЗНЫЕ основания -> мусор.
+    const int BASE = 256;
+
+    // Промежуточные "числа-как-символы" сдвигаем выше базового ASCII, чтобы они НИКОГДА
+    // не совпали с символом базового алфавита - иначе условие выхода IsFullyDecoded врёт.
+    const int SHIFT = 0x2000;
+
+    // один шаг сжатия: пары символов -> числа. Всегда парами (шаг 2).
+    public int[] Compress(string input, string alphabet)
     {
-        if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(clientAlphabet)) return [];
+        if (string.IsNullOrEmpty(input) || input.Length % 2 != 0) return new int[0];
 
-        int baseLen = clientAlphabet.Length;
-        int totalBlocks = input.Length / sizeChein;
-        int[] res = new int[totalBlocks];
+        int n = input.Length / 2;
+        int[] res = new int[n];
 
-        for (int b = 0; b < totalBlocks; b++)
+        for (int b = 0; b < n; b++)
         {
-            int idx1 = clientAlphabet.IndexOf(input[b * sizeChein]);
-            int idx2 = clientAlphabet.IndexOf(input[b * sizeChein + 1]);
+            int i1 = alphabet.IndexOf(input[b * 2]);
+            int i2 = alphabet.IndexOf(input[b * 2 + 1]);
 
-            if (idx1 < 0 || idx2 < 0) return [0];
+            if (i1 < 0 || i2 < 0) return new int[0];
 
-            // Формула плоской матрицы: переводим пару в один уникальный ID
-            res[b] = (idx1 * baseLen) + idx2;
+            res[b] = i1 * BASE + i2;
         }
 
         return res;
     }
 
-    // РАСЖАТИЕ:
-    public string Decompress(int[] input, string clientAlphabet)
+    // один шаг расжатия: числа -> пары символов. То же основание BASE.
+    public string Decompress(int[] input, string alphabet)
     {
-        if (input == null || input.Length == 0 || string.IsNullOrEmpty(clientAlphabet)) return "";
+        if (input == null || input.Length == 0) return "";
 
-        char[] res = new char[input.Length * 2];
-        int resIdx = 0;
+        var sb = new StringBuilder();
 
-        for (int mover = 0; mover < input.Length; mover++)
+        foreach (int id in input)
         {
-            int id = input[mover];
-
-            int idx1 = id / clientAlphabet.Length;
-            int idx2 = id % clientAlphabet.Length;
-
-            res[resIdx] = clientAlphabet[idx1];
-            res[resIdx + 1] = clientAlphabet[idx2];
-            resIdx += 2;
+            sb.Append(alphabet[id / BASE]);
+            sb.Append(alphabet[id % BASE]);
         }
 
-        return new string(res);
+        return sb.ToString();
     }
 
-    public int[] CompressRecursive(string input, string alphabet, int sizeChein, out List<string> alphabetLevels)
+    // Рекурсивно жмёт до <= sizeChein чисел, РАСТИТ общий алфавит (через ref - он нужен
+    // декомпрессору, чтобы мапить добавленные символы обратно).
+    public int[] CompressRecursive(string input, ref string alphabet, int sizeChein)
     {
-        alphabetLevels = new List<string> { alphabet };
+        int[] current = Compress(input, alphabet);
 
-        string currentAlphabet = alphabet;
-        int[] current = Compress(input, currentAlphabet, sizeChein);
+        string asString = NumsToString(current);
+        alphabet = AppendMissing(alphabet, asString);
 
-        while (current.Length > sizeChein && current.Length % sizeChein == 0 && current.Length > 0)
+        while (current.Length > sizeChein && current.Length % 2 == 0)
         {
-            string asString = IntArrayToString(current);
+            current = Compress(asString, alphabet);
 
-            currentAlphabet = currentAlphabet + asString;
-            alphabetLevels.Add(currentAlphabet);
-
-            current = Compress(asString, currentAlphabet, sizeChein);
+            asString = NumsToString(current);
+            alphabet = AppendMissing(alphabet, asString);
         }
 
         return current;
     }
 
-    public string DecompressRecursive(int[] compressed, List<string> alphabetLevels)
+    // Расжимает, пока результат не станет ЦЕЛИКОМ из базовых символов (первые baseLen).
+    // baseLen - длина ИСХОДНОГО алфавита (до роста!), НЕ финального. alphabet - ФИНАЛЬНЫЙ (после роста).
+    public string DecompressRecursive(int[] compressed, string alphabet, int baseLen)
     {
-        int[] current = compressed;
+        string current = Decompress(compressed, alphabet);
 
-        for (int level = alphabetLevels.Count - 1; level >= 1; level--)
-        {
-            string decoded = Decompress(current, alphabetLevels[level]);
+        while (!IsFullyDecoded(current, alphabet, baseLen))
+            current = Decompress(ToIntArray(current), alphabet);
 
-            current = new int[decoded.Length];
-
-            for (int i = 0; i < decoded.Length; i++) current[i] = decoded[i];
-        }
-
-        return Decompress(current, alphabetLevels[0]);
+        return current;
     }
 
-    private static string IntArrayToString(int[] array)
+    // символ из расширенной части (позиция в алфавите >= baseLen) = ещё сжатый уровень, не текст
+    static bool IsFullyDecoded(string s, string fullAlphabet, int baseLen)
     {
-        if (array == null || array.Length == 0) return "";
+        foreach (char c in s)
+            if (fullAlphabet.IndexOf(c) >= baseLen) return false;
 
-        char[] res = new char[array.Length];
-        for (int i = 0; i < array.Length; i++) res[i] = (char)array[i];
+        return true;
+    }
+
+    // число -> сдвинутый символ (для хранения в строке/алфавите)
+    private static string NumsToString(int[] nums)
+    {
+        if (nums == null || nums.Length == 0) return "";
+
+        char[] res = new char[nums.Length];
+        for (int i = 0; i < nums.Length; i++) res[i] = (char)(nums[i] + SHIFT);
+
         return new string(res);
+    }
+
+    // сдвинутый символ -> исходное число
+    private static int[] ToIntArray(string s)
+    {
+        int[] r = new int[s.Length];
+        for (int i = 0; i < s.Length; i++) r[i] = s[i] - SHIFT;
+
+        return r;
+    }
+
+    static string AppendMissing(string a, string b)
+    {
+        var sb = new StringBuilder(a);
+        string cur = a;
+
+        foreach (char c in b)
+            if (cur.IndexOf(c) < 0) { sb.Append(c); cur = sb.ToString(); }
+
+        return sb.ToString();
     }
 }

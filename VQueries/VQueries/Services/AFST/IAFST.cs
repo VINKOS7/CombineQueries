@@ -9,5 +9,9 @@ public interface IAFST
     IArenaTreeRunes<char>? ArenaTreeContext { get; }
     IList<string> UnrunedCombine { get; }
     IList<string> CombineRunes { get; }
+
+    // договор с клиентом из /init: сколько рун несёт один запрос
+    int RuneSize { get; }
+
     void SetContext(ISetContextCommand<char> command);
 }

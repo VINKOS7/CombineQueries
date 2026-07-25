@@ -1,10 +1,9 @@
-﻿using MediatR;
+using MediatR;
 
 using CombineQueries.Api.Services.AFST;
 using CombineQueries.Domain.Aggregates.Translator;
-using CombineQueries.Domain.Aggregates.Translator.types;
 
-namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.Init;
+namespace CombineQueries.Api.Controllers.Translator.Handlers.Init;
 
 public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 {
@@ -23,27 +22,45 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
     {
         try
         {
+            int runeSize = request.RuneSize;
+
+            // Любая ширина >= 2. Степень двойки не требуется: декод простого режима - склейка рун,
+            // а не парная распаковка, так что нечётные ширины (3) работают штатно.
+            if (runeSize < 2) throw new Exception($"domain error: runeSize={runeSize} - должен быть >= 2");
+
             var id = _translatorRepo.GetIdByAlphabetAsync(request.Alphabet);
 
-            var webAlphabet = Translator.ATRFrom(request.Alphabet);
+            // ОДНО дерево на всё: и в AFST, и в персистируемый Translator. Раньше тут ATRFrom
+            // звался трижды и получались три несвязанных дерева.
+            var runes = Domain.Aggregates.Translator.Translator.ATRFrom(request.Alphabet);
 
-            _aFST.SetContext(new SetContextCommand<char> () { Alphabet = request.Alphabet, ArenaTreeContext = Translator.ATRFrom(request.Alphabet) });
-
-            if (await id != Guid.Empty) return new () { ShortDomain = "http://v.ro" };
-            else
+            _aFST.SetContext(new SetContextCommand<char>
             {
-                var translator = Translator.From(new InitCommand<char> { Runes = Translator.ATRFrom(request.Alphabet), BaseForwardUrl = request.baseForwardUrl, Alphabet = request.Alphabet });
+                Alphabet = request.Alphabet,
+                ArenaTreeContext = runes,
+                RuneSize = runeSize
+            });
+
+            _logger.LogInformation($"init: алфавит {request.Alphabet.Length} симв, runeSize={runeSize}");
+
+            if (await id == Guid.Empty)
+            {
+                var translator = Domain.Aggregates.Translator.Translator.From(new InitCommand<char>
+                {
+                    Runes = runes,
+                    BaseForwardUrl = request.baseForwardUrl,
+                    Alphabet = request.Alphabet
+                });
 
                 await _translatorRepo.AddAsync(translator);
-
                 await _translatorRepo.UnitOfWork.SaveChangesAsync(cancellationToken);
 
-                _logger.LogInformation($"attempt init alphabet - success: added new with ID: { translator.Id }");
-
-                return new () { ShortDomain = "http://v.ro" };
+                _logger.LogInformation($"init: добавлен новый Translator ID={translator.Id}");
             }
+
+            return new() { ShortDomain = "http://v.ro", RuneSize = runeSize };
         }
-        catch (Exception ex) 
+        catch (Exception ex)
         {
             _logger.LogError(ex.Message);
 

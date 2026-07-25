@@ -91,6 +91,70 @@ public class Translator : Entity, IAggregateRoot
 
     public string Unrune(string runes) => UnrunedCombine(Alphabet, Runes, runes);
 
+    // Растит дерево из ГОТОВОГО текста тем же правилом, что и энкодер: жадно матчим самый длинный
+    // известный префикс, добавляем ровно одно расширение, сдвигаемся на длину матча.
+    // Нужно для простого режима: там дерево ничем не кормится (руны не адресуют узлы), и без этого
+    // оно никогда не прогреется. КРИТИЧНО: клиент и сервер обязаны звать это на ОДНОМ И ТОМ ЖЕ
+    // тексте, иначе деревья разъедутся и tree-режим начнёт врать.
+    public static void Learn(string text, IArenaTreeRunes<char> runes)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+
+        int pos = 0;
+
+        while (pos < text.Length)
+        {
+            var node = runes.Root;
+            int depth = 0;
+
+            while (pos + depth < text.Length && node.Next.TryGetValue(text[pos + depth], out int childId))
+            {
+                node = runes.Get(childId);
+                depth++;
+            }
+
+            if (pos + depth < text.Length) runes.From(node, text[pos + depth]);
+
+            // depth==0 бывает только если символа нет даже в преседе - иначе зациклимся
+            pos += depth == 0 ? 1 : depth;
+        }
+    }
+
+    // Во сколько раз tree-режим плотнее простого для этого текста при текущем дереве.
+    // Простой режим - всегда 1 исходный символ на 1 wire-символ, поэтому знаменатель = text.Length.
+    // Считает БЕЗ роста дерева (чистая оценка, дерево не трогает).
+    public static double TreeDensity(string text, string alphabet, IArenaTreeRunes<char> runes)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+
+        int symbolSpan = alphabet.Length + 1;
+        int wireChars = 0;
+        int pos = 0;
+
+        while (pos < text.Length)
+        {
+            var node = runes.Root;
+            int depth = 0;
+
+            while (pos + depth < text.Length && node.Next.TryGetValue(text[pos + depth], out int childId))
+            {
+                node = runes.Get(childId);
+                depth++;
+            }
+
+            long wireValue = (long)node.Id * symbolSpan + (pos + depth < text.Length ? 0 : alphabet.Length);
+
+            // сколько base-alphabet разрядов нужно, чтобы записать wireValue
+            int digits = 1;
+            for (long v = wireValue; v >= alphabet.Length; v /= alphabet.Length) digits++;
+
+            wireChars += digits;
+            pos += depth == 0 ? 1 : depth;
+        }
+
+        return wireChars == 0 ? 0 : (double)text.Length / wireChars;
+    }
+
     public static int[] Rune(string s, string alphabet)
     {
         if (string.IsNullOrEmpty(s) || s.Length % 2 != 0 || string.IsNullOrEmpty(alphabet)) return [];

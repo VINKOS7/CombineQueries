@@ -20,9 +20,7 @@ builder.Services.AddCors(options =>
             builder.SetIsOriginAllowedToAllowWildcardSubdomains();
             builder.AllowAnyHeader();
             builder.AllowAnyMethod();
-            builder.WithOrigins(
-                "http://localhost:3000",
-                "chrome-extension://*");
+            builder.WithOrigins("http://localhost:3000", "chrome-extension://*");
         });
 });
 builder.Services.ConfigureEntityFramework(builder.Configuration);

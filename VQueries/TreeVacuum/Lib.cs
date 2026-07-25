@@ -147,11 +147,15 @@ class Server
 
     public string Accumulated => _accumulated;
     public int TreeNodeCount => _tree.Count;
+    public int LastRounds { get; private set; }
+    public int LastWireChars { get; private set; }
 
     // сервер сам зовёт client.NextRequest() пока клиенту есть что слать, раунд за раундом
-    public void ProcessAll(Client client)
+    public void ProcessAll(Client client, bool verbose = true)
     {
         int round = 0;
+        _accumulated = "";
+        LastWireChars = 0;
 
         while (!client.IsDone)
         {
@@ -160,14 +164,19 @@ class Server
             string? wire = client.NextRequest();
             if (wire is null) break;
 
-            Console.WriteLine($"  round {round}:");
-            Console.WriteLine($"server received: \"{wire}\"");
-
             var result = DecodeVerbose(wire);
             _accumulated += result.PrefixFromTree;
+            LastWireChars += wire.Length;
 
-            Console.WriteLine($"server unruned: wireValue={result.WireValue}, nodeId={result.NodeId}, symbolIndex={result.SymbolIndex}, prefixFromTree=\"{result.PrefixFromTree}\", grown={(result.GrownSymbol is null ? "none/sentinel" : $"'{result.GrownSymbol}'")}, accumulatedSoFar=\"{_accumulated}\"");
+            if (verbose)
+            {
+                Console.WriteLine($"  round {round}:");
+                Console.WriteLine($"server received: \"{wire}\"");
+                Console.WriteLine($"server unruned: wireValue={result.WireValue}, nodeId={result.NodeId}, symbolIndex={result.SymbolIndex}, prefixFromTree=\"{result.PrefixFromTree}\", grown={(result.GrownSymbol is null ? "none/sentinel" : $"'{result.GrownSymbol}'")}, accumulatedSoFar=\"{_accumulated}\"");
+            }
         }
+
+        LastRounds = round;
     }
 
     // то же самое, что Translator.UnrunedCombine, но с раскрытием всех промежуточных шагов

@@ -10,10 +10,14 @@ public class AFST : IAFST
     public IList<string> CombineRunes { get; } = new List<string>();
     public int MaxRecurseDepth => 4;
 
+    // договор из /init: сколько рун несёт один запрос (2 = глубина 1, 4 = глубина 2)
+    public int RuneSize { get; private set; } = 2;
+
     public void SetContext(ISetContextCommand<char> command)
     {
         Alphabet = command.Alphabet;
         ArenaTreeContext = command.ArenaTreeContext;
+        RuneSize = command.RuneSize;
         UnrunedCombine.Clear();
         CombineRunes.Clear();
     }

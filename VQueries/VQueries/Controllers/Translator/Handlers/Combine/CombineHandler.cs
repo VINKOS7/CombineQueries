@@ -1,90 +1,53 @@
-﻿using MediatR;
+using MediatR;
 
 using CombineQueries.Api.Services.AFST;
-using CombineQueries.Domain.Aggregates.Translator;
-using System.Net;
+using CombineQueries.Api.Controllers.Translator.Handlers.Merge;
+using CombineQueries.Api.Controllers.Translator.Handlers.MergeSend;
 
-namespace CombineQueries.Api.Controllers.TranslatorController.Handlers.CQMergeSend;
+namespace CombineQueries.Api.Controllers.Translator.Handlers.Combine;
 
+// Точка входа плоского роута. Сам ничего не склеивает и не шлёт - только разбирает трейлинг-маркер
+// и диспатчит, чтобы каждый хендлер тянул ровно свои зависимости (merge не таскает HttpClient).
+//
+// Маркер - последний символ рун, не часть данных:
+//   Alphabet[^1] = mergesend, буфер закодирован простым кодеком
+//   Alphabet[^2] = mergesend, буфер закодирован деревом
+//   любой другой = merge (просто слепить; чем закодировано - выяснится на mergesend)
+//
+// Режим выбирает КЛИЕНТ: пока дерево холодное - простой кодек, как прогреется до >=2x плотности
+// простого - переключается на дерево. Сервер не гадает, он подчиняется маркеру.
 public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
 {
-    private readonly ILogger<CombineHandler> _logger;
+    private readonly IMediator _mediator;
     private readonly IAFST _alphabetFST;
-    private readonly ITranslatorRepo _translatorRepo; // не читывать - персист отложен, decode целиком идёт через _alphabetFST
-    private readonly HttpClient _httpClient;
 
-    public CombineHandler(ILogger<CombineHandler> logger, HttpClient client, ITranslatorRepo translator, IAFST alphabetFST)
+    public CombineHandler(IMediator mediator, IAFST alphabetFST)
     {
-        _logger = logger;
-        _httpClient = client;
-        _translatorRepo = translator;
+        _mediator = mediator;
         _alphabetFST = alphabetFST;
     }
 
     public async Task<CombineResponse> Handle(CombineRequest request, CancellationToken cancellationToken)
-    {// while in the simple merge mode
-        try
-        {
-            if (_alphabetFST.Alphabet is null || _alphabetFST.ArenaTreeContext is null) throw new Exception("CRIT: /init не вызван");
-
-            var translaor = _translatorRepo.GetByAlphabetAsync(_alphabetFST.Alphabet);
-
-            char marker = request.Runes[^1];
-            bool isSend = marker == _alphabetFST.Alphabet[^1];
-            string? forwarded = null;
-
-            if (isSend)
-            {
-                // var httpResponse = _httpClient.GetAsync(translaor.Result.Unrune(string.Concat(_alphabetFST.CombineRunes)));
-                var httpResponse = _httpClient.GetAsync(translaor.Result.Unrune(string.Concat(_alphabetFST.UnrunedCombine)));
-
-                if(httpResponse.Result.StatusCode == HttpStatusCode.Accepted)
-                {
-                    _alphabetFST.UnrunedCombine.Clear();
-                    _alphabetFST.CombineRunes.Clear();
-
-                    forwarded = await httpResponse.Result.Content.ReadAsStringAsync();
-
-                    _logger.LogInformation("attempt send merged CombineQuery: success");
-                }
-                else _logger.LogWarning($"attempt send merged CombineQuery: reject: target resource have error with status code: {httpResponse.Result.StatusCode}");
-            }
-            else
-            {
-                _alphabetFST.CombineRunes.Add(request.Runes);
-                _alphabetFST.UnrunedCombine.Add(translaor.Result.Unrune());
-            }
-
-            return new CombineResponse { Response = forwarded };
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex.ToString());
-
-            throw;
-        }
-    }
-
-    public static string Decompress(string input, string clientAlphabet)
     {
-        if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(clientAlphabet)) return "";
+        if (_alphabetFST.Alphabet is null) throw new Exception("CRIT: /init не вызван");
+        if (string.IsNullOrEmpty(request.Runes)) throw new Exception("domain error: пустые руны");
 
-        int baseLen = clientAlphabet.Length;
-        char[] res = new char[input.Length * 2];
-        int resIdx = 0;
+        string alphabet = _alphabetFST.Alphabet;
 
-        foreach (char c in input)
+        char marker = request.Runes[^1];
+        string payload = request.Runes[..^1];
+
+        if (marker == alphabet[^1] || marker == alphabet[^2])
         {
-            int id = c; // обратный каст того (char)id, которым Compress/IntArrayToString паковали id в символ
+            var mode = marker == alphabet[^1] ? CombineMode.Simple : CombineMode.Tree;
 
-            int idx1 = id / baseLen;
-            int idx2 = id % baseLen;
+            var sent = await _mediator.Send(new MergeSendRequest { Runes = payload, Mode = mode }, cancellationToken);
 
-            res[resIdx] = clientAlphabet[idx1];
-            res[resIdx + 1] = clientAlphabet[idx2];
-            resIdx += 2;
+            return new CombineResponse { ForwardedUrl = sent.ForwardedUrl, Response = sent.Response };
         }
 
-        return new string(res);
+        var merged = await _mediator.Send(new MergeRequest { Runes = payload }, cancellationToken);
+
+        return new CombineResponse { Count = merged.Count };
     }
 }
