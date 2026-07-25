@@ -18,6 +18,7 @@ public class Forwarder : IForwarder
         try
         {
             var response = await _httpClient.GetAsync(url, cancellationToken);
+
             string body = await response.Content.ReadAsStringAsync(cancellationToken);
 
             int status = (int)response.StatusCode;
@@ -28,8 +29,6 @@ public class Forwarder : IForwarder
         }
         catch (Exception ex)
         {
-            // Ссылку собрали верно, а сходить не смогли - это разные беды, и хэндл уже выдан:
-            // повторная попытка пойдёт одним запросом, поэтому сборку не отменяем.
             _logger.LogError($"forward: не удалось запросить '{url}': {ex.Message}");
 
             return new ForwardResult(false, 0, "", ex.Message);
