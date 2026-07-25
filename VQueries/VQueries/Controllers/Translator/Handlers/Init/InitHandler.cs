@@ -28,12 +28,11 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
             // а не парная распаковка, так что нечётные ширины (3) работают штатно.
             if (runeSize < 2) throw new Exception($"domain error: runeSize={runeSize} - должен быть >= 2");
 
-            var id = _translatorRepo.GetIdByAlphabetAsync(request.Alphabet);
-
             // ОДНО дерево на всё: и в AFST, и в персистируемый Translator. Раньше тут ATRFrom
             // звался трижды и получались три несвязанных дерева.
             var runes = Domain.Aggregates.Translator.Translator.ATRFrom(request.Alphabet);
 
+            // Рабочее состояние живёт ЗДЕСЬ, в памяти. БД для работы протокола не нужна.
             _aFST.SetContext(new SetContextCommand<char>
             {
                 Alphabet = request.Alphabet,
@@ -43,20 +42,10 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 
             _logger.LogInformation($"init: алфавит {request.Alphabet.Length} симв, runeSize={runeSize}");
 
-            if (await id == Guid.Empty)
-            {
-                var translator = Domain.Aggregates.Translator.Translator.From(new InitCommand<char>
-                {
-                    Runes = runes,
-                    BaseForwardUrl = request.baseForwardUrl,
-                    Alphabet = request.Alphabet
-                });
-
-                await _translatorRepo.AddAsync(translator);
-                await _translatorRepo.UnitOfWork.SaveChangesAsync(cancellationToken);
-
-                _logger.LogInformation($"init: добавлен новый Translator ID={translator.Id}");
-            }
+            // Персист отложен: миграций нет, TranslatorEntityConfiguration - заглушка, а Runes
+            // (интерфейс) EF всё равно не отобразит. Поэтому запись в БД необязательна - без неё
+            // /init обязан отработать, иначе весь протокол не поднять из-за незаконченной части.
+            await TryPersist(runes, request, cancellationToken);
 
             return new() { ShortDomain = "http://v.ro", RuneSize = runeSize };
         }
@@ -65,6 +54,31 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
             _logger.LogError(ex.Message);
 
             throw;
+        }
+    }
+
+    private async Task TryPersist(Domain.Aggregates.Translator.types.IArenaTreeRunes<char> runes,
+                                  InitRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (await _translatorRepo.GetIdByAlphabetAsync(request.Alphabet) != Guid.Empty) return;
+
+            var translator = Domain.Aggregates.Translator.Translator.From(new InitCommand<char>
+            {
+                Runes = runes,
+                BaseForwardUrl = request.baseForwardUrl,
+                Alphabet = request.Alphabet
+            });
+
+            await _translatorRepo.AddAsync(translator);
+            await _translatorRepo.UnitOfWork.SaveChangesAsync(cancellationToken);
+
+            _logger.LogInformation($"init: добавлен новый Translator ID={translator.Id}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning($"init: персист недоступен, работаем только в памяти ({ex.GetType().Name}: {ex.Message})");
         }
     }
 }

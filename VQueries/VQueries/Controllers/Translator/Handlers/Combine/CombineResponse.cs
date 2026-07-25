@@ -4,10 +4,15 @@ namespace CombineQueries.Api.Controllers.Translator.Handlers.Combine;
 
 public record CombineResponse
 {
-    // merge: сколько кусков склеено в буфере (ack). mergesend: сколько было склеено перед отправкой
-    [JsonProperty("count")] public int Count { get; set; }
+    // сколько кусков принято из скольки ожидаемых - по этим числам клиент видит потерю
+    [JsonProperty("received")] public int Received { get; set; }
+    [JsonProperty("expected")] public int Expected { get; set; }
 
-    // ниже - только для mergesend, у merge остаются null
+    // ниже заполняется только когда сообщение собралось целиком
+    [JsonProperty("complete")] public bool Complete { get; set; }
     [JsonProperty("forwardedUrl")] public string? ForwardedUrl { get; set; }
     [JsonProperty("response")] public string? Response { get; set; }
+
+    // короткий идентификатор собранной ссылки: в следующий раз её можно послать ОДНИМ запросом
+    [JsonProperty("handle")] public int Handle { get; set; } = -1;
 }

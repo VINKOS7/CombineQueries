@@ -4,9 +4,9 @@ using Microsoft.AspNetCore.Authorization;
 using MediatR;
 
 using CombineQueries.Api.Controllers.Translator.Handlers.Init;
+using CombineQueries.Api.Controllers.Translator.Handlers.Count;
 using CombineQueries.Api.Controllers.Translator.Handlers.Combine;
-using CombineQueries.Api.Controllers.Translator.Handlers.Merge;
-using CombineQueries.Api.Controllers.Translator.Handlers.MergeSend;
+using CombineQueries.Api.Controllers.Translator.Handlers.Handle;
 
 namespace CombineQueries.Api.Controllers.Translator;
 
@@ -19,11 +19,23 @@ public class TranslatorController : Controller
 
     [AllowAnonymous] [HttpGet("/init")] public Task<InitResponse> Init(InitRequest request) => _mediator.Send(request);
 
-    [AllowAnonymous] [HttpGet("/{runes}")] public Task<CombineResponse> Combine(string runes) => _mediator.Send(new CombineRequest { Runes = runes });
+    // Руны едут в QUERY, а не в пути: в пути слэш разрывает сегмент и роут не матчится,
+    // а в query / и ? легальны. Читаем СЫРУЮ строку и не разбираем её на пары ключ-значение,
+    // иначе & и = из wire-алфавита развалят разбор.
+    [AllowAnonymous] [HttpGet("/n")] public Task<CountResponse> Count() => _mediator.Send(new CountRequest { Value = RawInt() });
 
-    [AllowAnonymous] [HttpGet("/m/{runes}")] public Task<MergeResponse> Merge(string runes) => _mediator.Send(new MergeRequest { Runes = runes });
+    [AllowAnonymous] [HttpGet("/m")] public Task<CombineResponse> Combine() => _mediator.Send(new CombineRequest { Runes = RawArg() });
 
-    [AllowAnonymous] [HttpGet("/s/{runes}")] public Task<MergeSendResponse> MergeSend(string runes) => _mediator.Send(new MergeSendRequest { Runes = runes, Mode = CombineMode.Simple });
+    [AllowAnonymous] [HttpGet("/h")] public Task<HandleResponse> Handle() => _mediator.Send(new HandleRequest { Value = RawInt() });
 
-    [AllowAnonymous] [HttpGet("/t/{runes}")] public Task<MergeSendResponse> MergeSendTree(string runes) => _mediator.Send(new MergeSendRequest { Runes = runes, Mode = CombineMode.Tree });
+    // всё после первого '=' - это и есть аргумент, каким бы он ни был
+    private string RawArg()
+    {
+        string raw = Request.QueryString.Value ?? "";
+        int eq = raw.IndexOf('=');
+
+        return eq < 0 ? "" : raw.Substring(eq + 1);
+    }
+
+    private int RawInt() => int.TryParse(RawArg(), out int v) ? v : -1;
 }

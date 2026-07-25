@@ -1,68 +1,92 @@
-﻿using CombineQueries.Domain.Aggregates.Translator.types;
+using CombineQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Services.AFST;
 
+// Singleton. Держит состояние МЕЖДУ запросами: алфавит, дерево (на будущее), буфер сборки
+// и таблицу хэндлов. Scoped здесь ломает всё - контекст /init теряется сразу же.
 public class AFST : IAFST
 {
     public string? Alphabet { get; private set; }
+    public string? WireAlphabet { get; private set; }
     public IArenaTreeRunes<char>? ArenaTreeContext { get; private set; }
+
     public IList<string> UnrunedCombine { get; } = new List<string>();
     public IList<string> CombineRunes { get; } = new List<string>();
-    public int MaxRecurseDepth => 4;
 
-    // договор из /init: сколько рун несёт один запрос (2 = глубина 1, 4 = глубина 2)
-    public int RuneSize { get; private set; } = 2;
+    public int RuneSize { get; private set; } = 3;
+
+    // сколько кусков ждём и сколько символов срезать с хвоста после склейки
+    private int expected;
+    private int pad;
+
+    // хэндл -> ссылка и обратно. Живут в памяти: рестарт сервера их обнуляет,
+    // поэтому у клиента обязана быть ветка "хэндл неизвестен -> шлю полностью".
+    private readonly List<string> _handles = new();
+    private readonly Dictionary<string, int> _byUrl = new();
 
     public void SetContext(ISetContextCommand<char> command)
     {
         Alphabet = command.Alphabet;
+        WireAlphabet = Domain.Aggregates.Translator.Translator.WireAlphabetOf(command.Alphabet);
         ArenaTreeContext = command.ArenaTreeContext;
         RuneSize = command.RuneSize;
+
         UnrunedCombine.Clear();
+        CombineRunes.Clear();
+
+        expected = 0;
+        pad = 0;
+
+        // хэндлы НЕ чистим: /init может вызываться при перезаходе клиента, а кэш ссылок переживает
+    }
+
+    public void Expect(int chunkCount, int padCount)
+    {
+        expected = chunkCount;
+        pad = padCount;
+
         CombineRunes.Clear();
     }
 
-    public int[] Compress(string input, string clientAlphabet)
+    public ChunkResult Accept(string wireChunk)
     {
-        if (string.IsNullOrEmpty(input) || input.Length % 2 != 0 || string.IsNullOrEmpty(clientAlphabet)) return new int[0];
+        if (Alphabet is null || WireAlphabet is null) throw new Exception("CRIT: /init не вызван");
 
-        int baseLen = clientAlphabet.Length;
-        int totalBlocks = input.Length / 2;
-        int[] res = new int[totalBlocks];
+        CombineRunes.Add(wireChunk);
 
-        for (int b = 0; b < totalBlocks; b++)
-        {
-            int idx1 = clientAlphabet.IndexOf(input[b * 2]);
-            int idx2 = clientAlphabet.IndexOf(input[b * 2 + 1]);
-            if (idx1 < 0 || idx2 < 0) return new int[0];
+        int received = CombineRunes.Count;
 
-            // Формула плоской матрицы: переводим пару в один уникальный ID
-            res[b] = (idx1 * baseLen) + idx2;
-        }
-        return res;
+        if (expected <= 0 || received < expected) return new ChunkResult(false, received, expected, null);
+
+        var sb = new System.Text.StringBuilder();
+
+        foreach (var chunk in CombineRunes)
+            sb.Append(Domain.Aggregates.Translator.Translator.DecodeChunk(chunk, WireAlphabet, Alphabet, RuneSize));
+
+        string text = sb.ToString();
+
+        // добивку срезаем по объявленному числу, не по содержимому - иначе срежем настоящий символ
+        if (pad > 0 && pad <= text.Length) text = text.Substring(0, text.Length - pad);
+
+        CombineRunes.Clear();
+        expected = 0;
+        pad = 0;
+
+        return new ChunkResult(true, received, received, text);
     }
 
-    // РАСЖАТИЕ: Из массива чисел восстанавливает исходную строку текста
-    public string Decompress(int[] input, string clientAlphabet)
+    public int Intern(string url)
     {
-        if (input == null || input.Length == 0 || string.IsNullOrEmpty(clientAlphabet)) return "";
+        if (_byUrl.TryGetValue(url, out int existing)) return existing;
 
-        int baseLen = clientAlphabet.Length;
-        char[] res = new char[input.Length * 2];
-        int resIdx = 0;
+        int handle = _handles.Count;
 
-        for (int b = 0; b < input.Length; b++)
-        {
-            int id = input[b];
+        _handles.Add(url);
+        _byUrl[url] = handle;
 
-            // Обратная математика матрицы: достаем координаты X и Y из ID
-            int idx1 = id / baseLen;
-            int idx2 = id % baseLen;
-
-            res[resIdx] = clientAlphabet[idx1];
-            res[resIdx + 1] = clientAlphabet[idx2];
-            resIdx += 2;
-        }
-        return new string(res);
+        return handle;
     }
+
+    public string? Resolve(int handle) => handle >= 0 && handle < _handles.Count ? _handles[handle] : null;
 }

@@ -91,6 +91,48 @@ public class Translator : Entity, IAggregateRoot
 
     public string Unrune(string runes) => UnrunedCombine(Alphabet, Runes, runes);
 
+    // Символы, которыми нельзя писать САМ запрос:
+    //   # начинает фрагмент, % начинает percent-encoding, [ ] зарезервированы под IPv6-литералы.
+    // / и ? остаются - в query-строке они легальны (в пути нет, поэтому руны и едут в query).
+    // Выводится детерминированно из исходного алфавита, передавать отдельно не нужно.
+    public const string WireUnsafe = "#%[]";
+
+    public static string WireAlphabetOf(string alphabet)
+    {
+        var sb = new System.Text.StringBuilder();
+
+        foreach (char c in alphabet) if (WireUnsafe.IndexOf(c) < 0) sb.Append(c);
+
+        return sb.ToString();
+    }
+
+    // Один кусок: wire-разряды -> значение -> исходные символы.
+    // Тождеством это больше НЕ является: алфавиты разной мощности, поэтому wire-разрядов на кусок
+    // больше, чем исходных символов (при 59/55 и runeSize=3 это 4 против 3).
+    public static string DecodeChunk(string wire, string wireAlphabet, string alphabet, int runeSize)
+    {
+        long value = 0;
+
+        foreach (char c in wire)
+        {
+            int digit = wireAlphabet.IndexOf(c);
+
+            if (digit < 0) throw new Exception($"domain error: wire-символ '{c}' вне wire-алфавита");
+
+            value = value * wireAlphabet.Length + digit;
+        }
+
+        var chars = new char[runeSize];
+
+        for (int i = runeSize - 1; i >= 0; i--)
+        {
+            chars[i] = alphabet[(int)(value % alphabet.Length)];
+            value /= alphabet.Length;
+        }
+
+        return new string(chars);
+    }
+
     // Растит дерево из ГОТОВОГО текста тем же правилом, что и энкодер: жадно матчим самый длинный
     // известный префикс, добавляем ровно одно расширение, сдвигаемся на длину матча.
     // Нужно для простого режима: там дерево ничем не кормится (руны не адресуют узлы), и без этого
