@@ -1,6 +1,7 @@
 using MediatR;
 
 using CombineQueries.Api.Services.AFST;
+using CombineQueries.Api.Services.Forwarder;
 
 namespace CombineQueries.Api.Controllers.Translator.Handlers.Handle;
 
@@ -9,12 +10,12 @@ public class HandleHandler : IRequestHandler<HandleRequest, HandleResponse>
 {
     private readonly ILogger<HandleHandler> _logger;
     private readonly IAFST _afst;
-    private readonly HttpClient _httpClient;
+    private readonly IForwarder _forwarder;
 
-    public HandleHandler(ILogger<HandleHandler> logger, HttpClient client, IAFST afst)
+    public HandleHandler(ILogger<HandleHandler> logger, IForwarder forwarder, IAFST afst)
     {
         _logger = logger;
-        _httpClient = client;
+        _forwarder = forwarder;
         _afst = afst;
     }
 
@@ -33,20 +34,8 @@ public class HandleHandler : IRequestHandler<HandleRequest, HandleResponse>
 
         _logger.LogInformation($"handle: {request.Value} -> '{url}'");
 
-        string body = "";
+        var forwarded = await _forwarder.GetAsync(url, cancellationToken);
 
-        try
-        {
-            var response = await _httpClient.GetAsync(url, cancellationToken);
-            body = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode) _logger.LogWarning($"forward: целевой ресурс ответил {response.StatusCode}");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError($"forward: не удалось запросить '{url}': {ex.Message}");
-        }
-
-        return new HandleResponse { Known = true, ForwardedUrl = url, Response = body };
+        return new HandleResponse { Known = true, ForwardedUrl = url, Response = forwarded.Body };
     }
 }

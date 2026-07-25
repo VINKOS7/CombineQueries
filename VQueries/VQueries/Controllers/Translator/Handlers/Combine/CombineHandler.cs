@@ -1,6 +1,7 @@
 using MediatR;
 
 using CombineQueries.Api.Services.AFST;
+using CombineQueries.Api.Services.Forwarder;
 
 namespace CombineQueries.Api.Controllers.Translator.Handlers.Combine;
 
@@ -12,12 +13,12 @@ public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
 {
     private readonly ILogger<CombineHandler> _logger;
     private readonly IAFST _afst;
-    private readonly HttpClient _httpClient;
+    private readonly IForwarder _forwarder;
 
-    public CombineHandler(ILogger<CombineHandler> logger, HttpClient client, IAFST afst)
+    public CombineHandler(ILogger<CombineHandler> logger, IForwarder forwarder, IAFST afst)
     {
         _logger = logger;
-        _httpClient = client;
+        _forwarder = forwarder;
         _afst = afst;
     }
 
@@ -40,7 +41,7 @@ public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
 
         _logger.LogInformation($"combine: собрано {chunk.Received} кусков -> '{url}', хэндл {handle}");
 
-        string body = await Forward(url, cancellationToken);
+        var forwarded = await _forwarder.GetAsync(url, cancellationToken);
 
         return new CombineResponse
         {
@@ -48,29 +49,8 @@ public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
             Expected = chunk.Expected,
             Complete = true,
             ForwardedUrl = url,
-            Response = body,
+            Response = forwarded.Body,
             Handle = handle
         };
-    }
-
-    private async Task<string> Forward(string url, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var response = await _httpClient.GetAsync(url, cancellationToken);
-            string body = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode) _logger.LogWarning($"forward: целевой ресурс ответил {response.StatusCode}");
-
-            return body;
-        }
-        catch (Exception ex)
-        {
-            // Ссылку собрали верно, а форвардинг не удался - это разные беды. Хэндл уже выдан,
-            // повторная попытка пойдёт одним запросом, поэтому сборку не отменяем.
-            _logger.LogError($"forward: не удалось запросить '{url}': {ex.Message}");
-
-            return "";
-        }
     }
 }
