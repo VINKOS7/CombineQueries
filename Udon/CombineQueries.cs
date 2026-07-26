@@ -59,9 +59,9 @@ public class CombineQueries : UdonSharpBehaviour
     // TEMPORARILY 2 instead of 3: at 3 the chunk pool is 205 379 VRCUrl objects and building it
     // in a field initializer stalls world load. At 2 the pool is 3 481 - instant, and the whole
     // chain is still exercised. Raise to 3 (and WireSize to 4) once the startup cost is measured.
-    private const int RuneSize = 2;     // source characters per chunk, 59^2 = 3 481
-    private const string RuneSizeStr = "2";
-    private const int WireSize = 3;     // wire digits per chunk: 55^2 = 3 025 < 3 481 <= 55^3
+    private const int RuneSize = 3;     // source SYMBOLS per chunk, 94^3 = 830 584
+    private const string RuneSizeStr = "3";
+    private const int WireSize = 4;     // wire digits: 55^3 = 166 375 < 830 584 <= 55^4
     private const int NumSize = 4;      // decimal digits in service values
 
     private const int MaxChunks = 256;  // url length ceiling: MaxChunks * RuneSize characters
@@ -75,9 +75,12 @@ public class CombineQueries : UdonSharpBehaviour
 
     private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr);
 
+    // Public, not [SerializeField] private: an editor script that builds a rig has to be able to
+    // wire this up. While they were private the callback could only be set by hand in the
+    // inspector, so a generated rig silently never reported completion at all.
     [Header("Where to report completion (optional)")]
-    [SerializeField] private UdonSharpBehaviour target;
-    [SerializeField] private string onDoneEvent = "OnQueryDone";
+    public UdonSharpBehaviour target;
+    public string onDoneEvent = "OnQueryDone";
 
     // --- send state ---
     private int[] queue;
@@ -364,7 +367,12 @@ public class CombineQueries : UdonSharpBehaviour
         // Snapped before the callback fires, so a listener reads the finished number
         lastSendMs = (int)((Time.time - sendStartedAt) * 1000f);
 
-        if (target != null && onDoneEvent != "") target.SendCustomEvent(onDoneEvent);
+        if (target != null && onDoneEvent != "") { target.SendCustomEvent(onDoneEvent); return; }
+
+        // Loud on purpose. A missing target is invisible otherwise: the send succeeds, the result
+        // sits in `forwarded`, and nobody ever reads it - which looks exactly like "nothing works".
+        Debug.LogWarning("CombineQueries: nobody to notify - set `target` and `onDoneEvent`. "
+                       + "The result is ready but will not be delivered.");
     }
 
     private string Describe(IVRCStringDownload r)

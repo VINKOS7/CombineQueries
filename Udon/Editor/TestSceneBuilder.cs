@@ -104,6 +104,13 @@ public static class TestSceneBuilder
             sendTest.cachedPeriod = 0f;                                 // cooldown, not ours
             sendTest.output = text;
 
+            // Without this the client has nobody to report completion to: the send finishes, the
+            // body sits unread, and the board never shows the json. The cycling driver is the
+            // target because it is the one that owns the run.
+            client.target = sendTest;
+            client.onDoneEvent = "OnQueryDone";
+
+            UdonSharpEditorUtility.CopyProxyToUdon(client);
             UdonSharpEditorUtility.CopyProxyToUdon(initTest);
             UdonSharpEditorUtility.CopyProxyToUdon(sendTest);
 

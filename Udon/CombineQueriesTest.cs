@@ -48,6 +48,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     // --- cycle state ---
 
+    private bool awaitingResult;
     private bool cycling;
     private int cycleIndex;     // which url goes next: 0..cycleCount-1
     private int lap;            // lap number, from 1. The second lap is where /h kicks in
@@ -68,6 +69,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (action == 1)
         {
             client.Send(testUrl);
+            awaitingResult = true;
             Log("Send sent: " + testUrl);
 
             return;
@@ -93,9 +95,12 @@ public class CombineQueriesTest : UdonSharpBehaviour
         Log("cycle started: " + NumberOf(cycleCount) + " urls, one every " + cyclePeriod + "s");
     }
 
-    // The client calls this itself on completion (SendCustomEvent), no polling needed.
-    // The name must match onDoneEvent in the CombineQueries inspector.
-    public void OnQueryDone()
+    // Kept so a hand-wired callback still works, but nothing depends on it any more:
+    // Update polls HasResult() every frame. The callback needed `target` set in the scene, and
+    // when it was not, the result silently went nowhere - which is not a thing worth debugging.
+    public void OnQueryDone() => ShowResult();
+
+    private void ShowResult()
     {
         if (client.LastError != "") { Log("ERROR\n" + client.LastError); return; }
 
@@ -103,7 +108,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
         // for the todos demo that is the line of json which changes every send.
         string body = client.TakeForwardedBody();
 
-        if (!cycling) { Log("done\n" + body); return; }
+        if (!cycling) { lastResult = "done\n" + body; Log(lastResult); return; }
 
         // The next delay is chosen by how this send actually travelled, not by the lap number:
         // a cached url speeds the cycle up the moment it becomes cached.
@@ -116,8 +121,13 @@ public class CombineQueriesTest : UdonSharpBehaviour
         // Remember the full send so later laps can be compared against it, not against nothing
         if (!cached) { fullSendMs = ms; fullRequests = client.LastRequestCount(); }
 
-        Log(Explain(cached, client.LastRequestCount(), ms) + "\n\n" + body);
+        // Held so the next "sending" line can print it underneath instead of replacing it
+        lastResult = Explain(cached, client.LastRequestCount(), ms) + "\n\n" + body;
+
+        Log(lastResult);
     }
+
+    private string lastResult = "";
 
     private int fullSendMs = -1;
 
@@ -182,6 +192,17 @@ public class CombineQueriesTest : UdonSharpBehaviour
     {
         if (client == null) return;
 
+        // Result first. No wiring, no event name to get wrong, nothing to set in the inspector.
+        // Only the driver that started this send collects it: both cubes share one client, and
+        // without the flag they would race for the same result and the wrong one would win.
+        if (awaitingResult && !client.IsBusy())
+        {
+            awaitingResult = false;
+
+            ShowResult();
+            return;
+        }
+
         Tick();
 
         // Update only keeps what does not arrive as an event - the initialization status
@@ -217,8 +238,12 @@ public class CombineQueriesTest : UdonSharpBehaviour
         string url = cycleBaseUrl + NumberOf(cycleIndex + 1);
 
         client.Send(url);
+        awaitingResult = true;
 
-        Log("lap " + NumberOf(lap) + "   sending " + url + "\n...");
+        // The board is two parts: what is happening now on top, the last answer below it.
+        // Appending `lastResult` is what keeps the json readable - writing the status alone
+        // would wipe it the instant the next send starts, and on a cached lap that is instant.
+        Log("lap " + NumberOf(lap) + "   sending " + url + "\n\n" + lastResult);
 
         // A pessimistic floor until the send lands. OnQueryDone replaces it with the real one,
         // which depends on whether this url turned out to be cached.
