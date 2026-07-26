@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using MediatR;
 
 using CombineQueries.Api.Controllers.Translator.Handlers.Init;
-using CombineQueries.Api.Controllers.Translator.Handlers.Count;
+using CombineQueries.Api.Controllers.Translator.Handlers.Tail;
 using CombineQueries.Api.Controllers.Translator.Handlers.Combine;
 using CombineQueries.Api.Controllers.Translator.Handlers.Hyper;
 
@@ -25,7 +25,7 @@ public class TranslatorController : Controller
     // Руны едут в QUERY, а не в пути: в пути слэш разрывает сегмент и роут не матчится,
     // а в query / и ? легальны. Читаем СЫРУЮ строку и не разбираем её на пары ключ-значение,
     // иначе & и = из wire-алфавита развалят разбор.
-    [AllowAnonymous] [HttpGet("/n")] public Task<CountResponse> Count() => _mediator.Send(new CountRequest { Value = RawInt() });
+    [AllowAnonymous] [HttpGet("/n")] public Task<TailResponse> Tail() => _mediator.Send(new TailRequest { Value = RawInt() });
 
     [AllowAnonymous] [HttpGet("/c")] public Task<CombineResponse> Combine() => _mediator.Send(new CombineRequest { Runes = RawArg() });
 

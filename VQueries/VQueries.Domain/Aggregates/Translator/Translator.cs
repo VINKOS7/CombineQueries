@@ -1,4 +1,4 @@
-﻿using Dotseed.Domain;
+using Dotseed.Domain;
 using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Domain.Aggregates.Translator;
@@ -133,7 +133,7 @@ public class Translator : Entity, IAggregateRoot
     // Один кусок: wire-разряды -> значение -> runeSize СИМВОЛОВ -> их текст.
     // Символ это буква или фрагмент из Fragments, поэтому длина результата в символах фиксирована,
     // а в ЗНАКАХ - нет: один кусок может нести и два знака, и шестнадцать.
-    public static string DecodeChunk(string wire, string wireAlphabet, string alphabet, int runeSize)
+    public static string DecodeRune(string wire, string wireAlphabet, string alphabet, int runeSize)
     {
         long value = 0;
 

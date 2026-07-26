@@ -27,39 +27,39 @@ public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
         if (_afst.Alphabet is null) throw new Exception("CRIT: /init was not called");
         if (string.IsNullOrEmpty(request.Runes)) throw new Exception("domain error: empty runes");
 
-        var chunk = _afst.Accept(request.Runes);
+        var rune = _afst.Accept(request.Runes);
 
-        if (!chunk.Complete)
+        if (!rune.Complete)
         {
-            _logger.LogInformation($"combine: chunk {chunk.Received}/{chunk.Expected}, {chunk.ElapsedMs} ms so far");
+            _logger.LogInformation($"combine: rune {rune.Received}/{rune.Expected}, {rune.ElapsedMs} ms so far");
 
-            return new CombineResponse { Received = chunk.Received, Expected = chunk.Expected };
+            return new CombineResponse { Received = rune.Received, Expected = rune.Expected };
         }
 
-        string url = chunk.Text!;
+        string url = rune.Text!;
 
-        _logger.LogInformation($"combine: assembled {chunk.Received} chunks in {chunk.ElapsedMs} ms -> '{url}'");
+        _logger.LogInformation($"combine: assembled {rune.Received} runes in {rune.ElapsedMs} ms -> '{url}'");
 
         var forwarded = await _forwarder.GetAsync(url, cancellationToken);
 
         // Интернируем ПОСЛЕ форварда, чтобы эталон был полным: сборка + поход наружу.
         // Иначе /h сравнивал бы своё время (форвард) со временем одной лишь сборки - разные
         // величины, и отношение получалось бы бессмысленным.
-        int handle = _afst.Intern(url, chunk.ElapsedMs + forwarded.ElapsedMs);
+        int handle = _afst.Intern(url, rune.ElapsedMs + forwarded.ElapsedMs);
 
         _logger.LogInformation(
-            $"combine: first send took {chunk.ElapsedMs + forwarded.ElapsedMs} ms total "
-            + $"({chunk.Received + 1} requests: assembly {chunk.ElapsedMs} ms + forward {forwarded.ElapsedMs} ms), handle {handle}");
+            $"combine: first send took {rune.ElapsedMs + forwarded.ElapsedMs} ms total "
+            + $"({rune.Received + 1} requests: assembly {rune.ElapsedMs} ms + forward {forwarded.ElapsedMs} ms), handle {handle}");
 
         return new CombineResponse
         {
-            Received = chunk.Received,
-            Expected = chunk.Expected,
+            Received = rune.Received,
+            Expected = rune.Expected,
             Complete = true,
             ForwardedUrl = url,
             Response = forwarded.Body,
             Handle = handle,
-            AssemblyMs = chunk.ElapsedMs,
+            AssemblyMs = rune.ElapsedMs,
             ForwardMs = forwarded.ElapsedMs
         };
     }

@@ -13,7 +13,6 @@ public class AFST : IAFST
     public string? WireAlphabet { get; private set; }
     public IArenaTreeRunes<char>? ArenaTreeContext { get; private set; }
 
-    public IList<string> UnrunedCombine { get; } = new List<string>();
     public IList<string> CombineRunes { get; } = new List<string>();
 
     public int RuneSize { get; private set; } = 3;
@@ -41,7 +40,6 @@ public class AFST : IAFST
         ArenaTreeContext = command.ArenaTreeContext;
         RuneSize = command.RuneSize;
 
-        UnrunedCombine.Clear();
         CombineRunes.Clear();
 
         expected = 0;
@@ -50,9 +48,9 @@ public class AFST : IAFST
         // хэндлы НЕ чистим: /init может вызываться при перезаходе клиента, а кэш ссылок переживает
     }
 
-    public void Expect(int chunkCount, int padCount)
+    public void Expect(int runeCount, int padCount)
     {
-        expected = chunkCount;
+        expected = runeCount;
         pad = padCount;
 
         CombineRunes.Clear();
@@ -60,23 +58,23 @@ public class AFST : IAFST
         _assembly.Restart();
     }
 
-    public ChunkResult Accept(string wireChunk)
+    public RuneResult Accept(string wireRune)
     {
         if (Alphabet is null || WireAlphabet is null) throw new Exception("CRIT: /init was not called");
 
-        CombineRunes.Add(wireChunk);
+        CombineRunes.Add(wireRune);
 
         int received = CombineRunes.Count;
 
         if (expected <= 0 || received < expected)
-            return new ChunkResult(false, received, expected, null, _assembly.ElapsedMilliseconds);
+            return new RuneResult(false, received, expected, null, _assembly.ElapsedMilliseconds);
 
         _assembly.Stop();
 
         var sb = new System.Text.StringBuilder();
 
-        foreach (var chunk in CombineRunes)
-            sb.Append(Domain.Aggregates.Translator.Translator.DecodeChunk(chunk, WireAlphabet, Alphabet, RuneSize));
+        foreach (var rune in CombineRunes)
+            sb.Append(Domain.Aggregates.Translator.Translator.DecodeRune(rune, WireAlphabet, Alphabet, RuneSize));
 
         string text = sb.ToString();
 
@@ -87,7 +85,7 @@ public class AFST : IAFST
         expected = 0;
         pad = 0;
 
-        return new ChunkResult(true, received, received, text, _assembly.ElapsedMilliseconds);
+        return new RuneResult(true, received, received, text, _assembly.ElapsedMilliseconds);
     }
 
     public int Intern(string url, long firstSendMs)
