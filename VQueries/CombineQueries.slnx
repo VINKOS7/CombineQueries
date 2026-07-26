@@ -1,6 +1,12 @@
 <Solution>
-  <Project Path="QueryRune/QueryRune.csproj" Id="52537bae-ada1-4527-9900-6fce8505ddde" />
-  <Project Path="TestCompress/TestCompress.csproj" />
+  <!-- Черновики и замеры: в прод не собираются, вынесены отдельной папкой, чтобы
+       не путались с тремя реальными проектами сервера. TreeVacuum раньше вообще
+       не был в солюшене - существовал на диске и собирался только вручную. -->
+  <Folder Name="/Experiments/">
+    <Project Path="Experiments/QueryRune/QueryRune.csproj" Id="52537bae-ada1-4527-9900-6fce8505ddde" />
+    <Project Path="Experiments/TestCompress/TestCompress.csproj" />
+    <Project Path="Experiments/TreeVacuum/TreeVacuum.csproj" />
+  </Folder>
   <Project Path="VQueries.Domain/CombineQueries.Domain.csproj" />
   <Project Path="VQueries.Infra/CombineQueries.Infra.csproj">
     <BuildDependency Project="VQueries.Domain/CombineQueries.Domain.csproj" />
