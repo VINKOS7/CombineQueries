@@ -19,16 +19,10 @@ public class TranslatorController : Controller
 
     [AllowAnonymous] [HttpGet("/init")] public Task<InitResponse> Init(InitRequest request) => _mediator.Send(request);
 
-    [AllowAnonymous] [HttpGet("/n")] public Task<TailResponse> Tail() => _mediator.Send(new TailRequest { Value = RawInt() });
+    [AllowAnonymous] [HttpGet("/n")] public Task<TailResponse> Tail() => _mediator.Send(TailRequest.From(Request.QueryString.Value));
 
-    [AllowAnonymous] [HttpGet("/c")] public Task<CombineResponse> Combine() => _mediator.Send(new CombineRequest { Runes = RawArg() });
+    [AllowAnonymous] [HttpGet("/c")] public Task<CombineResponse> Combine() => _mediator.Send(CombineRequest.From(Request.QueryString.Value));
 
-    [AllowAnonymous] [HttpGet("/h")] public Task<HyperResponse> Hyper() => _mediator.Send(new HyperRequest { Value = RawInt() });
+    [AllowAnonymous] [HttpGet("/h")] public Task<HyperResponse> Hyper() => _mediator.Send(HyperRequest.From(Request.QueryString.Value));
 
-
-    //after sometime will resolve this garbage
-    private string RawArg() => 
-        (Request.QueryString.Value ?? string.Empty).IndexOf('=') < 0 ? "" : Request.QueryString.Value ?? string.Empty.Substring((Request.QueryString.Value ?? string.Empty).IndexOf('=') + 1);
-
-    private int RawInt() => int.TryParse(RawArg(), out int v) ? v : -1;
 }

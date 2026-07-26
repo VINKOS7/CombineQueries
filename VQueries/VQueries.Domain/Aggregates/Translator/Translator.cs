@@ -158,6 +158,39 @@ public class Translator : Entity, IAggregateRoot
         return string.Concat(parts);
     }
 
+    public static int TailSpan(string alphabet)
+    {
+        int s = SymbolCount(alphabet);
+
+        return 1 + s + s * s;
+    }
+
+    public static string DecodeTail(string wire, string wireAlphabet, string alphabet)
+    {
+        long value = 0;
+
+        foreach (char c in wire)
+        {
+            int digit = wireAlphabet.IndexOf(c);
+
+            if (digit < 0) throw new Exception($"domain error: wire symbol '{c}' is not in wire alphabet");
+
+            value = value * wireAlphabet.Length + digit;
+        }
+
+        int s = SymbolCount(alphabet);
+
+        if (value >= TailSpan(alphabet)) throw new Exception($"domain error: tail value {value} is out of range");
+
+        if (value == 0) return "";
+
+        if (value <= s) return SymbolOf(alphabet, (int)value - 1);
+
+        long two = value - 1 - s;
+
+        return SymbolOf(alphabet, (int)(two / s)) + SymbolOf(alphabet, (int)(two % s));
+    }
+
     // Растит дерево из ГОТОВОГО текста тем же правилом, что и энкодер: жадно матчим самый длинный
     // известный префикс, добавляем ровно одно расширение, сдвигаемся на длину матча.
     // Нужно для простого режима: там дерево ничем не кормится (руны не адресуют узлы), и без этого

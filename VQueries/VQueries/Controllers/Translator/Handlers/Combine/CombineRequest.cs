@@ -5,6 +5,7 @@ namespace CombineQueries.Api.Controllers.Translator.Handlers.Combine;
 
 public record CombineRequest : IRequest<CombineResponse>
 {
-    // сырые wire-руны одного куска (WireSize разрядов), без разбора query на пары ключ-значение
-    [JsonProperty("runes")] public string Runes { get; set; }
+    [JsonProperty("runes")] public required string Runes { get; set; }
+
+    public static CombineRequest From(string? query) => new() { Runes = RawQuery.Arg(query) };
 }

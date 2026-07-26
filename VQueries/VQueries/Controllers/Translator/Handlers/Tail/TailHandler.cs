@@ -1,34 +1,53 @@
 using MediatR;
 
 using CombineQueries.Api.Services.AFST;
+using CombineQueries.Api.Services.Forwarder;
 
 namespace CombineQueries.Api.Controllers.Translator.Handlers.Tail;
 
-// Только объявляет, чего ждать. Ни склейки, ни сети - поэтому и зависимостей минимум.
 public class TailHandler : IRequestHandler<TailRequest, TailResponse>
 {
     private readonly ILogger<TailHandler> _logger;
     private readonly IAFST _afst;
+    private readonly IForwarder _forwarder;
 
-    public TailHandler(ILogger<TailHandler> logger, IAFST afst)
+    public TailHandler(ILogger<TailHandler> logger, IForwarder forwarder, IAFST afst)
     {
         _logger = logger;
+        _forwarder = forwarder;
         _afst = afst;
     }
 
-    public Task<TailResponse> Handle(TailRequest request, CancellationToken cancellationToken)
+    public async Task<TailResponse> Handle(TailRequest request, CancellationToken cancellationToken)
     {
-        if (_afst.Alphabet is null) throw new Exception("CRIT: /init was not called");
+        if (_afst.Alphabet is null || _afst.WireAlphabet is null) throw new Exception("CRIT: /init was not called");
 
-        int k = request.Value / _afst.RuneSize;
-        int pad = request.Value % _afst.RuneSize;
+        string tail = Domain.Aggregates.Translator.Translator.DecodeTail(request.Runes, _afst.WireAlphabet, _afst.Alphabet);
 
-        if (k <= 0) throw new Exception($"domain error: declared rune count is {k}");
+        var assembled = _afst.Close(tail);
 
-        _afst.Expect(k, pad);
+        string url = assembled.Text;
 
-        _logger.LogInformation($"head: expecting {k} runes, trimming {pad} trailing chars");
+        if (string.IsNullOrEmpty(url)) throw new Exception("domain error: nothing was assembled");
 
-        return Task.FromResult(new TailResponse { Expected = k, Pad = pad });
+        _logger.LogInformation($"tail: assembled {assembled.Runes} runes + {tail.Length} chars in {assembled.ElapsedMs} ms -> '{url}'");
+
+        var forwarded = await _forwarder.GetAsync(url, cancellationToken);
+
+        int handle = _afst.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
+
+        _logger.LogInformation(
+            $"tail: first send took {assembled.ElapsedMs + forwarded.ElapsedMs} ms total "
+            + $"({assembled.Runes + 1} requests), handle {handle}");
+
+        return new TailResponse
+        {
+            Runes = assembled.Runes,
+            ForwardedUrl = url,
+            Response = forwarded.Body,
+            Handle = handle,
+            AssemblyMs = assembled.ElapsedMs,
+            ForwardMs = forwarded.ElapsedMs
+        };
     }
 }
