@@ -1,4 +1,4 @@
-namespace CombineQueries.Api.Controllers.Translator.Handlers;
+namespace CombineQueries.Api.Controllers.Translators.Handlers;
 
 internal static class RawQuery
 {

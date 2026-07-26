@@ -1,6 +1,6 @@
 using Newtonsoft.Json;
 
-namespace CombineQueries.Api.Controllers.Translator.Handlers.Hyper;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
 
 public record HyperResponse
 {

@@ -1,6 +1,6 @@
 using Newtonsoft.Json;
 
-namespace CombineQueries.Api.Controllers.Translator.Handlers.Tail;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 
 public record TailResponse
 {

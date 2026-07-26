@@ -3,7 +3,7 @@ using MediatR;
 using CombineQueries.Api.Services.AFST;
 using CombineQueries.Api.Services.Forwarder;
 
-namespace CombineQueries.Api.Controllers.Translator.Handlers.Hyper;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
 
 public class HyperHandler : IRequestHandler<HyperRequest, HyperResponse>
 {

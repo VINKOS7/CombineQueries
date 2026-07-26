@@ -2,7 +2,7 @@ using MediatR;
 
 using CombineQueries.Api.Services.AFST;
 
-namespace CombineQueries.Api.Controllers.Translator.Handlers.Combine;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 
 public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
 {

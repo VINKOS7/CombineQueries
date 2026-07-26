@@ -1,6 +1,6 @@
 using Newtonsoft.Json;
 
-namespace CombineQueries.Api.Controllers.Translator.Handlers.Init;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Init;
 
 public record InitResponse
 {

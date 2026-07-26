@@ -2,8 +2,9 @@ using MediatR;
 
 using CombineQueries.Api.Services.AFST;
 using CombineQueries.Api.Services.Forwarder;
+using CombineQueries.Domain.Aggregates.Translator;
 
-namespace CombineQueries.Api.Controllers.Translator.Handlers.Tail;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 
 public class TailHandler : IRequestHandler<TailRequest, TailResponse>
 {
@@ -22,7 +23,7 @@ public class TailHandler : IRequestHandler<TailRequest, TailResponse>
     {
         if (_afst.Alphabet is null || _afst.WireAlphabet is null) throw new Exception("CRIT: /init was not called");
 
-        string tail = Domain.Aggregates.Translator.Translator.DecodeTail(request.Runes, _afst.WireAlphabet, _afst.Alphabet, _afst.RuneSize);
+        string tail = Translator.DecodeTail(request.Runes, _afst.WireAlphabet, _afst.Alphabet, _afst.RuneSize);
 
         var assembled = _afst.Close(tail);
 

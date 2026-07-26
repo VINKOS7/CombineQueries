@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using CombineQueries.Domain.Aggregates.Translator;
 using CombineQueries.Domain.Aggregates.Translator.types;
 
-namespace CombineQueries.Api.Controllers.Translator.Handlers.Init;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Init;
 
 public record InitRequest : IRequest<InitResponse>
 {

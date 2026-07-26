@@ -3,7 +3,7 @@ using MediatR;
 using CombineQueries.Api.Services.AFST;
 using CombineQueries.Domain.Aggregates.Translator;
 
-namespace CombineQueries.Api.Controllers.Translator.Handlers.Init;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Init;
 
 public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 {

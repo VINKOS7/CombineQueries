@@ -3,12 +3,12 @@ using Microsoft.AspNetCore.Authorization;
 
 using MediatR;
 
-using CombineQueries.Api.Controllers.Translator.Handlers.Init;
-using CombineQueries.Api.Controllers.Translator.Handlers.Tail;
-using CombineQueries.Api.Controllers.Translator.Handlers.Combine;
-using CombineQueries.Api.Controllers.Translator.Handlers.Hyper;
+using CombineQueries.Api.Controllers.Translators.Handlers.Init;
+using CombineQueries.Api.Controllers.Translators.Handlers.Tail;
+using CombineQueries.Api.Controllers.Translators.Handlers.Combine;
+using CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
 
-namespace CombineQueries.Api.Controllers.Translator;
+namespace CombineQueries.Api.Controllers.Translators;
 
 [Route("translator")]
 public class TranslatorController : Controller

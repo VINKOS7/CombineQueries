@@ -1,7 +1,7 @@
 using MediatR;
 using Newtonsoft.Json;
 
-namespace CombineQueries.Api.Controllers.Translator.Handlers.Combine;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 
 public record CombineRequest : IRequest<CombineResponse>
 {
