@@ -36,3 +36,25 @@ dist/
 ## Operating system files
 Thumbs.db
 .DS_Store
+
+## Unity-проект (Unity/) - генерируемое не версионируем
+/Unity/[Ll]ibrary/
+/Unity/[Tt]emp/
+/Unity/[Oo]bj/
+/Unity/[Bb]uild*/
+/Unity/[Ll]ogs/
+/Unity/[Uu]ser[Ss]ettings/
+/Unity/ClientSimStorage/
+/Unity/*.sln
+/Unity/*.csproj
+/Unity/.vs/
+
+### Результат компиляции UdonSharp, ~107 МБ. Пересобирается при первом открытии.
+/Unity/Assets/SerializedUdonPrograms/
+/Unity/Assets/SerializedUdonPrograms.meta
+
+### Пакеты ставит VCC по манифестам - в репо едут только они
+/Unity/Packages/*
+!/Unity/Packages/manifest.json
+!/Unity/Packages/vpm-manifest.json
+!/Unity/Packages/packages-lock.json
