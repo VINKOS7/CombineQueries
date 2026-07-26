@@ -18,16 +18,16 @@ public class CountHandler : IRequestHandler<CountRequest, CountResponse>
 
     public Task<CountResponse> Handle(CountRequest request, CancellationToken cancellationToken)
     {
-        if (_afst.Alphabet is null) throw new Exception("CRIT: /init не вызван");
+        if (_afst.Alphabet is null) throw new Exception("CRIT: /init was not called");
 
         int k = request.Value / _afst.RuneSize;
         int pad = request.Value % _afst.RuneSize;
 
-        if (k <= 0) throw new Exception($"domain error: кусков объявлено {k}");
+        if (k <= 0) throw new Exception($"domain error: declared chunk count is {k}");
 
         _afst.Expect(k, pad);
 
-        _logger.LogInformation($"count: ждём {k} кусков, срезать {pad}");
+        _logger.LogInformation($"count: expecting {k} chunks, trimming {pad} trailing chars");
 
         return Task.FromResult(new CountResponse { Expected = k, Pad = pad });
     }

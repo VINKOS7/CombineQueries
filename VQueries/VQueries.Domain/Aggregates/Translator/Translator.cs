@@ -57,7 +57,7 @@ public class Translator : Entity, IAggregateRoot
         {
             int digit = alphabet.IndexOf(c);
 
-            if (digit < 0) throw new Exception($"domain error: symbol '{c}' not in alphabet");
+            if (digit < 0) throw new Exception($"domain error: symbol '{c}' is not in alphabet");
 
             wireValue = wireValue * alphabet.Length + digit;
         }
@@ -117,7 +117,7 @@ public class Translator : Entity, IAggregateRoot
         {
             int digit = wireAlphabet.IndexOf(c);
 
-            if (digit < 0) throw new Exception($"domain error: wire-символ '{c}' вне wire-алфавита");
+            if (digit < 0) throw new Exception($"domain error: wire symbol '{c}' is not in wire alphabet");
 
             value = value * wireAlphabet.Length + digit;
         }

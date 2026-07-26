@@ -24,24 +24,32 @@ public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
 
     public async Task<CombineResponse> Handle(CombineRequest request, CancellationToken cancellationToken)
     {
-        if (_afst.Alphabet is null) throw new Exception("CRIT: /init не вызван");
-        if (string.IsNullOrEmpty(request.Runes)) throw new Exception("domain error: пустые руны");
+        if (_afst.Alphabet is null) throw new Exception("CRIT: /init was not called");
+        if (string.IsNullOrEmpty(request.Runes)) throw new Exception("domain error: empty runes");
 
         var chunk = _afst.Accept(request.Runes);
 
         if (!chunk.Complete)
         {
-            _logger.LogInformation($"combine: {chunk.Received}/{chunk.Expected}");
+            _logger.LogInformation($"combine: chunk {chunk.Received}/{chunk.Expected}, {chunk.ElapsedMs} ms so far");
 
             return new CombineResponse { Received = chunk.Received, Expected = chunk.Expected };
         }
 
         string url = chunk.Text!;
-        int handle = _afst.Intern(url);
 
-        _logger.LogInformation($"combine: собрано {chunk.Received} кусков -> '{url}', хэндл {handle}");
+        _logger.LogInformation($"combine: assembled {chunk.Received} chunks in {chunk.ElapsedMs} ms -> '{url}'");
 
         var forwarded = await _forwarder.GetAsync(url, cancellationToken);
+
+        // Интернируем ПОСЛЕ форварда, чтобы эталон был полным: сборка + поход наружу.
+        // Иначе /h сравнивал бы своё время (форвард) со временем одной лишь сборки - разные
+        // величины, и отношение получалось бы бессмысленным.
+        int handle = _afst.Intern(url, chunk.ElapsedMs + forwarded.ElapsedMs);
+
+        _logger.LogInformation(
+            $"combine: first send took {chunk.ElapsedMs + forwarded.ElapsedMs} ms total "
+            + $"({chunk.Received + 1} requests: assembly {chunk.ElapsedMs} ms + forward {forwarded.ElapsedMs} ms), handle {handle}");
 
         return new CombineResponse
         {
@@ -50,7 +58,9 @@ public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
             Complete = true,
             ForwardedUrl = url,
             Response = forwarded.Body,
-            Handle = handle
+            Handle = handle,
+            AssemblyMs = chunk.ElapsedMs,
+            ForwardMs = forwarded.ElapsedMs
         };
     }
 }

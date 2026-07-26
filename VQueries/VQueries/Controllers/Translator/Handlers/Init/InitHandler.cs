@@ -26,7 +26,7 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 
             // Любая ширина >= 2. Степень двойки не требуется: декод простого режима - склейка рун,
             // а не парная распаковка, так что нечётные ширины (3) работают штатно.
-            if (runeSize < 2) throw new Exception($"domain error: runeSize={runeSize} - должен быть >= 2");
+            if (runeSize < 2) throw new Exception($"domain error: runeSize={runeSize}, must be >= 2");
 
             // ОДНО дерево на всё: и в AFST, и в персистируемый Translator. Раньше тут ATRFrom
             // звался трижды и получались три несвязанных дерева.
@@ -40,7 +40,7 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
                 RuneSize = runeSize
             });
 
-            _logger.LogInformation($"init: алфавит {request.Alphabet.Length} симв, runeSize={runeSize}");
+            _logger.LogInformation($"init: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}");
 
             // Персист отложен: миграций нет, TranslatorEntityConfiguration - заглушка, а Runes
             // (интерфейс) EF всё равно не отобразит. Поэтому запись в БД необязательна - без неё
@@ -74,11 +74,11 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
             await _translatorRepo.AddAsync(translator);
             await _translatorRepo.UnitOfWork.SaveChangesAsync(cancellationToken);
 
-            _logger.LogInformation($"init: добавлен новый Translator ID={translator.Id}");
+            _logger.LogInformation($"init: new Translator persisted, ID={translator.Id}");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning($"init: персист недоступен, работаем только в памяти ({ex.GetType().Name}: {ex.Message})");
+            _logger.LogWarning($"init: persistence unavailable, running in memory only ({ex.GetType().Name}: {ex.Message})");
         }
     }
 }

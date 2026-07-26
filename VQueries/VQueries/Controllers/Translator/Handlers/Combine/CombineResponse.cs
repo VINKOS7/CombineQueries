@@ -15,4 +15,9 @@ public record CombineResponse
 
     // короткий идентификатор собранной ссылки: в следующий раз её можно послать ОДНИМ запросом
     [JsonProperty("handle")] public int Handle { get; set; } = -1;
+
+    // Сколько заняла ВСЯ сборка - от /n до последнего куска - и отдельно поход наружу.
+    // Это и есть эталон "первой отправки", с которым /h потом себя сравнивает.
+    [JsonProperty("assemblyMs")] public long AssemblyMs { get; set; }
+    [JsonProperty("forwardMs")] public long ForwardMs { get; set; }
 }
