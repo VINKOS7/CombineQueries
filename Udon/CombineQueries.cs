@@ -85,6 +85,11 @@ public class CombineQueries : UdonSharpBehaviour
     private bool lastCached;
     private int lastRequests;
 
+    // Wall clock of the whole send, measured HERE. The server also reports its own timings,
+    // but those miss the round trips to VRChat, which is where almost all the time actually goes.
+    private float sendStartedAt;
+    private int lastSendMs;
+
     public bool IsInitialized() => initOk;
     public bool IsBusy() => busy;
     public bool HasResult() => hasForwarded;
@@ -95,6 +100,20 @@ public class CombineQueries : UdonSharpBehaviour
 
     // How many http requests the last send cost. 1 when cached.
     public int LastRequestCount() => lastRequests;
+
+    // Milliseconds the last send took end to end, round trips included.
+    public int LastSendMs() => lastSendMs;
+
+    // The server answers with an envelope around the forwarded body. This is the body itself -
+    // what the target url actually replied. Empty if the envelope has no usable "response".
+    public string TakeForwardedBody()
+    {
+        if (!hasForwarded) return string.Empty;
+
+        hasForwarded = false;
+
+        return StringField(forwarded, "response");
+    }
 
     public string TakeResult()
     {
@@ -127,6 +146,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         pendingUrl = url;
         busy = true;
+        sendStartedAt = Time.time;
 
         // Already known to the server - the whole send collapses into a single request
         int cached = HandleOf(url);
@@ -287,6 +307,9 @@ public class CombineQueries : UdonSharpBehaviour
         busy = false;
         phase = PhaseIdle;
 
+        // Snapped before the callback fires, so a listener reads the finished number
+        lastSendMs = (int)((Time.time - sendStartedAt) * 1000f);
+
         if (target != null && onDoneEvent != "") target.SendCustomEvent(onDoneEvent);
     }
 
@@ -361,6 +384,16 @@ public class CombineQueries : UdonSharpBehaviour
         if (v.TokenType != TokenType.Double) return -1;
 
         return (int)v.Double;
+    }
+
+    private string StringField(string json, string field)
+    {
+        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return string.Empty;
+        if (root.TokenType != TokenType.DataDictionary) return string.Empty;
+        if (!root.DataDictionary.TryGetValue(field, out DataToken v)) return string.Empty;
+        if (v.TokenType != TokenType.String) return string.Empty;
+
+        return v.String;
     }
 
     private bool BoolField(string json, string field)

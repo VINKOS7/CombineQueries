@@ -94,7 +94,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
     {
         if (client.LastError != "") { Log("ERROR\n" + client.LastError); return; }
 
-        string body = client.TakeResult();
+        // The body the target actually answered, not the server's envelope around it -
+        // for the todos demo that is the line of json which changes every send.
+        string body = client.TakeForwardedBody();
 
         if (!cycling) { Log("done\n" + body); return; }
 
@@ -104,24 +106,36 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         nextSendAt = Time.time + (cached ? cachedPeriod : cyclePeriod);
 
-        Log(Explain(cached, client.LastRequestCount()) + "\n\n" + body);
+        int ms = client.LastSendMs();
+
+        // Remember the full send so later laps can be compared against it, not against nothing
+        if (!cached) fullSendMs = ms;
+
+        Log(Explain(cached, client.LastRequestCount(), ms) + "\n\n" + body);
     }
+
+    private int fullSendMs = -1;
 
     // The status board. Written for someone standing in the world who has never seen this
     // project: it has to say what just happened and why the pace changed.
-    private string Explain(bool cached, int requests)
+    private string Explain(bool cached, int requests, int ms)
     {
         string head = "lap " + NumberOf(lap) + "   url " + NumberOf(cycleIndex == 0 ? cycleCount : cycleIndex)
                     + "/" + NumberOf(cycleCount) + "\n";
 
         if (cached)
+        {
+            // Against the full send of the SAME demo, so the number means something on the spot
+            string versus = fullSendMs > 0 ? "   (full send took " + NumberOf(fullSendMs) + " ms)" : "";
+
             return head
-                 + "CACHED - " + NumberOf(requests) + " request\n"
+                 + "CACHED - 1 request - " + NumberOf(ms) + " ms" + versus + "\n"
                  + "The server already knows this url and kept a short handle for it,\n"
                  + "so the whole url fits into that one request. This is why it sped up.";
+        }
 
         return head
-             + "FULL SEND - " + NumberOf(requests) + " requests\n"
+             + "FULL SEND - " + NumberOf(requests) + " requests - " + NumberOf(ms) + " ms\n"
              + "VRChat can only load urls baked in at build time, so an arbitrary url is\n"
              + "spelled out a couple of characters per request. The server reassembles it,\n"
              + "forwards it, and hands back a handle - watch the next lap.";
