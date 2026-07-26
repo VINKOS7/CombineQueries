@@ -104,6 +104,10 @@ public class CombineQueries : UdonSharpBehaviour
     // Milliseconds the last send took end to end, round trips included.
     public int LastSendMs() => lastSendMs;
 
+    // Source characters carried by one request. Exposed so a demo can show the cost model
+    // instead of hardcoding numbers that would silently rot when RuneSize changes.
+    public int ChunkSize() => RuneSize;
+
     // The server answers with an envelope around the forwarded body. This is the body itself -
     // what the target url actually replied. Empty if the envelope has no usable "response".
     public string TakeForwardedBody()

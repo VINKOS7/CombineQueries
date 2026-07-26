@@ -47,8 +47,9 @@ public static class TestSceneBuilder
 
         canvasGo.GetComponent<Canvas>().renderMode = RenderMode.WorldSpace;
 
+        // Big enough for the status board: the cost table plus the returned json is ~15 lines
         var canvasRt = canvasGo.GetComponent<RectTransform>();
-        canvasRt.sizeDelta = new Vector2(800, 400);
+        canvasRt.sizeDelta = new Vector2(900, 700);
         canvasRt.localPosition = new Vector3(0f, 2f, 0.2f);
         canvasRt.localScale = Vector3.one * 0.002f;
         canvasRt.localRotation = Quaternion.Euler(0f, 180f, 0f); // facing the player, who looks along +Z
@@ -58,7 +59,7 @@ public static class TestSceneBuilder
 
         var text = textGo.GetComponent<Text>();
         text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        text.fontSize = 28;
+        text.fontSize = 22;   // smaller: the board carries a table now
         text.color = Color.white;
         text.alignment = TextAnchor.UpperLeft;
         text.text = "waiting...";
@@ -99,8 +100,8 @@ public static class TestSceneBuilder
             sendTest.action = 2;                                        // cycling run
             sendTest.cycleBaseUrl = "https://dummyjson.com/todos/";
             sendTest.cycleCount = 3;                                    // 1 -> 2 -> 3 -> 1 -> ...
-            sendTest.cyclePeriod = 3f;                                  // while urls are unknown
-            sendTest.cachedPeriod = 0.5f;                               // once they are cached
+            sendTest.cyclePeriod = 0f;                                  // pacing is the platform's
+            sendTest.cachedPeriod = 0f;                                 // cooldown, not ours
             sendTest.output = text;
 
             UdonSharpEditorUtility.CopyProxyToUdon(initTest);

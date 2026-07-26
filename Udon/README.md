@@ -13,6 +13,46 @@ Needs the matching server: [`../VQueries`](../VQueries).
 
 ---
 
+## How it works
+
+VRChat resolves every `VRCUrl` at build time. A world can therefore only fetch addresses its
+author typed in advance — there is no way to build a url from a string at runtime.
+
+So the client does not build urls. It **pre-generates a pool of them**, one per possible value of a
+short group of characters, and spells an arbitrary url out through that pool:
+
+1. `/n` declares how many chunks are coming, and how many padding characters to trim.
+2. Each `/m` carries one chunk — `RuneSize` source characters, encoded as digits of the wire
+   alphabet. The url `https://dummyjson.com/todos/1` at `RuneSize = 2` is 15 chunks.
+3. On the last chunk the server reassembles the url, forwards the request, and returns a **handle** —
+   a small integer naming that url.
+4. Every later send of the same url is one `/h` carrying the handle. That is the entire request.
+
+The client picks the path by itself; there is no mode to set.
+
+## What actually costs time
+
+Not bandwidth — a chunk is a handful of characters. **Every string load pays VRChat's platform
+cooldown, roughly 5 seconds**, and a full send pays it once per chunk. That single fact decides
+the whole design:
+
+| chunk size | requests for a 29-char url | time at ~5 s each | url pool | pool memory |
+|---|---|---|---|---|
+| 2 chars | 16 | ~80 s | 3 481 | ~0.4 MB |
+| 3 chars | 11 | ~55 s | 205 379 | ~23 MB |
+| 4 chars | 9 | ~45 s | 12 117 361 | ~1.4 GB |
+| **cached (handle)** | **1** | **~5 s** | 4 096 | ~0.5 MB |
+
+Two things follow.
+
+**Widening the chunk buys little and costs a lot.** Going from 2 to 3 characters removes 5 requests
+and multiplies the pool by 59. Going to 4 removes 2 more and needs 1.4 GB — it is not an option.
+The pool is built in a field initializer, so its price is paid as world load time.
+
+**The handle is the only real win.** It does not shave milliseconds; it removes a dozen platform
+cooldowns. First send of a url is expensive and always will be. Every send after it is one request,
+whatever the url's length — which is why this is worth doing at all for urls that repeat.
+
 ## Install
 
 1. Copy `CombineQueries.cs` (and, if you want the demo, `CombineQueriesTest.cs` and `CanvasTest.cs`)

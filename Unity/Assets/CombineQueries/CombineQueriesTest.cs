@@ -27,16 +27,21 @@ public class CombineQueriesTest : UdonSharpBehaviour
     [Tooltip("How many different urls in one lap")]
     public int cycleCount = 3;
 
-    // Two periods, and that is the whole point of the demo: the first lap sends every url in
-    // full and crawls, every later lap goes through a handle and flies. The speed difference
-    // is the protocol becoming visible - nobody reads a log, but everybody notices the pace.
+    // Both default to ZERO on purpose. VRChat enforces its own cooldown on every string load
+    // (~5 s), and that dwarfs anything set here - an extra delay would simply be added on top
+    // of a wait that already happened. Pacing is left to the platform, and `IsBusy()` below
+    // is what actually prevents sends from overlapping.
     //
-    // Both are floors, not guarantees: a send still in flight pushes the next one out.
-    [Tooltip("Minimum seconds between sends while urls are still unknown to the server")]
-    public float cyclePeriod = 3f;
+    // The demo does not need an artificial slowdown either: the first lap is slow all by itself,
+    // because a full send costs one cooldown PER CHUNK. That is the whole story here - the
+    // handle does not shave milliseconds off, it removes a dozen platform waits.
+    //
+    // Raise these only to deliberately throttle below the platform rate.
+    [Tooltip("Extra seconds between sends while urls are unknown. 0 = platform cooldown only")]
+    public float cyclePeriod = 0f;
 
-    [Tooltip("Minimum seconds between sends once the url is cached - deliberately much shorter")]
-    public float cachedPeriod = 0.5f;
+    [Tooltip("Extra seconds between sends once cached. 0 = platform cooldown only")]
+    public float cachedPeriod = 0f;
 
     [Tooltip("Optional: status is written here")]
     public Text output;
@@ -109,7 +114,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
         int ms = client.LastSendMs();
 
         // Remember the full send so later laps can be compared against it, not against nothing
-        if (!cached) fullSendMs = ms;
+        if (!cached) { fullSendMs = ms; fullRequests = client.LastRequestCount(); }
 
         Log(Explain(cached, client.LastRequestCount(), ms) + "\n\n" + body);
     }
@@ -126,20 +131,46 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (cached)
         {
             // Against the full send of the SAME demo, so the number means something on the spot
-            string versus = fullSendMs > 0 ? "   (full send took " + NumberOf(fullSendMs) + " ms)" : "";
+            string versus = fullSendMs > 0 ? "  vs " + NumberOf(fullSendMs) + " ms full" : "";
 
             return head
-                 + "CACHED - 1 request - " + NumberOf(ms) + " ms" + versus + "\n"
-                 + "The server already knows this url and kept a short handle for it,\n"
-                 + "so the whole url fits into that one request. This is why it sped up.";
+                 + "CACHED - 1 request - " + NumberOf(ms) + " ms" + versus + "\n\n"
+                 + "The server kept a short handle for this url, so the whole thing\n"
+                 + "fits in one request - one cooldown instead of " + NumberOf(fullRequests) + ".\n"
+                 + CostTable(requests);
         }
 
         return head
-             + "FULL SEND - " + NumberOf(requests) + " requests - " + NumberOf(ms) + " ms\n"
-             + "VRChat can only load urls baked in at build time, so an arbitrary url is\n"
-             + "spelled out a couple of characters per request. The server reassembles it,\n"
-             + "forwards it, and hands back a handle - watch the next lap.";
+             + "FULL SEND - " + NumberOf(requests) + " requests - " + NumberOf(ms) + " ms\n\n"
+             + "VRChat only loads urls baked in at build time, so an arbitrary url is\n"
+             + "spelled out " + NumberOf(client.ChunkSize()) + " characters per request - and every request\n"
+             + "pays the platform's string-load cooldown. That, not bandwidth, is the cost.\n"
+             + CostTable(requests);
     }
+
+    // The cost model, computed live from the current url and RuneSize - hardcoded numbers
+    // would rot the moment either changes.
+    private string CostTable(int requests)
+    {
+        int len = (cycleBaseUrl + NumberOf(cycleCount)).Length;
+        int rs = client.ChunkSize();
+
+        string rows = "";
+
+        for (int w = 2; w <= 4; w++)
+        {
+            int chunks = (len + w - 1) / w + 1;              // +1 for the /n header
+
+            rows += "   chunk " + NumberOf(w) + " chars    " + NumberOf(chunks) + " requests"
+                  + (w == rs ? "   <- now\n" : "\n");
+        }
+
+        return "\n" + NumberOf(len) + "-char url, one cooldown per request:\n"
+             + rows
+             + "   cached          1 request";
+    }
+
+    private int fullRequests = 0;
 
     private string lastSeen = "";
 
