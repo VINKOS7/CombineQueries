@@ -5,14 +5,6 @@ using UnityEngine;
 using UnityEngine.UI;
 using UdonSharpEditor;
 
-// Adds the test rig INTO THE CURRENTLY OPEN SCENE.
-//
-// The order of operations is deliberate: plain objects first (canvas, cubes), Udon components
-// only afterwards and inside a try. It used to be the other way round, and a failure of
-// AddUdonSharpComponent on the very first line left the scene empty - "there is no canvas"
-// was a consequence of exactly that.
-//
-// Tools > CombineQueries > Add test rig to current scene
 public static class TestSceneBuilder
 {
     private const string RigName = "CombineQueriesRig";
@@ -20,10 +12,6 @@ public static class TestSceneBuilder
     [InitializeOnLoadMethod]
     private static void Announce() => Debug.Log("[TestSceneBuilder] ready: Tools > CombineQueries > Add test rig to current scene");
 
-    // Three entry points into one method, so it does not have to be hunted for in the menus:
-    //   1) right click in the Hierarchy -> "CombineQueries Test Rig"  (the most visible one)
-    //   2) the GameObject top menu
-    //   3) the Tools top menu
     [MenuItem("GameObject/CombineQueries Test Rig", false, 10)]
     [MenuItem("Tools/CombineQueries/Add test rig to current scene")]
     private static void Build()
@@ -33,8 +21,6 @@ public static class TestSceneBuilder
         var existing = GameObject.Find(RigName);
 
         if (existing != null) UnityEngine.Object.DestroyImmediate(existing);
-
-        // ---- 1. geometry: always created, whatever happens to Udon afterwards ----
 
         var root = new GameObject(RigName);
         root.transform.position = new Vector3(0f, 0f, -0.5f);
@@ -47,19 +33,18 @@ public static class TestSceneBuilder
 
         canvasGo.GetComponent<Canvas>().renderMode = RenderMode.WorldSpace;
 
-        // Big enough for the status board: the cost table plus the returned json is ~15 lines
         var canvasRt = canvasGo.GetComponent<RectTransform>();
         canvasRt.sizeDelta = new Vector2(900, 700);
         canvasRt.localPosition = new Vector3(0f, 2f, 0.2f);
         canvasRt.localScale = Vector3.one * 0.002f;
-        canvasRt.localRotation = Quaternion.Euler(0f, 180f, 0f); // facing the player, who looks along +Z
+        canvasRt.localRotation = Quaternion.Euler(0f, 180f, 0f);
 
         var textGo = new GameObject("StatusText", typeof(Text));
         textGo.transform.SetParent(canvasGo.transform, false);
 
         var text = textGo.GetComponent<Text>();
         text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        text.fontSize = 22;   // smaller: the board carries a table now
+        text.fontSize = 22;
         text.color = Color.white;
         text.alignment = TextAnchor.UpperLeft;
         text.text = "waiting...";
@@ -74,8 +59,6 @@ public static class TestSceneBuilder
         EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
 
         Debug.Log("[TestSceneBuilder] geometry created: cubes + canvas. Udon components next.");
-
-        // ---- 2. Udon: may throw, and that must not take the scene down with it ----
 
         EnsureProgramAsset("Assets/CombineQueries/CombineQueries.cs");
         EnsureProgramAsset("Assets/CombineQueries/CombineQueriesTest.cs");
@@ -92,21 +75,15 @@ public static class TestSceneBuilder
             initTest.action = 0;
             initTest.output = text;
 
-            // Every field of the demo is set explicitly, none left to the field defaults.
-            // Unity stores component values IN THE SCENE, so changing a default in code does
-            // nothing to a rig that already exists - re-running this menu item is what applies it.
             var sendTest = sendBtn.AddUdonSharpComponent<CombineQueriesTest>();
             sendTest.client = client;
-            sendTest.action = 2;                                        // cycling run
+            sendTest.action = 2;
             sendTest.cycleBaseUrl = "https://dummyjson.com/todos/";
-            sendTest.cycleCount = 3;                                    // 1 -> 2 -> 3 -> 1 -> ...
-            sendTest.cyclePeriod = 0f;                                  // pacing is the platform's
-            sendTest.cachedPeriod = 0f;                                 // cooldown, not ours
+            sendTest.cycleCount = 3;
+            sendTest.cyclePeriod = 0f;
+            sendTest.cachedPeriod = 0f;
             sendTest.output = text;
 
-            // Without this the client has nobody to report completion to: the send finishes, the
-            // body sits unread, and the board never shows the json. The cycling driver is the
-            // target because it is the one that owns the run.
             client.target = sendTest;
             client.onDoneEvent = "OnQueryDone";
 
@@ -118,8 +95,7 @@ public static class TestSceneBuilder
         }
         catch (Exception e)
         {
-            // The most common cause is a program asset that was just created and has not compiled
-            // yet. The objects are already in the scene by then, so re-running the menu item is enough.
+
             Debug.LogError("[TestSceneBuilder] Udon components were not attached: " + e.Message
                          + "\nGeometry is already in the scene. Wait for U# to finish compiling and run the menu item again.");
         }
@@ -127,8 +103,6 @@ public static class TestSceneBuilder
         EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
     }
 
-    // Creates a .asset next to the script if it is missing. Without it AddUdonSharpComponent
-    // throws a NullReferenceException inside RunBehaviourSetup.
     private static void EnsureProgramAsset(string scriptPath)
     {
         string assetPath = scriptPath.Substring(0, scriptPath.Length - 3) + ".asset";
@@ -151,7 +125,6 @@ public static class TestSceneBuilder
         Debug.Log("[TestSceneBuilder] created program asset: " + assetPath);
     }
 
-    // A cube with a collider - in VRChat Interact works on it without any UI raycasting
     private static GameObject MakeButton(Transform parent, string name, Vector3 localPos, Color color)
     {
         var go = GameObject.CreatePrimitive(PrimitiveType.Cube);

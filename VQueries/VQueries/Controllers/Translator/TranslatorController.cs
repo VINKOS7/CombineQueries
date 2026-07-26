@@ -27,7 +27,7 @@ public class TranslatorController : Controller
     // иначе & и = из wire-алфавита развалят разбор.
     [AllowAnonymous] [HttpGet("/n")] public Task<CountResponse> Count() => _mediator.Send(new CountRequest { Value = RawInt() });
 
-    [AllowAnonymous] [HttpGet("/m")] public Task<CombineResponse> Combine() => _mediator.Send(new CombineRequest { Runes = RawArg() });
+    [AllowAnonymous] [HttpGet("/c")] public Task<CombineResponse> Combine() => _mediator.Send(new CombineRequest { Runes = RawArg() });
 
     // hyper: известная ссылка одним запросом вместо всей цепочки /n + куски
     [AllowAnonymous] [HttpGet("/h")] public Task<HyperResponse> Hyper() => _mediator.Send(new HyperRequest { Value = RawInt() });

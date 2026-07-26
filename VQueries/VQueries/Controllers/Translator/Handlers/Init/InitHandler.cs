@@ -24,15 +24,12 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
         {
             int runeSize = request.RuneSize;
 
-            // Любая ширина >= 2. Степень двойки не требуется: декод простого режима - склейка рун,
-            // а не парная распаковка, так что нечётные ширины (3) работают штатно.
             if (runeSize < 2) throw new Exception($"domain error: runeSize={runeSize}, must be >= 2");
 
             // ОДНО дерево на всё: и в AFST, и в персистируемый Translator. Раньше тут ATRFrom
             // звался трижды и получались три несвязанных дерева.
             var runes = Domain.Aggregates.Translator.Translator.ATRFrom(request.Alphabet);
 
-            // Рабочее состояние живёт ЗДЕСЬ, в памяти. БД для работы протокола не нужна.
             _aFST.SetContext(new SetContextCommand<char>
             {
                 Alphabet = request.Alphabet,
@@ -42,9 +39,6 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 
             _logger.LogInformation($"init: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}");
 
-            // Персист отложен: миграций нет, TranslatorEntityConfiguration - заглушка, а Runes
-            // (интерфейс) EF всё равно не отобразит. Поэтому запись в БД необязательна - без неё
-            // /init обязан отработать, иначе весь протокол не поднять из-за незаконченной части.
             await TryPersist(runes, request, cancellationToken);
 
             return new() { ShortDomain = "http://v.ro", RuneSize = runeSize };
@@ -57,8 +51,7 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
         }
     }
 
-    private async Task TryPersist(Domain.Aggregates.Translator.types.IArenaTreeRunes<char> runes,
-                                  InitRequest request, CancellationToken cancellationToken)
+    private async Task TryPersist(Domain.Aggregates.Translator.types.IArenaTreeRunes<char> runes, InitRequest request, CancellationToken cancellationToken)
     {
         try
         {
