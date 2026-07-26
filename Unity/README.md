@@ -36,10 +36,13 @@ Two cubes and a status board in front of the spawn point.
 
 The demo sends `https://dummyjson.com/todos/1`, `/2`, `/3` in a loop, and **the pace is the point**:
 
-| | requests per url | delay between sends |
+| | requests per url | wall clock |
 |---|---|---|
-| first lap | 16 | 3 s |
-| every later lap | 1 | 0.5 s |
+| first lap | 9 | ~45 s |
+| every later lap | **1** | ~5 s |
+
+Nothing is throttled artificially — the next send fires as soon as the data arrives. The pace you
+see is VRChat's own ~5 s cooldown, paid once per request.
 
 The board explains each step while it happens. First lap: the url is spelled out a couple of
 characters per request, because VRChat can only load urls that were baked in at build time. The

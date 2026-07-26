@@ -91,6 +91,30 @@ public class Translator : Entity, IAggregateRoot
 
     public string Unrune(string runes) => UnrunedCombine(Alphabet, Runes, runes);
 
+    // БАЗОВАЯ УЖИМКА. Алфавит расширяется частыми кусками URL, и "символом" становится не буква,
+    // а фрагмент. Пара символов по-прежнему схлопывается в один индекс пула - механика та же, что
+    // и была, но платит она теперь сразу.
+    //
+    // Ключевое отличие от прежних alphExts: таблица СТАТИЧЕСКАЯ. Она одинакова у клиента и сервера
+    // и никогда не едет по проводу, поэтому синхронизировать нечего - а именно на синхронизации
+    // растущих уровней прежняя схема и разваливалась. Цена: пул растёт с 59^2 до (59+N)^2.
+    //
+    // ПОРЯДОК ВАЖЕН: индекс символа = его позиция здесь. Добавлять только В КОНЕЦ, иначе клиент
+    // и сервер разъедутся молча, как это уже было с лишней кавычкой в WireAlphabet.
+    public static readonly string[] Fragments =
+    [
+        "https://", "http://", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
+        "/api/", "/v1/", "/r/", "/comments/", ".html", ".php", ".json",
+        "json", "html", "index", "search", "image", "video", "data", "list", "item",
+        "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "://", "com"
+    ];
+
+    public static int SymbolCount(string alphabet) => alphabet.Length + Fragments.Length;
+
+    // Индекс -> текст. Первые alphabet.Length индексов это одиночные буквы, дальше фрагменты.
+    public static string SymbolOf(string alphabet, int index) =>
+        index < alphabet.Length ? alphabet[index].ToString() : Fragments[index - alphabet.Length];
+
     // Символы, которыми нельзя писать САМ запрос:
     //   # начинает фрагмент, % начинает percent-encoding, [ ] зарезервированы под IPv6-литералы.
     // / и ? остаются - в query-строке они легальны (в пути нет, поэтому руны и едут в query).
@@ -106,9 +130,9 @@ public class Translator : Entity, IAggregateRoot
         return sb.ToString();
     }
 
-    // Один кусок: wire-разряды -> значение -> исходные символы.
-    // Тождеством это больше НЕ является: алфавиты разной мощности, поэтому wire-разрядов на кусок
-    // больше, чем исходных символов (при 59/55 и runeSize=3 это 4 против 3).
+    // Один кусок: wire-разряды -> значение -> runeSize СИМВОЛОВ -> их текст.
+    // Символ это буква или фрагмент из Fragments, поэтому длина результата в символах фиксирована,
+    // а в ЗНАКАХ - нет: один кусок может нести и два знака, и шестнадцать.
     public static string DecodeChunk(string wire, string wireAlphabet, string alphabet, int runeSize)
     {
         long value = 0;
@@ -122,15 +146,16 @@ public class Translator : Entity, IAggregateRoot
             value = value * wireAlphabet.Length + digit;
         }
 
-        var chars = new char[runeSize];
+        int symbols = SymbolCount(alphabet);
+        var parts = new string[runeSize];
 
         for (int i = runeSize - 1; i >= 0; i--)
         {
-            chars[i] = alphabet[(int)(value % alphabet.Length)];
-            value /= alphabet.Length;
+            parts[i] = SymbolOf(alphabet, (int)(value % symbols));
+            value /= symbols;
         }
 
-        return new string(chars);
+        return string.Concat(parts);
     }
 
     // Растит дерево из ГОТОВОГО текста тем же правилом, что и энкодер: жадно матчим самый длинный

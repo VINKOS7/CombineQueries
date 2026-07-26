@@ -152,22 +152,26 @@ public class CombineQueriesTest : UdonSharpBehaviour
     // would rot the moment either changes.
     private string CostTable(int requests)
     {
-        int len = (cycleBaseUrl + NumberOf(cycleCount)).Length;
         int rs = client.ChunkSize();
+
+        // Symbols, not characters: base compression folds "https://" and friends into one symbol,
+        // so counting the url's length here would overstate the cost. Derived from what the last
+        // full send actually cost, which cannot drift out of sync with the encoder.
+        int symbols = (fullRequests > 1 ? fullRequests - 1 : requests - 1) * rs;
 
         string rows = "";
 
         for (int w = 2; w <= 4; w++)
         {
-            int chunks = (len + w - 1) / w + 1;              // +1 for the /n header
+            int chunks = (symbols + w - 1) / w + 1;          // +1 for the /n header
 
-            rows += "   chunk " + NumberOf(w) + " chars    " + NumberOf(chunks) + " requests"
+            rows += "   " + NumberOf(w) + " symbols/req    " + NumberOf(chunks) + " requests"
                   + (w == rs ? "   <- now\n" : "\n");
         }
 
-        return "\n" + NumberOf(len) + "-char url, one cooldown per request:\n"
+        return "\n" + NumberOf(symbols) + " symbols after base compression:\n"
              + rows
-             + "   cached          1 request";
+             + "   cached            1 request";
     }
 
     private int fullRequests = 0;

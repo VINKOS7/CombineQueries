@@ -28,6 +28,29 @@ public class CombineQueries : UdonSharpBehaviour
     private const string WireAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?@!$&'()*+,;=";
     private const string Digits = "0123456789";
 
+    // BASE COMPRESSION. A "symbol" is either one letter of Alphabet or one of these fragments,
+    // so a single chunk can carry two letters - or two whole "https://"-sized pieces.
+    //
+    // This is the old alphabet-extension idea with one change that makes it work: the table is
+    // STATIC. It is identical on both sides and never travels over the wire, so there is nothing
+    // to synchronise - which is exactly what sank the growing-levels version. It also pays from
+    // the very first send, with no warm-up.
+    //
+    // MUST match Translator.Fragments on the server, ORDER INCLUDED - the index is the contract.
+    // Append only; inserting in the middle shifts every later symbol and breaks decoding silently.
+    private readonly string[] Fragments = new string[]
+    {
+        "https://", "http://", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
+        "/api/", "/v1/", "/r/", "/comments/", ".html", ".php", ".json",
+        "json", "html", "index", "search", "image", "video", "data", "list", "item",
+        "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "://", "com"
+    };
+
+    // Kept as a literal because pools are built in field initializers, before Fragments is usable
+    // there. Guarded at Init(): a mismatch with Fragments.Length is reported instead of corrupting.
+    private const int FragmentCount = 35;
+    private const int Symbols = 59 + FragmentCount;   // 94
+
     // Percent-encoded Alphabet for /init. It cannot be sent raw: '#' would start a fragment
     // and cut everything after it, '%' would start an escape sequence, and '&' '=' would be
     // parsed as query separators. Keep in sync with Alphabet above.
@@ -44,7 +67,9 @@ public class CombineQueries : UdonSharpBehaviour
     private const int MaxChunks = 256;  // url length ceiling: MaxChunks * RuneSize characters
     private const int MaxHandles = 4096;
 
-    private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/m?r=", Alphabet, WireAlphabet, RuneSize, WireSize);
+    // Pool is now indexed by SYMBOL pairs, not letter pairs: 94^2 = 8 836 instead of 59^2 = 3 481.
+    // Under 1 MB, and WireSize stays 3 because 55^3 = 166 375 still covers it.
+    private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/m?r=", Symbols, WireAlphabet, RuneSize, WireSize);
     private readonly VRCUrl[] CountPool = NumPoolOf(baseUrl + "/n?c=", MaxChunks * RuneSize + RuneSize);
     private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h?r=", MaxHandles);
 
@@ -131,6 +156,24 @@ public class CombineQueries : UdonSharpBehaviour
     public void Init()
     {
         LastError = "";
+
+        // The two hand-maintained duplicates in this file are the only way a silent, total
+        // corruption can enter - a stray character in WireAlphabet already cost a week once.
+        // Both are checked here, where it is one comparison and a clear message.
+        if (Fragments.Length != FragmentCount)
+        {
+            LastError = "Fragments table and FragmentCount disagree - fix the constant";
+            Debug.LogError("CombineQueries: " + LastError);
+            return;
+        }
+
+        if (WireAlphabet.Length != Alphabet.Length - 4)
+        {
+            LastError = "WireAlphabet must be Alphabet minus the four unsafe characters";
+            Debug.LogError("CombineQueries: " + LastError);
+            return;
+        }
+
         phase = PhaseInit;
 
         VRCStringDownloader.LoadUrl(InitQuery, this);
@@ -170,18 +213,26 @@ public class CombineQueries : UdonSharpBehaviour
 
     private void SendFull(string url)
     {
-        // Pad up to a multiple of RuneSize. The filler character does not matter:
-        // the server trims exactly 'pad' characters, without looking at what they are.
-        int pad = (RuneSize - url.Length % RuneSize) % RuneSize;
-        string padded = url;
+        int[] symbols = SymbolsOf(url);
 
-        for (int i = 0; i < pad; i++) padded = padded + Alphabet[0];
+        if (symbols == null)
+        {
+            LastError = "Character outside the alphabet";
+            Debug.LogError("CombineQueries: " + LastError);
+            busy = false;
+            return;
+        }
 
-        queueLen = padded.Length / RuneSize;
+        // Pad the SYMBOL list up to a multiple of RuneSize with symbol 0, which is a single
+        // character. That keeps the server's rule intact: it trims exactly 'pad' characters.
+        int used = symbols.Length;
+        int pad = (RuneSize - used % RuneSize) % RuneSize;
+
+        queueLen = (used + pad) / RuneSize;
 
         if (queueLen > MaxChunks)
         {
-            LastError = "Url is longer than the ceiling of " + MaxChunks * RuneSize + " characters";
+            LastError = "Url needs more than " + MaxChunks + " chunks";
             Debug.LogError("CombineQueries: " + LastError);
             busy = false;
             return;
@@ -191,14 +242,13 @@ public class CombineQueries : UdonSharpBehaviour
 
         for (int i = 0; i < queueLen; i++)
         {
-            int v = ValueOf(padded.Substring(i * RuneSize, RuneSize), Alphabet);
+            int v = 0;
 
-            if (v < 0)
+            for (int j = 0; j < RuneSize; j++)
             {
-                LastError = "Character outside the alphabet";
-                Debug.LogError("CombineQueries: " + LastError);
-                busy = false;
-                return;
+                int at = i * RuneSize + j;
+
+                v = v * Symbols + (at < used ? symbols[at] : 0);   // 0 = Alphabet[0], the pad symbol
             }
 
             queue[i] = v;
@@ -412,12 +462,12 @@ public class CombineQueries : UdonSharpBehaviour
 
     // ---- pure functions ----
 
-    // Chunk pool: index == value (0 .. srcAlph^runeSize-1), the url is written in wireAlph digits
-    private static VRCUrl[] PoolOf(string baseUri, string srcAlph, string wireAlph, int runeSize, int wireSize)
+    // Chunk pool: index == value (0 .. symbols^runeSize-1), the url is written in wireAlph digits
+    private static VRCUrl[] PoolOf(string baseUri, int symbols, string wireAlph, int runeSize, int wireSize)
     {
         int total = 1;
 
-        for (int i = 0; i < runeSize; i++) total *= srcAlph.Length;
+        for (int i = 0; i < runeSize; i++) total *= symbols;
 
         VRCUrl[] pool = new VRCUrl[total];
 
@@ -448,6 +498,56 @@ public class CombineQueries : UdonSharpBehaviour
         }
 
         return runes;
+    }
+
+    // Greedy longest match: at each position take the longest fragment that fits, otherwise one
+    // letter. Greedy is not provably optimal, but it is one pass and it never loses to plain
+    // letters - and the whole point here is that it costs nothing at runtime.
+    // Returns null if a character is outside Alphabet.
+    private int[] SymbolsOf(string url)
+    {
+        int[] buf = new int[url.Length];      // upper bound: every symbol is one letter
+        int n = 0, i = 0;
+
+        while (i < url.Length)
+        {
+            int best = -1, bestLen = 0;
+
+            for (int f = 0; f < Fragments.Length; f++)
+            {
+                string frag = Fragments[f];
+
+                if (frag.Length <= bestLen) continue;
+                if (i + frag.Length > url.Length) continue;
+                if (url.Substring(i, frag.Length) != frag) continue;
+
+                best = f;
+                bestLen = frag.Length;
+            }
+
+            if (best >= 0)
+            {
+                buf[n] = Alphabet.Length + best;
+                i += bestLen;
+            }
+            else
+            {
+                int letter = Alphabet.IndexOf(url[i]);
+
+                if (letter < 0) return null;
+
+                buf[n] = letter;
+                i++;
+            }
+
+            n++;
+        }
+
+        int[] res = new int[n];
+
+        for (int k = 0; k < n; k++) res[k] = buf[k];
+
+        return res;
     }
 
     private static int ValueOf(string runes, string alph)

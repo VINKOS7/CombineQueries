@@ -37,15 +37,36 @@ public void OnQueryDone()
 Cost is not bandwidth, it is **VRChat's ~5 s cooldown paid once per request**. A full send costs one
 request per chunk; a cached url costs one request total.
 
-| chunk size | requests for a 29-char url | time | url pool | pool memory |
+Two things cut the request count, and they stack.
+
+**Base compression.** A *symbol* is one letter or one whole fragment from a static table baked into
+both sides — `https://`, `.com`, `/api/` and so on. Chunks carry symbols, not characters, so common
+url parts collapse. It needs no warm-up and no synchronisation: the table never travels.
+
+| url | characters | symbols | requests before | after |
 |---|---|---|---|---|
-| 2 chars | 16 | ~80 s | 3 481 | ~0.4 MB |
-| 3 chars | 11 | ~55 s | 205 379 | ~23 MB |
-| 4 chars | 9 | ~45 s | 12 117 361 | ~1.4 GB |
+| `https://dummyjson.com/todos/1` | 29 | 16 | 16 | **9** |
+| `https://jsonplaceholder.typicode.com/todos/2` | 44 | 32 | 23 | **17** |
+| `http://example.com/` | 19 | 10 | 11 | **6** |
+
+**Chunk width.** How many symbols ride in one request. The pool is `94^width`, so each step
+multiplies memory by 94 — this is the expensive lever.
+
+| symbols per request | requests for the 29-char url | time | pool | pool memory |
+|---|---|---|---|---|
+| 2 | 9 | ~45 s | 8 836 | ~1 MB |
+| 3 | 7 | ~35 s | 830 584 | ~90 MB |
+| 4 | 5 | ~25 s | 78 074 896 | ~8.5 GB |
 | **cached** | **1** | **~5 s** | 4 096 | ~0.5 MB |
 
-Widening the chunk buys a few requests and multiplies the pool by 59 each step. The handle is the
-real win: one request regardless of url length, for every send after the first.
+The handle is still the real win: one request regardless of url length, for every send after the
+first. Base compression makes that first send roughly twice as cheap; the handle makes every later
+one flat.
+
+LZW and friends do not help here. On a 29-character string their dictionary never warms, and the
+byte output has to be re-encoded into a 59-symbol alphabet (8 bits against 5.88) — measured, it
+comes out at 21 requests against 16. Compression that pays on this channel has to be dictionary
+based and static.
 
 ## Install
 
