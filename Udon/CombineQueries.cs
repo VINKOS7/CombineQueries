@@ -29,13 +29,14 @@ public class CombineQueries : UdonSharpBehaviour
     private const int RuneSize = 3;
     private const string RuneSizeStr = "3";
     private const int WireSize = 4;
+    private const int TailWireSize = 3;
     private const int NumSize = 4;
 
     private const int MaxRunes = 256;
     private const int MaxHandles = 4096;
 
-    private readonly VRCUrl[] RunePool = PoolOf(baseUrl + "/m?r=", Symbols, WireAlphabet, RuneSize, WireSize);
-    private readonly VRCUrl[] TailPool = NumPoolOf(baseUrl + "/n?c=", MaxRunes * RuneSize + RuneSize);
+    private readonly VRCUrl[] RunePool = PoolOf(baseUrl + "/c?r=", Symbols, WireAlphabet, RuneSize, WireSize);
+    private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/n?r=", Symbols, WireAlphabet, TailWireSize);
     private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h?r=", MaxHandles);
 
     private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr);
@@ -47,13 +48,14 @@ public class CombineQueries : UdonSharpBehaviour
     private int[] runes;
     private int runeCount;
     private int runeAt;
+    private int tailValue;
     private bool busy;
     private string pendingUrl = "";
 
     private const int PhaseIdle = 0;
     private const int PhaseInit = 1;
-    private const int PhaseCount = 2;
-    private const int PhaseRunes = 3;
+    private const int PhaseRunes = 2;
+    private const int PhaseTail = 3;
     private const int PhaseHandle = 4;
     private int phase;
 
@@ -161,9 +163,10 @@ public class CombineQueries : UdonSharpBehaviour
         }
 
         int used = symbols.Length;
-        int pad = (RuneSize - used % RuneSize) % RuneSize;
 
-        runeCount = (used + pad) / RuneSize;
+        runeCount = used / RuneSize;
+
+        int rest = used - runeCount * RuneSize;
 
         if (runeCount > MaxRunes)
         {
@@ -179,28 +182,33 @@ public class CombineQueries : UdonSharpBehaviour
         {
             int v = 0;
 
-            for (int j = 0; j < RuneSize; j++)
-            {
-                int at = i * RuneSize + j;
-
-                v = v * Symbols + (at < used ? symbols[at] : 0);
-            }
+            for (int j = 0; j < RuneSize; j++) v = v * Symbols + symbols[i * RuneSize + j];
 
             runes[i] = v;
         }
 
-        runeAt = 0;
-        phase = PhaseCount;
+        if (rest == 0) tailValue = 0;
+        else if (rest == 1) tailValue = 1 + symbols[used - 1];
+        else tailValue = 1 + Symbols + symbols[used - 2] * Symbols + symbols[used - 1];
 
+        runeAt = 0;
         lastCached = false;
         lastRequests = runeCount + 1;
 
-        VRCStringDownloader.LoadUrl(TailPool[runeCount * RuneSize + pad], this);
+        SendNextRune();
     }
 
     private void SendNextRune()
     {
-        if (runeAt >= runeCount) { Done(); return; }
+        if (runeAt >= runeCount)
+        {
+            phase = PhaseTail;
+
+            VRCStringDownloader.LoadUrl(TailPool[tailValue], this);
+            return;
+        }
+
+        phase = PhaseRunes;
 
         VRCStringDownloader.LoadUrl(RunePool[runes[runeAt]], this);
     }
@@ -216,26 +224,24 @@ public class CombineQueries : UdonSharpBehaviour
             return;
         }
 
-        if (phase == PhaseCount) { phase = PhaseRunes; SendNextRune(); return; }
-
         if (phase == PhaseRunes)
         {
             runeAt++;
 
-            if (runeAt >= runeCount)
-            {
-                int handle = IntField(response.Result, "handle");
-
-                if (handle >= 0 && handle < MaxHandles) Remember(pendingUrl, handle);
-
-                forwarded = response.Result;
-                hasForwarded = true;
-
-                Done();
-                return;
-            }
-
             SendNextRune();
+            return;
+        }
+
+        if (phase == PhaseTail)
+        {
+            int handle = IntField(response.Result, "handle");
+
+            if (handle >= 0 && handle < MaxHandles) Remember(pendingUrl, handle);
+
+            forwarded = response.Result;
+            hasForwarded = true;
+
+            Done();
             return;
         }
 
@@ -385,6 +391,17 @@ public class CombineQueries : UdonSharpBehaviour
         int total = 1;
 
         for (int i = 0; i < runeSize; i++) total *= symbols;
+
+        VRCUrl[] pool = new VRCUrl[total];
+
+        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + WiresOf(v, wireAlph, wireSize));
+
+        return pool;
+    }
+
+    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string wireAlph, int wireSize)
+    {
+        int total = 1 + symbols + symbols * symbols;
 
         VRCUrl[] pool = new VRCUrl[total];
 
