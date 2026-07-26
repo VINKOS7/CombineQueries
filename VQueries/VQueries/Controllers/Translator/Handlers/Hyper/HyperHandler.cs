@@ -5,8 +5,6 @@ using CombineQueries.Api.Services.Forwarder;
 
 namespace CombineQueries.Api.Controllers.Translator.Handlers.Hyper;
 
-// Быстрый путь: ссылка уже известна серверу по идентификатору, поэтому вся цепочка
-// /n + K кусков схлопывается в ОДИН запрос. Отсюда и имя роута - /h, hyper.
 public class HyperHandler : IRequestHandler<HyperRequest, HyperResponse>
 {
     private readonly ILogger<HyperHandler> _logger;

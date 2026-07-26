@@ -81,7 +81,6 @@ public static class TestSceneBuilder
             sendTest.cycleBaseUrl = "https://dummyjson.com/todos/";
             sendTest.cycleCount = 3;
             sendTest.cyclePeriod = 0f;
-            sendTest.cachedPeriod = 0f;
             sendTest.output = text;
 
             client.target = sendTest;
@@ -95,7 +94,6 @@ public static class TestSceneBuilder
         }
         catch (Exception e)
         {
-
             Debug.LogError("[TestSceneBuilder] Udon components were not attached: " + e.Message
                          + "\nGeometry is already in the scene. Wait for U# to finish compiling and run the menu item again.");
         }

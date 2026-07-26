@@ -2,8 +2,6 @@ using System.Diagnostics;
 
 namespace CombineQueries.Api.Services.Forwarder;
 
-// Единственное место, где живёт исходящий HTTP. Раньше тот же try/catch был скопирован
-// в CombineHandler и HandleHandler - две копии одной политики ошибок, расходящиеся при первой правке.
 public class Forwarder : IForwarder
 {
     private readonly ILogger<Forwarder> _logger;
@@ -17,7 +15,6 @@ public class Forwarder : IForwarder
 
     public async Task<ForwardResult> GetAsync(string url, CancellationToken cancellationToken)
     {
-        // Меряем и на успехе, и на провале: таймаут - тоже результат, и он самый долгий.
         var watch = Stopwatch.StartNew();
 
         try
@@ -40,8 +37,6 @@ public class Forwarder : IForwarder
         {
             watch.Stop();
 
-            // Ссылку собрали верно, а сходить не смогли - это разные беды, и хэндл уже выдан:
-            // повторная попытка пойдёт одним запросом, поэтому сборку не отменяем.
             _logger.LogError($"forward: request to '{url}' failed after {watch.ElapsedMilliseconds} ms: {ex.Message}");
 
             return new ForwardResult(false, 0, "", watch.ElapsedMilliseconds, ex.Message);

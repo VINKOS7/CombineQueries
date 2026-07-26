@@ -22,7 +22,7 @@ public class TailHandler : IRequestHandler<TailRequest, TailResponse>
     {
         if (_afst.Alphabet is null || _afst.WireAlphabet is null) throw new Exception("CRIT: /init was not called");
 
-        string tail = Domain.Aggregates.Translator.Translator.DecodeTail(request.Runes, _afst.WireAlphabet, _afst.Alphabet);
+        string tail = Domain.Aggregates.Translator.Translator.DecodeTail(request.Runes, _afst.WireAlphabet, _afst.Alphabet, _afst.RuneSize);
 
         var assembled = _afst.Close(tail);
 

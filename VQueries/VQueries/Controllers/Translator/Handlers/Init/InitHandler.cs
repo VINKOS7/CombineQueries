@@ -26,8 +26,6 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 
             if (runeSize < 2) throw new Exception($"domain error: runeSize={runeSize}, must be >= 2");
 
-            // ОДНО дерево на всё: и в AFST, и в персистируемый Translator. Раньше тут ATRFrom
-            // звался трижды и получались три несвязанных дерева.
             var runes = Domain.Aggregates.Translator.Translator.ATRFrom(request.Alphabet);
 
             _aFST.SetContext(new SetContextCommand<char>

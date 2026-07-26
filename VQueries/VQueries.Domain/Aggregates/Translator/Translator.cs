@@ -91,16 +91,6 @@ public class Translator : Entity, IAggregateRoot
 
     public string Unrune(string runes) => UnrunedCombine(Alphabet, Runes, runes);
 
-    // БАЗОВАЯ УЖИМКА. Алфавит расширяется частыми кусками URL, и "символом" становится не буква,
-    // а фрагмент. Пара символов по-прежнему схлопывается в один индекс пула - механика та же, что
-    // и была, но платит она теперь сразу.
-    //
-    // Ключевое отличие от прежних alphExts: таблица СТАТИЧЕСКАЯ. Она одинакова у клиента и сервера
-    // и никогда не едет по проводу, поэтому синхронизировать нечего - а именно на синхронизации
-    // растущих уровней прежняя схема и разваливалась. Цена: пул растёт с 59^2 до (59+N)^2.
-    //
-    // ПОРЯДОК ВАЖЕН: индекс символа = его позиция здесь. Добавлять только В КОНЕЦ, иначе клиент
-    // и сервер разъедутся молча, как это уже было с лишней кавычкой в WireAlphabet.
     public static readonly string[] Fragments =
     [
         "https://", "http://", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
@@ -111,14 +101,9 @@ public class Translator : Entity, IAggregateRoot
 
     public static int SymbolCount(string alphabet) => alphabet.Length + Fragments.Length;
 
-    // Индекс -> текст. Первые alphabet.Length индексов это одиночные буквы, дальше фрагменты.
     public static string SymbolOf(string alphabet, int index) =>
         index < alphabet.Length ? alphabet[index].ToString() : Fragments[index - alphabet.Length];
 
-    // Символы, которыми нельзя писать САМ запрос:
-    //   # начинает фрагмент, % начинает percent-encoding, [ ] зарезервированы под IPv6-литералы.
-    // / и ? остаются - в query-строке они легальны (в пути нет, поэтому руны и едут в query).
-    // Выводится детерминированно из исходного алфавита, передавать отдельно не нужно.
     public const string WireUnsafe = "#%[]";
 
     public static string WireAlphabetOf(string alphabet)
@@ -130,9 +115,6 @@ public class Translator : Entity, IAggregateRoot
         return sb.ToString();
     }
 
-    // Один кусок: wire-разряды -> значение -> runeSize СИМВОЛОВ -> их текст.
-    // Символ это буква или фрагмент из Fragments, поэтому длина результата в символах фиксирована,
-    // а в ЗНАКАХ - нет: один кусок может нести и два знака, и шестнадцать.
     public static string DecodeRune(string wire, string wireAlphabet, string alphabet, int runeSize)
     {
         long value = 0;
@@ -158,44 +140,19 @@ public class Translator : Entity, IAggregateRoot
         return string.Concat(parts);
     }
 
-    public static int TailSpan(string alphabet)
-    {
-        int s = SymbolCount(alphabet);
+    public const char Pad = ':';
 
-        return 1 + s + s * s;
+    public static string DecodeTail(string wire, string wireAlphabet, string alphabet, int runeSize)
+    {
+        string text = DecodeRune(wire, wireAlphabet, alphabet, runeSize);
+
+        int cut = 0;
+
+        while (cut < runeSize && cut < text.Length && text[text.Length - 1 - cut] == Pad) cut++;
+
+        return text.Substring(0, text.Length - cut);
     }
 
-    public static string DecodeTail(string wire, string wireAlphabet, string alphabet)
-    {
-        long value = 0;
-
-        foreach (char c in wire)
-        {
-            int digit = wireAlphabet.IndexOf(c);
-
-            if (digit < 0) throw new Exception($"domain error: wire symbol '{c}' is not in wire alphabet");
-
-            value = value * wireAlphabet.Length + digit;
-        }
-
-        int s = SymbolCount(alphabet);
-
-        if (value >= TailSpan(alphabet)) throw new Exception($"domain error: tail value {value} is out of range");
-
-        if (value == 0) return "";
-
-        if (value <= s) return SymbolOf(alphabet, (int)value - 1);
-
-        long two = value - 1 - s;
-
-        return SymbolOf(alphabet, (int)(two / s)) + SymbolOf(alphabet, (int)(two % s));
-    }
-
-    // Растит дерево из ГОТОВОГО текста тем же правилом, что и энкодер: жадно матчим самый длинный
-    // известный префикс, добавляем ровно одно расширение, сдвигаемся на длину матча.
-    // Нужно для простого режима: там дерево ничем не кормится (руны не адресуют узлы), и без этого
-    // оно никогда не прогреется. КРИТИЧНО: клиент и сервер обязаны звать это на ОДНОМ И ТОМ ЖЕ
-    // тексте, иначе деревья разъедутся и tree-режим начнёт врать.
     public static void Learn(string text, IArenaTreeRunes<char> runes)
     {
         if (string.IsNullOrEmpty(text)) return;
@@ -215,14 +172,10 @@ public class Translator : Entity, IAggregateRoot
 
             if (pos + depth < text.Length) runes.From(node, text[pos + depth]);
 
-            // depth==0 бывает только если символа нет даже в преседе - иначе зациклимся
             pos += depth == 0 ? 1 : depth;
         }
     }
 
-    // Во сколько раз tree-режим плотнее простого для этого текста при текущем дереве.
-    // Простой режим - всегда 1 исходный символ на 1 wire-символ, поэтому знаменатель = text.Length.
-    // Считает БЕЗ роста дерева (чистая оценка, дерево не трогает).
     public static double TreeDensity(string text, string alphabet, IArenaTreeRunes<char> runes)
     {
         if (string.IsNullOrEmpty(text)) return 0;
@@ -244,7 +197,6 @@ public class Translator : Entity, IAggregateRoot
 
             long wireValue = (long)node.Id * symbolSpan + (pos + depth < text.Length ? 0 : alphabet.Length);
 
-            // сколько base-alphabet разрядов нужно, чтобы записать wireValue
             int digits = 1;
             for (long v = wireValue; v >= alphabet.Length; v /= alphabet.Length) digits++;
 
@@ -278,7 +230,6 @@ public class Translator : Entity, IAggregateRoot
         return new string(c);
     }
 
-
     public static CompressedResult CompressRecursive(string s, string alphabet, int target) => CompressRecursive(s, alphabet, target, new List<string> { alphabet });
 
     public static CompressedResult CompressRecursive(string s, string alphabet, int target, List<string> levels)
@@ -293,7 +244,7 @@ public class Translator : Entity, IAggregateRoot
 
         levels.Add(nextAlphabet);
 
-        return CompressRecursive(str, nextAlphabet, target, levels); // самовызов
+        return CompressRecursive(str, nextAlphabet, target, levels);
     }
 
     public static string Derune(CompressedResult r) => Derune(r.runes, r.alphDmension, r.alphDmension.Count - 1);
@@ -304,6 +255,6 @@ public class Translator : Entity, IAggregateRoot
 
         int[] next = Derune(ids, levels[level]).Select(c => (int)c).ToArray();
 
-        return Derune(next, levels, level - 1); // самовызов
+        return Derune(next, levels, level - 1);
     }
 }
