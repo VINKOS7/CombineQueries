@@ -1,4 +1,4 @@
-﻿using Dotseed.Domain;
+using Dotseed.Domain;
 using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Domain.Aggregates.Translator;
@@ -133,7 +133,7 @@ public class Translator : Entity, IAggregateRoot
     // Один кусок: wire-разряды -> значение -> runeSize СИМВОЛОВ -> их текст.
     // Символ это буква или фрагмент из Fragments, поэтому длина результата в символах фиксирована,
     // а в ЗНАКАХ - нет: один кусок может нести и два знака, и шестнадцать.
-    public static string DecodeChunk(string wire, string wireAlphabet, string alphabet, int runeSize)
+    public static string DecodeRune(string wire, string wireAlphabet, string alphabet, int runeSize)
     {
         long value = 0;
 
@@ -156,6 +156,39 @@ public class Translator : Entity, IAggregateRoot
         }
 
         return string.Concat(parts);
+    }
+
+    public static int TailSpan(string alphabet)
+    {
+        int s = SymbolCount(alphabet);
+
+        return 1 + s + s * s;
+    }
+
+    public static string DecodeTail(string wire, string wireAlphabet, string alphabet)
+    {
+        long value = 0;
+
+        foreach (char c in wire)
+        {
+            int digit = wireAlphabet.IndexOf(c);
+
+            if (digit < 0) throw new Exception($"domain error: wire symbol '{c}' is not in wire alphabet");
+
+            value = value * wireAlphabet.Length + digit;
+        }
+
+        int s = SymbolCount(alphabet);
+
+        if (value >= TailSpan(alphabet)) throw new Exception($"domain error: tail value {value} is out of range");
+
+        if (value == 0) return "";
+
+        if (value <= s) return SymbolOf(alphabet, (int)value - 1);
+
+        long two = value - 1 - s;
+
+        return SymbolOf(alphabet, (int)(two / s)) + SymbolOf(alphabet, (int)(two % s));
     }
 
     // Растит дерево из ГОТОВОГО текста тем же правилом, что и энкодер: жадно матчим самый длинный

@@ -4,12 +4,11 @@ using UnityEngine.UI;
 
 public class CanvasTest : UdonSharpBehaviour
 {
-    // Composition: we just hold a reference to the client, we do not inherit from it
+
     [SerializeField] private CombineQueries queries;
     [SerializeField] private RawImage rawImage;
     [SerializeField] private float changeInterval = 2f;
 
-    // List<Texture2D> is not exposed in Udon - grow the array by hand
     private Texture2D[] images = new Texture2D[0];
     private int currentIndex = 0;
     private float timer = 0f;
@@ -25,7 +24,6 @@ public class CanvasTest : UdonSharpBehaviour
         timer = 0f;
         currentIndex = (currentIndex + 1) % images.Length;
 
-        // RawImage takes the texture directly on .texture, not through material.mainTexture
         rawImage.texture = images[currentIndex];
     }
 
