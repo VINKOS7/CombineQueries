@@ -62,6 +62,7 @@ public class CombineQueries : UdonSharpBehaviour
     private int[] queue;
     private int queueLen;
     private int queuePos;
+    private bool fragments = true;
 
     private string pendingUrl = "";
     private string forwarded = "";
@@ -83,11 +84,17 @@ public class CombineQueries : UdonSharpBehaviour
         Load(PhaseInit, InitQuery);
     }
 
-    public void Request(string url)
+    public void Request(string url) => Send(url, true);
+
+    public void RequestFragmentationOff(string url) => Send(url, false);
+
+    private void Send(string url, bool withFragments)
     {
         if (busy || string.IsNullOrEmpty(url)) return;
 
         if (!initOk) { Fail("Init has not run - call Init first, then Request"); return; }
+
+        fragments = withFragments;
 
         string payload = PayloadOf(url);
 
@@ -102,7 +109,7 @@ public class CombineQueries : UdonSharpBehaviour
         pendingUrl = payload;
         busy = true;
 
-        int handle = HandleOf(payload);
+        int handle = withFragments ? HandleOf(payload) : -1;
 
         if (handle < 0) { SendFull(payload); return; }
 
@@ -374,7 +381,7 @@ public class CombineQueries : UdonSharpBehaviour
         {
             int best = -1, bestLength = 0;
 
-            for (int f = 0; f < Fragments.Length; f++)
+            for (int f = 0; fragments && f < Fragments.Length; f++)
             {
                 if (Fragments[f].Length <= bestLength || position + Fragments[f].Length > url.Length) continue;
                 if (url.Substring(position, Fragments[f].Length) != Fragments[f]) continue;

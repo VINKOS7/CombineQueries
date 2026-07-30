@@ -77,10 +77,8 @@ public static class TestSceneBuilder
 
             var sendTest = sendBtn.AddUdonSharpComponent<CombineQueriesTest>();
             sendTest.client = client;
-            sendTest.action = 2;
-            sendTest.cycleBaseUrl = "https://dummyjson.com/todos/";
-            sendTest.cycleCount = 3;
-            sendTest.cyclePeriod = 0f;
+            sendTest.action = 1;
+            sendTest.testUrl = "https://dummyjson.com/todos/1";
             sendTest.output = text;
 
             client.target = sendTest;

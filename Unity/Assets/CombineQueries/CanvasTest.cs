@@ -8,10 +8,14 @@ using UnityEngine.UI;
 // time, so an arbitrary url is spelled out to the server one chunk at a time and the server
 // fetches it for you. Three members, nothing else is public.
 //
-//   client.Init()                  once, on world start. Hands the alphabet to the server.
-//   client.Request(url)            any url, any time after Init. One send at a time.
-//   client.TakeForwardedBody()     what the target url answered, ready when the event fires.
-//   client.LastError               empty on success, a message otherwise.
+//   client.Init()                     once, on world start. Hands the alphabet to the server.
+//   client.Request(url)               any url, any time after Init. One send at a time.
+//   client.RequestFragmentationOff()  the same, but the fragment dictionary is ignored and the
+//                                     url is spelled letter by letter. It also skips the handle
+//                                     cache, so it always pays the full price - it is a yardstick
+//                                     for what the dictionary buys, never a way to send traffic.
+//   client.TakeForwardedBody()        what the target url answered, ready when the event fires.
+//   client.LastError                  empty on success, a message otherwise.
 //
 // Init also fixes the scheme, http or https, and the scheme never travels: Request strips it and
 // the server puts it back. A url asking for the other scheme is refused. Request checks the url

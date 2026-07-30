@@ -6,54 +6,42 @@ public class CombineQueriesTest : UdonSharpBehaviour
 {
     public CombineQueries client;
 
-    [Tooltip("0 = Init, 1 = request a single url, 2 = cycle through a list")]
+    [Tooltip("0 = Init, 1 = run the three-step comparison on testUrl")]
     public int action = 0;
 
-    [Tooltip("What to request when action = 1")]
-    public string testUrl = "https://example.com/";
-
-    [Header("Cycling run (action = 2)")]
-
-    [Tooltip("A number is appended to it: .../todos/1, .../todos/2, ...")]
-    public string cycleBaseUrl = "https://dummyjson.com/todos/";
-
-    [Tooltip("How many different urls in one lap")]
-    public int cycleCount = 3;
-
-    [Tooltip("Extra seconds between requests. 0 = platform cooldown only")]
-    public float cyclePeriod = 0f;
+    [Tooltip("One url for all three steps: full send, then its hyper, then full send without the dictionary")]
+    public string testUrl = "https://dummyjson.com/todos/1";
 
     [Tooltip("Optional: status is written here")]
     public Text output;
 
+    private const int StepFull = 0;
+    private const int StepHyper = 1;
+    private const int StepPlain = 2;
+
     private bool ready;
     private bool awaiting;
-    private bool cycling;
-    private int cycleIndex;
-    private int lap;
-    private float nextSendAt;
+    private bool running;
+    private int step;
     private float startedAt;
-    private string lastResult = "";
+    private string board = "";
 
     public override void Interact()
     {
-        if (client == null) { Log("client is not assigned"); return; }
+        if (client == null) { Say("client is not assigned"); return; }
         if (awaiting) return;
 
-        if (action == 0) { client.Init(); awaiting = true; Log("init sent"); return; }
+        if (action == 0) { client.Init(); awaiting = true; Say("init sent"); return; }
 
-        if (action == 1) { Send(testUrl); return; }
+        if (!ready) { Say("run Init first"); return; }
 
-        if (cycling) { cycling = false; Log("cycle stopped"); return; }
+        if (running) { running = false; Say("run stopped"); return; }
 
-        if (!ready) { Log("run Init first"); return; }
+        running = true;
+        step = StepFull;
+        board = "";
 
-        cycling = true;
-        cycleIndex = 0;
-        lap = 1;
-        nextSendAt = Time.time;
-
-        Log("cycle started: " + NumberOf(cycleCount) + " urls");
+        SendStep();
     }
 
     public void OnQueryDone()
@@ -62,47 +50,49 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         if (client.LastError != "")
         {
-            cycling = false;
+            running = false;
 
-            Log("ERROR\n" + client.LastError);
+            Say("ERROR\n" + client.LastError);
             return;
         }
 
-        if (!ready) { ready = true; Log("ready - touch the green cube to start the demo"); return; }
+        if (!ready) { ready = true; Say("ready - touch the green cube"); return; }
+        if (!running) return;
 
-        lastResult = "lap " + NumberOf(lap) + "   url " + NumberOf(cycleIndex == 0 ? cycleCount : cycleIndex)
-                   + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms\n\n"
-                   + client.TakeForwardedBody();
+        string line = TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms";
 
-        nextSendAt = Time.time + cyclePeriod;
+        board += line + "\n";
+        step++;
 
-        Log(lastResult);
+        Note(line);
+        Show("");
+
+        if (step <= StepPlain) { SendStep(); return; }
+
+        running = false;
+
+        Note("done");
+        Show("\n" + client.TakeForwardedBody());
     }
 
-    void Update()
+    private void SendStep()
     {
-        if (!cycling || awaiting || Time.time < nextSendAt) return;
-
-        Send(cycleBaseUrl + NumberOf(cycleIndex + 1));
-
-        cycleIndex++;
-
-        if (cycleIndex < cycleCount) return;
-
-        cycleIndex = 0;
-        lap++;
-    }
-
-    private void Send(string url)
-    {
-        if (!ready) { Log("run Init first"); return; }
-
-        client.Request(url);
+        if (step == StepPlain) client.RequestFragmentationOff(testUrl);
+        else client.Request(testUrl);
 
         awaiting = true;
         startedAt = Time.time;
 
-        Log("sending " + url + "\n\n" + lastResult);
+        Note(TitleOf(step) + "   sending...");
+        Show(TitleOf(step) + "   sending...");
+    }
+
+    private string TitleOf(int at)
+    {
+        if (at == StepFull) return "1  full send, dictionary on              ";
+        if (at == StepHyper) return "2  hyper, the server knew it             ";
+
+        return "3  full send, without fragmentation stage";
     }
 
     private string NumberOf(int value)
@@ -120,10 +110,16 @@ public class CombineQueriesTest : UdonSharpBehaviour
         return digits;
     }
 
-    private void Log(string message)
-    {
-        Debug.Log("[CombineQueriesTest] " + message);
+    private void Note(string line) => Debug.Log("[CombineQueriesTest] " + line);
 
-        if (output != null) output.text = message;
+    private void Show(string tail)
+    {
+        if (output != null) output.text = board + tail;
+    }
+
+    private void Say(string message)
+    {
+        Note(message);
+        Show(message);
     }
 }
