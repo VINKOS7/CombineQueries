@@ -5,13 +5,12 @@ using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Services.AFST;
 
-public class AFST : IAFST
+public class AFST : ISpeech
 {
     public string? Alphabet { get; private set; }
     public string? WireAlphabet { get; private set; }
-    public IArenaTreeRunes<char>? ArenaTreeContext { get; private set; }
-
     public int RuneSize { get; private set; } = 3;
+    public string Scheme { get; private set; } = "https";
 
     private readonly List<string> _runes = new();
     private readonly Stopwatch _assembly = new();
@@ -24,8 +23,8 @@ public class AFST : IAFST
     {
         Alphabet = command.Alphabet;
         WireAlphabet = Domain.Aggregates.Translator.Translator.WireAlphabetOf(command.Alphabet);
-        ArenaTreeContext = command.ArenaTreeContext;
         RuneSize = command.RuneSize;
+        Scheme = command.Scheme;
 
         _runes.Clear();
     }

@@ -1,11 +1,8 @@
-﻿using static System.Net.Mime.MediaTypeNames;
-
-namespace CombineQueries.Domain.Aggregates.Translator.types;
+﻿namespace CombineQueries.Domain.Aggregates.Translator.types;
 
 public interface IArenaTreeRunes<TSymbol>
 {
     public IRune<TSymbol>? Root { get; }
-    public IRune<TSymbol> Get(int id);
     public IRune<TSymbol> From(IRune<TSymbol> move, TSymbol symbol);
 }
 
@@ -41,6 +38,4 @@ public class ArenaTreeRunes<TSymbol> : IArenaTreeRunes<TSymbol>
 
         return node;
     }
-
-    public IRune<TSymbol>? Get(int id) => _runes[id];
 }

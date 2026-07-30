@@ -13,6 +13,11 @@ using UnityEngine.UI;
 //   client.TakeForwardedBody()     what the target url answered, ready when the event fires.
 //   client.LastError               empty on success, a message otherwise.
 //
+// Init also fixes the scheme, http or https, and the scheme never travels: Request strips it and
+// the server puts it back. A url asking for the other scheme is refused. Request checks the url
+// before spending a single request on it - no host, no domain, a space, an uppercase letter or a
+// character outside the alphabet all land in LastError immediately. The alphabet is lowercase.
+//
 // Completion arrives as an event, not as a return value - a send takes several round trips.
 // Set `target` to your behaviour and `onDoneEvent` to the method name (default "OnQueryDone"),
 // both on the CombineQueries component in the inspector. The event fires for Init as well, so

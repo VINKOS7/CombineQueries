@@ -9,10 +9,10 @@ namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 public class TailHandler : IRequestHandler<TailRequest, TailResponse>
 {
     private readonly ILogger<TailHandler> _logger;
-    private readonly IAFST _afst;
+    private readonly ISpeech _afst;
     private readonly IForwarder _forwarder;
 
-    public TailHandler(ILogger<TailHandler> logger, IForwarder forwarder, IAFST afst)
+    public TailHandler(ILogger<TailHandler> logger, IForwarder forwarder, ISpeech afst)
     {
         _logger = logger;
         _forwarder = forwarder;
@@ -27,9 +27,9 @@ public class TailHandler : IRequestHandler<TailRequest, TailResponse>
 
         var assembled = _afst.Close(tail);
 
-        string url = assembled.Text;
+        if (string.IsNullOrEmpty(assembled.Text)) throw new Exception("domain error: nothing was assembled");
 
-        if (string.IsNullOrEmpty(url)) throw new Exception("domain error: nothing was assembled");
+        string url = _afst.Scheme + "://" + assembled.Text;
 
         _logger.LogInformation($"tail: assembled {assembled.Runes} runes + {tail.Length} chars in {assembled.ElapsedMs} ms -> '{url}'");
 

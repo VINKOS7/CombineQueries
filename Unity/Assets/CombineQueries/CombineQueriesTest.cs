@@ -10,7 +10,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
     public int action = 0;
 
     [Tooltip("What to request when action = 1")]
-    public string testUrl = "http://example.com/";
+    public string testUrl = "https://example.com/";
 
     [Header("Cycling run (action = 2)")]
 

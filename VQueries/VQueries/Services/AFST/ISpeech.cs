@@ -4,15 +4,15 @@ namespace CombineQueries.Api.Services.AFST;
 
 public record AssembledResult(string Text, int Runes, long ElapsedMs);
 
-public interface IAFST
+public interface ISpeech
 {
     string? Alphabet { get; }
 
     string? WireAlphabet { get; }
 
-    IArenaTreeRunes<char>? ArenaTreeContext { get; }
-
     int RuneSize { get; }
+
+    string Scheme { get; }
 
     void SetContext(ISetContextCommand<char> command);
 

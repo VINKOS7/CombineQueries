@@ -7,9 +7,9 @@ namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
 {
     private readonly ILogger<CombineHandler> _logger;
-    private readonly IAFST _afst;
+    private readonly ISpeech _afst;
 
-    public CombineHandler(ILogger<CombineHandler> logger, IAFST afst)
+    public CombineHandler(ILogger<CombineHandler> logger, ISpeech afst)
     {
         _logger = logger;
         _afst = afst;

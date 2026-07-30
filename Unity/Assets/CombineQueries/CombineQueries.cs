@@ -12,19 +12,22 @@ public class CombineQueries : UdonSharpBehaviour
     private const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
     private const string WireAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?@!$&'()*+,;=";
     private const string Digits = "0123456789";
+    private const string Upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     private readonly string[] Fragments = new string[]
     {
-        "https://", "http://", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
+        "/todos/", "localhost:", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
         "/api/", "/v1/", "/r/", "/comments/", ".html", ".php", ".json",
         "json", "html", "index", "search", "image", "video", "data", "list", "item",
-        "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "://", "com"
+        "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "/users/", "com"
     };
 
     private const int FragmentCount = 35;
     private const int Symbols = 59 + FragmentCount;
 
     private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
+
+    private const string Scheme = "https";
 
     private const int RuneSize = 3;
     private const string RuneSizeStr = "3";
@@ -38,7 +41,7 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/n?r=", Symbols, WireAlphabet, RuneSize, WireSize);
     private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h?r=", MaxHandles);
 
-    private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr);
+    private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme);
 
     [Header("Where to report completion (optional)")]
     public UdonSharpBehaviour target;
@@ -86,19 +89,55 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (!initOk) { Fail("Init has not run - call Init first, then Request"); return; }
 
+        string payload = PayloadOf(url);
+
+        if (payload == "") { Fail("Init fixed the scheme to " + Scheme + ", this url asks for another one"); return; }
+
+        string problem = ProblemWith(payload);
+
+        if (problem != "") { Fail(problem + ": " + url); return; }
+
         LastError = "";
         forwarded = "";
-        pendingUrl = url;
+        pendingUrl = payload;
         busy = true;
 
-        int handle = HandleOf(url);
+        int handle = HandleOf(payload);
 
-        if (handle < 0) { SendFull(url); return; }
+        if (handle < 0) { SendFull(payload); return; }
 
         Load(PhaseHandle, HandlePool[handle]);
     }
 
     public string TakeForwardedBody() => StringField(forwarded, "response");
+
+    private string PayloadOf(string url)
+    {
+        if (url.IndexOf(Scheme + "://") == 0) return url.Substring(Scheme.Length + 3);
+        if (url.IndexOf("http://") == 0 || url.IndexOf("https://") == 0) return "";
+
+        return url;
+    }
+
+    private string ProblemWith(string payload)
+    {
+        if (payload.IndexOf("/") == 0 || payload.IndexOf("?") == 0 || payload.IndexOf(":") == 0) return "url has no host";
+        if (payload.IndexOf(".") < 0 && payload.IndexOf("localhost") != 0) return "url has no domain";
+
+        for (int i = 0; i < payload.Length; i++)
+        {
+            if (Alphabet.IndexOf(payload[i]) >= 0) continue;
+
+            string letter = payload.Substring(i, 1);
+
+            if (letter == " ") return "url contains a space";
+            if (Upper.IndexOf(payload[i]) >= 0) return "the alphabet is lowercase only, this url has " + letter;
+
+            return "character outside the alphabet: " + letter;
+        }
+
+        return "";
+    }
 
     private void SendFull(string url)
     {

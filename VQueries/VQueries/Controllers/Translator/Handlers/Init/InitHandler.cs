@@ -9,9 +9,9 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 {
     private readonly ILogger<InitHandler> _logger;
     private readonly ITranslatorRepo _translatorRepo;
-    private readonly IAFST _aFST;
+    private readonly ISpeech _aFST;
 
-    public InitHandler(ITranslatorRepo translatorRepo, ILogger<InitHandler> logger, IAFST aFST)
+    public InitHandler(ITranslatorRepo translatorRepo, ILogger<InitHandler> logger, ISpeech aFST)
     {
         _logger = logger;
         _translatorRepo = translatorRepo;
@@ -26,20 +26,23 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 
             if (runeSize < 2) throw new Exception($"domain error: runeSize={runeSize}, must be >= 2");
 
+            if (request.Scheme != "http" && request.Scheme != "https")
+                throw new Exception($"domain error: scheme={request.Scheme}, must be http or https");
+
             var runes = Domain.Aggregates.Translator.Translator.ATRFrom(request.Alphabet);
 
             _aFST.SetContext(new SetContextCommand<char>
             {
                 Alphabet = request.Alphabet,
-                ArenaTreeContext = runes,
-                RuneSize = runeSize
+                RuneSize = runeSize,
+                Scheme = request.Scheme
             });
 
-            _logger.LogInformation($"init: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}");
+            _logger.LogInformation($"init: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}, scheme={request.Scheme}");
 
             await TryPersist(runes, request, cancellationToken);
 
-            return new() { ShortDomain = "http://v.ro", RuneSize = runeSize };
+            return new() { ShortDomain = "http://v.ro", RuneSize = runeSize, Scheme = request.Scheme };
         }
         catch (Exception ex)
         {

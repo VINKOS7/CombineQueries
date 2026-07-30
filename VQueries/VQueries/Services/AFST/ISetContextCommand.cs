@@ -5,13 +5,13 @@ namespace CombineQueries.Api.Services.AFST;
 public interface ISetContextCommand<TRunes>
 {
     string Alphabet { get; init; }
-    IArenaTreeRunes<TRunes> ArenaTreeContext { get; init; }
     int RuneSize { get; init; }
+    string Scheme { get; init; }
 }
 
 public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
 {
-    public IArenaTreeRunes<TRunes> ArenaTreeContext { get; init; }
     public string Alphabet { get; init; }
     public int RuneSize { get; init; } = 2;
+    public string Scheme { get; init; } = "https";
 }

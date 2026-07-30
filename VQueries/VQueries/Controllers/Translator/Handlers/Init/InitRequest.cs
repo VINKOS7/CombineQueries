@@ -16,8 +16,7 @@ public record InitRequest : IRequest<InitResponse>
 
     [JsonProperty("runeSize")] public int RuneSize { get; set; } = 2;
 
-    [JsonProperty("name")] public string? Name { get; set; }
-    [JsonProperty("description")] public string? Description { get; set; }
+    [JsonProperty("scheme")] public string Scheme { get; set; } = "https";
 }
 
 public record InitCommand<TSymbol> : IAddTranslator<TSymbol>
