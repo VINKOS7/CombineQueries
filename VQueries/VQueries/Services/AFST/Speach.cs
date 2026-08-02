@@ -40,10 +40,10 @@ public class Speach : ISpeach
         return _runes.Count;
     }
 
-    public int SymbolsOf(bool direct) =>
-        direct ? Alphabet!.Length : Domain.Aggregates.Translator.Translator.SymbolCount(Alphabet!);
+    public int SymbolsOf(TypeRune type) =>
+        type == TypeRune.Direct ? Alphabet!.Length : Domain.Aggregates.Translator.Translator.SymbolCount(Alphabet!);
 
-    public AssembledResult Close(string tailText, bool direct)
+    public AssembledResult Close(string tailText, TypeRune type)
     {
         if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
@@ -54,7 +54,7 @@ public class Speach : ISpeach
         var sb = new System.Text.StringBuilder();
 
         foreach (var rune in _runes)
-            sb.Append(Domain.Aggregates.Translator.Translator.DecodeRune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(direct)));
+            sb.Append(Domain.Aggregates.Translator.Translator.DecodeRune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
 
         sb.Append(tailText);
 

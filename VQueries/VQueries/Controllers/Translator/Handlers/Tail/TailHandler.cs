@@ -23,9 +23,9 @@ public class TailHandler : IRequestHandler<TailRequest, TailResponse>
     {
         if (_speach.Alphabet is null || _speach.RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
-        string tail = Translator.DecodeTail(request.Runes, _speach.RuneAlphabet, _speach.Alphabet, _speach.RuneSize, _speach.SymbolsOf(request.Direct));
+        string tail = Translator.DecodeTail(request.Runes, _speach.RuneAlphabet, _speach.Alphabet, _speach.RuneSize, _speach.SymbolsOf(request.Type));
 
-        var assembled = _speach.Close(tail, request.Direct);
+        var assembled = _speach.Close(tail, request.Type);
 
         if (string.IsNullOrEmpty(assembled.Text)) throw new Exception("domain error: nothing was assembled");
 

@@ -18,9 +18,9 @@ public interface ISpeach
 
     int Accept(string rune);
 
-    int SymbolsOf(bool direct);
+    int SymbolsOf(TypeRune type);
 
-    AssembledResult Close(string tailText, bool direct);
+    AssembledResult Close(string tailText, TypeRune type);
 
     int Intern(string url, long firstSendMs);
 

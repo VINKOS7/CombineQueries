@@ -39,7 +39,7 @@ public class CombineQueries : UdonSharpBehaviour
 
     private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
-    private readonly VRCUrl[] DirectTailPool = TailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
+    private readonly VRCUrl[] DirectTailPool = PoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h/", MaxHandles);
 
     private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme);
@@ -153,13 +153,13 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (symbols == null) { Fail("character outside the alphabet"); return; }
 
-        queueLen = symbols.Length / RuneSize + 1;
+        int span = fragments ? Symbols : Alphabet.Length;
+
+        queueLen = fragments ? symbols.Length / RuneSize + 1 : (symbols.Length + RuneSize - 1) / RuneSize;
 
         if (queueLen > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
 
         queue = new int[queueLen];
-
-        int span = fragments ? Symbols : Alphabet.Length;
 
         for (int i = 0; i < queueLen - 1; i++)
         {
@@ -172,7 +172,15 @@ public class CombineQueries : UdonSharpBehaviour
 
         int rest = symbols.Length - (queueLen - 1) * RuneSize;
 
-        if (rest == 0) queue[queueLen - 1] = 0;
+        if (!fragments)
+        {
+            int tail = 0;
+
+            for (int j = 0; j < RuneSize; j++) tail = tail * span + (j < rest ? symbols[(queueLen - 1) * RuneSize + j] : Alphabet.IndexOf(':'));
+
+            queue[queueLen - 1] = tail;
+        }
+        else if (rest == 0) queue[queueLen - 1] = 0;
         else if (rest == 1) queue[queueLen - 1] = 1 + symbols[symbols.Length - 1];
         else queue[queueLen - 1] = 1 + span + symbols[symbols.Length - 2] * span + symbols[symbols.Length - 1];
 
