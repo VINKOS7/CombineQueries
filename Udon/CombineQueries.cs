@@ -110,7 +110,9 @@ public class CombineQueries : UdonSharpBehaviour
         pendingUrl = payload;
         busy = true;
 
-        int handle = withFragments ? HandleOf(payload) : -1;
+        if (!withFragments) { SendDirect(payload); return; }
+
+        int handle = HandleOf(payload);
 
         if (handle < 0) { SendFull(payload); return; }
 
@@ -153,9 +155,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (symbols == null) { Fail("character outside the alphabet"); return; }
 
-        int span = fragments ? Symbols : Alphabet.Length;
-
-        queueLen = fragments ? symbols.Length / RuneSize + 1 : (symbols.Length + RuneSize - 1) / RuneSize;
+        queueLen = symbols.Length / RuneSize + 1;
 
         if (queueLen > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
 
@@ -165,24 +165,47 @@ public class CombineQueries : UdonSharpBehaviour
         {
             int value = 0;
 
-            for (int j = 0; j < RuneSize; j++) value = value * span + symbols[i * RuneSize + j];
+            for (int j = 0; j < RuneSize; j++) value = value * Symbols + symbols[i * RuneSize + j];
 
             queue[i] = value;
         }
 
         int rest = symbols.Length - (queueLen - 1) * RuneSize;
 
-        if (!fragments)
-        {
-            int tail = 0;
-
-            for (int j = 0; j < RuneSize; j++) tail = tail * span + (j < rest ? symbols[(queueLen - 1) * RuneSize + j] : Alphabet.IndexOf(':'));
-
-            queue[queueLen - 1] = tail;
-        }
-        else if (rest == 0) queue[queueLen - 1] = 0;
+        if (rest == 0) queue[queueLen - 1] = 0;
         else if (rest == 1) queue[queueLen - 1] = 1 + symbols[symbols.Length - 1];
-        else queue[queueLen - 1] = 1 + span + symbols[symbols.Length - 2] * span + symbols[symbols.Length - 1];
+        else queue[queueLen - 1] = 1 + Symbols + symbols[symbols.Length - 2] * Symbols + symbols[symbols.Length - 1];
+
+        queuePos = 0;
+
+        SendNext();
+    }
+
+    private void SendDirect(string url)
+    {
+        int[] symbols = SymbolsOf(url);
+
+        if (symbols == null) { Fail("character outside the alphabet"); return; }
+
+        queueLen = (symbols.Length + RuneSize - 1) / RuneSize;
+
+        if (queueLen > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
+
+        queue = new int[queueLen];
+
+        for (int i = 0; i < queueLen; i++)
+        {
+            int value = 0;
+
+            for (int j = 0; j < RuneSize; j++)
+            {
+                int at = i * RuneSize + j;
+
+                value = value * Alphabet.Length + (at < symbols.Length ? symbols[at] : Alphabet.IndexOf(':'));
+            }
+
+            queue[i] = value;
+        }
 
         queuePos = 0;
 
