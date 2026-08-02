@@ -7,5 +7,5 @@ public record TailRequest : IRequest<TailResponse>
 {
     [JsonProperty("runes")] public required string Runes { get; set; }
 
-    public static TailRequest From(string? query) => new() { Runes = RawQuery.Arg(query) };
+    [JsonProperty("direct")] public bool Direct { get; set; }
 }

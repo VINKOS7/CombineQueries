@@ -4,11 +4,11 @@ namespace CombineQueries.Api.Services.AFST;
 
 public record AssembledResult(string Text, int Runes, long ElapsedMs);
 
-public interface ISpeech
+public interface ISpeach
 {
     string? Alphabet { get; }
 
-    string? WireAlphabet { get; }
+    string? RuneAlphabet { get; }
 
     int RuneSize { get; }
 
@@ -16,9 +16,11 @@ public interface ISpeech
 
     void SetContext(ISetContextCommand<char> command);
 
-    int Accept(string wireRune);
+    int Accept(string rune);
 
-    AssembledResult Close(string tailText);
+    int SymbolsOf(bool direct);
+
+    AssembledResult Close(string tailText, bool direct);
 
     int Intern(string url, long firstSendMs);
 

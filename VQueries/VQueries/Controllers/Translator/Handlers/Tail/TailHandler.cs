@@ -9,33 +9,33 @@ namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 public class TailHandler : IRequestHandler<TailRequest, TailResponse>
 {
     private readonly ILogger<TailHandler> _logger;
-    private readonly ISpeech _afst;
+    private readonly ISpeach _speach;
     private readonly IForwarder _forwarder;
 
-    public TailHandler(ILogger<TailHandler> logger, IForwarder forwarder, ISpeech afst)
+    public TailHandler(ILogger<TailHandler> logger, IForwarder forwarder, ISpeach afst)
     {
         _logger = logger;
         _forwarder = forwarder;
-        _afst = afst;
+        _speach = afst;
     }
 
     public async Task<TailResponse> Handle(TailRequest request, CancellationToken cancellationToken)
     {
-        if (_afst.Alphabet is null || _afst.WireAlphabet is null) throw new Exception("CRIT: /init was not called");
+        if (_speach.Alphabet is null || _speach.RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
-        string tail = Translator.DecodeTail(request.Runes, _afst.WireAlphabet, _afst.Alphabet, _afst.RuneSize);
+        string tail = Translator.DecodeTail(request.Runes, _speach.RuneAlphabet, _speach.Alphabet, _speach.RuneSize, _speach.SymbolsOf(request.Direct));
 
-        var assembled = _afst.Close(tail);
+        var assembled = _speach.Close(tail, request.Direct);
 
         if (string.IsNullOrEmpty(assembled.Text)) throw new Exception("domain error: nothing was assembled");
 
-        string url = _afst.Scheme + "://" + assembled.Text;
+        string url = _speach.Scheme + "://" + assembled.Text;
 
         _logger.LogInformation($"tail: assembled {assembled.Runes} runes + {tail.Length} chars in {assembled.ElapsedMs} ms -> '{url}'");
 
         var forwarded = await _forwarder.GetAsync(url, cancellationToken);
 
-        int handle = _afst.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
+        int handle = _speach.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
 
         _logger.LogInformation(
             $"tail: first send took {assembled.ElapsedMs + forwarded.ElapsedMs} ms total "

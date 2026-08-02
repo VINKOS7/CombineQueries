@@ -4,9 +4,10 @@ using Microsoft.AspNetCore.Authorization;
 using MediatR;
 
 using CombineQueries.Api.Controllers.Translators.Handlers.Init;
-using CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 using CombineQueries.Api.Controllers.Translators.Handlers.Combine;
+using CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 using CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
+
 
 namespace CombineQueries.Api.Controllers.Translators;
 
@@ -19,10 +20,12 @@ public class TranslatorController : Controller
 
     [AllowAnonymous] [HttpGet("/init")] public Task<InitResponse> Init(InitRequest request) => _mediator.Send(request);
 
-    [AllowAnonymous] [HttpGet("/n")] public Task<TailResponse> Tail() => _mediator.Send(TailRequest.From(Request.QueryString.Value));
+    [AllowAnonymous] [HttpGet("/c/{runes}")] public Task<CombineResponse> Combine(string runes) => _mediator.Send(new CombineRequest { Runes = runes });
 
-    [AllowAnonymous] [HttpGet("/c")] public Task<CombineResponse> Combine() => _mediator.Send(CombineRequest.From(Request.QueryString.Value));
+    [AllowAnonymous] [HttpGet("/t/{runes}")] public Task<TailResponse> Tail(string runes) => _mediator.Send(new TailRequest { Runes = runes });
 
-    [AllowAnonymous] [HttpGet("/h")] public Task<HyperResponse> Hyper() => _mediator.Send(HyperRequest.From(Request.QueryString.Value));
+    [AllowAnonymous] [HttpGet("/d/{runes}")] public Task<TailResponse> Direct(string runes) => _mediator.Send(new TailRequest { Runes = runes, Direct = true });
+
+    [AllowAnonymous] [HttpGet("/h/{hyper:int}")] public Task<HyperResponse> Hyper(int hyper) => _mediator.Send(new HyperRequest { Value = hyper });
 
 }

@@ -10,10 +10,11 @@ using UnityEngine.UI;
 //
 //   client.Init()                     once, on world start. Hands the alphabet to the server.
 //   client.Request(url)               any url, any time after Init. One send at a time.
-//   client.RequestFragmentationOff()  the same, but the fragment dictionary is ignored and the
-//                                     url is spelled letter by letter. It also skips the handle
-//                                     cache, so it always pays the full price - it is a yardstick
-//                                     for what the dictionary buys, never a way to send traffic.
+//   client.RequestDirect(url)         the same, but every symbol is a direct one - a plain letter,
+//                                     no fragment lookup - and the runes travel in base 59 through
+//                                     their own tail route. It also skips the handle cache, so it
+//                                     always pays full price: a yardstick for what the dictionary
+//                                     buys, never a way to send real traffic.
 //   client.TakeForwardedBody()        what the target url answered, ready when the event fires.
 //   client.LastError                  empty on success, a message otherwise.
 //

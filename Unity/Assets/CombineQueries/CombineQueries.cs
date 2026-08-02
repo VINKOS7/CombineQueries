@@ -10,7 +10,7 @@ public class CombineQueries : UdonSharpBehaviour
     private const string baseForwardUrl = "vink0s.com";
 
     private const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
-    private const string WireAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?@!$&'()*+,;=";
+    private const string RuneAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:@!$&'()*+,;=";
     private const string Digits = "0123456789";
     private const string Upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -31,15 +31,16 @@ public class CombineQueries : UdonSharpBehaviour
 
     private const int RuneSize = 3;
     private const string RuneSizeStr = "3";
-    private const int WireSize = 4;
+    private const int RuneWidth = 4;
     private const int NumSize = 4;
 
     private const int MaxChunks = 256;
     private const int MaxHandles = 4096;
 
-    private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c?r=", Symbols, WireAlphabet, RuneSize, WireSize);
-    private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/n?r=", Symbols, WireAlphabet, RuneSize, WireSize);
-    private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h?r=", MaxHandles);
+    private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
+    private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
+    private readonly VRCUrl[] DirectTailPool = TailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
+    private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h/", MaxHandles);
 
     private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme);
 
@@ -77,7 +78,7 @@ public class CombineQueries : UdonSharpBehaviour
         LastError = "";
 
         if (Fragments.Length != FragmentCount) { Fail("Fragments table and FragmentCount disagree"); return; }
-        if (WireAlphabet.Length != Alphabet.Length - 4) { Fail("WireAlphabet must be Alphabet minus #%[]"); return; }
+        if (RuneAlphabet.Length != Alphabet.Length - 6) { Fail("RuneAlphabet must be Alphabet minus #%[]/?"); return; }
 
         busy = true;
 
@@ -86,7 +87,7 @@ public class CombineQueries : UdonSharpBehaviour
 
     public void Request(string url) => Send(url, true);
 
-    public void RequestFragmentationOff(string url) => Send(url, false);
+    public void RequestDirect(string url) => Send(url, false);
 
     private void Send(string url, bool withFragments)
     {
@@ -158,11 +159,13 @@ public class CombineQueries : UdonSharpBehaviour
 
         queue = new int[queueLen];
 
+        int span = fragments ? Symbols : Alphabet.Length;
+
         for (int i = 0; i < queueLen - 1; i++)
         {
             int value = 0;
 
-            for (int j = 0; j < RuneSize; j++) value = value * Symbols + symbols[i * RuneSize + j];
+            for (int j = 0; j < RuneSize; j++) value = value * span + symbols[i * RuneSize + j];
 
             queue[i] = value;
         }
@@ -171,7 +174,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (rest == 0) queue[queueLen - 1] = 0;
         else if (rest == 1) queue[queueLen - 1] = 1 + symbols[symbols.Length - 1];
-        else queue[queueLen - 1] = 1 + Symbols + symbols[symbols.Length - 2] * Symbols + symbols[symbols.Length - 1];
+        else queue[queueLen - 1] = 1 + span + symbols[symbols.Length - 2] * span + symbols[symbols.Length - 1];
 
         queuePos = 0;
 
@@ -180,8 +183,9 @@ public class CombineQueries : UdonSharpBehaviour
 
     private void SendNext()
     {
-        if (queuePos < queueLen - 1) Load(PhaseChunks, ChunkPool[queue[queuePos]]);
-        else Load(PhaseTail, TailPool[queue[queuePos]]);
+        if (queuePos < queueLen - 1) { Load(PhaseChunks, ChunkPool[queue[queuePos]]); return; }
+
+        Load(PhaseTail, fragments ? TailPool[queue[queuePos]] : DirectTailPool[queue[queuePos]]);
     }
 
     public override void OnStringLoadSuccess(IVRCStringDownload response)
@@ -316,7 +320,7 @@ public class CombineQueries : UdonSharpBehaviour
         return value.TokenType == TokenType.Boolean && value.Boolean;
     }
 
-    private static VRCUrl[] PoolOf(string baseUri, int symbols, string wireAlph, int runeSize, int wireSize)
+    private static VRCUrl[] PoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth)
     {
         int total = 1;
 
@@ -324,12 +328,12 @@ public class CombineQueries : UdonSharpBehaviour
 
         VRCUrl[] pool = new VRCUrl[total];
 
-        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v, wireAlph, wireSize));
+        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v, runeAlph, runeWidth));
 
         return pool;
     }
 
-    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string wireAlph, int runeSize, int wireSize)
+    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth)
     {
         int pad = Alphabet.IndexOf(':');
 
@@ -344,7 +348,7 @@ public class CombineQueries : UdonSharpBehaviour
 
             for (int i = 2; i < runeSize; i++) value = value * symbols + pad;
 
-            pool[v] = new VRCUrl(baseUri + RunesOf(value, wireAlph, wireSize));
+            pool[v] = new VRCUrl(baseUri + RunesOf(value, runeAlph, runeWidth));
         }
 
         return pool;

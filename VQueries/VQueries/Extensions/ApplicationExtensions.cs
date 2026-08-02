@@ -29,7 +29,7 @@ public static class ApplicationExtensions
         // ТОЛЬКО Singleton. AFST держит состояние МЕЖДУ запросами (алфавит, дерево, буфер склейки),
         // а Scoped создаёт новый экземпляр на каждый HTTP-запрос - тогда /init ставит контекст и он
         // тут же теряется, и первый же /m/ падает с "CRIT: /init не вызван".
-        services.AddSingleton<ISpeech, AFST>();
+        services.AddSingleton<ISpeach, Speach>();
 
         return services;
     }

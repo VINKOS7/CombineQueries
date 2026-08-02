@@ -77,7 +77,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private void SendStep()
     {
-        if (step == StepPlain) client.RequestFragmentationOff(testUrl);
+        if (step == StepPlain) client.RequestDirect(testUrl);
         else client.Request(testUrl);
 
         awaiting = true;
@@ -89,10 +89,10 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private string TitleOf(int at)
     {
-        if (at == StepFull) return "1  full send, dictionary on              ";
-        if (at == StepHyper) return "2  hyper, the server knew it             ";
+        if (at == StepFull) return "1  full send, fragment symbols   ";
+        if (at == StepHyper) return "2  hyper, the server knew it     ";
 
-        return "3  full send, without fragmentation stage";
+        return "3  full send, direct symbols only";
     }
 
     private string NumberOf(int value)

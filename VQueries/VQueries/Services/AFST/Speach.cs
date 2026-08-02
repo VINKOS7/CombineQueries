@@ -5,10 +5,10 @@ using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Services.AFST;
 
-public class AFST : ISpeech
+public class Speach : ISpeach
 {
     public string? Alphabet { get; private set; }
-    public string? WireAlphabet { get; private set; }
+    public string? RuneAlphabet { get; private set; }
     public int RuneSize { get; private set; } = 3;
     public string Scheme { get; private set; } = "https";
 
@@ -22,27 +22,30 @@ public class AFST : ISpeech
     public void SetContext(ISetContextCommand<char> command)
     {
         Alphabet = command.Alphabet;
-        WireAlphabet = Domain.Aggregates.Translator.Translator.WireAlphabetOf(command.Alphabet);
+        RuneAlphabet = Domain.Aggregates.Translator.Translator.RuneAlphabetOf(command.Alphabet);
         RuneSize = command.RuneSize;
         Scheme = command.Scheme;
 
         _runes.Clear();
     }
 
-    public int Accept(string wireRune)
+    public int Accept(string rune)
     {
-        if (Alphabet is null || WireAlphabet is null) throw new Exception("CRIT: /init was not called");
+        if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
         if (_runes.Count == 0) _assembly.Restart();
 
-        _runes.Add(wireRune);
+        _runes.Add(rune);
 
         return _runes.Count;
     }
 
-    public AssembledResult Close(string tailText)
+    public int SymbolsOf(bool direct) =>
+        direct ? Alphabet!.Length : Domain.Aggregates.Translator.Translator.SymbolCount(Alphabet!);
+
+    public AssembledResult Close(string tailText, bool direct)
     {
-        if (Alphabet is null || WireAlphabet is null) throw new Exception("CRIT: /init was not called");
+        if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
         if (_runes.Count == 0) _assembly.Restart();
 
@@ -51,7 +54,7 @@ public class AFST : ISpeech
         var sb = new System.Text.StringBuilder();
 
         foreach (var rune in _runes)
-            sb.Append(Domain.Aggregates.Translator.Translator.DecodeRune(rune, WireAlphabet, Alphabet, RuneSize));
+            sb.Append(Domain.Aggregates.Translator.Translator.DecodeRune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(direct)));
 
         sb.Append(tailText);
 

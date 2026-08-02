@@ -45,31 +45,30 @@ public class Translator : Entity, IAggregateRoot
 
     public static string SymbolOf(string alphabet, int index) => index < alphabet.Length ? alphabet[index].ToString() : Fragments[index - alphabet.Length];
 
-    public const string WireUnsafe = "#%[]";
+    public const string UrlUnsafe = "#%[]/?";
 
-    public static string WireAlphabetOf(string alphabet)
+    public static string RuneAlphabetOf(string alphabet)
     {
         var sb = new System.Text.StringBuilder();
 
-        foreach (char c in alphabet) if (WireUnsafe.IndexOf(c) < 0) sb.Append(c);
+        foreach (char c in alphabet) if (UrlUnsafe.IndexOf(c) < 0) sb.Append(c);
 
         return sb.ToString();
     }
 
-    public static string DecodeRune(string wire, string wireAlphabet, string alphabet, int runeSize)
+    public static string DecodeRune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
     {
         long value = 0;
 
-        foreach (char c in wire)
+        foreach (char c in rune)
         {
-            int digit = wireAlphabet.IndexOf(c);
+            int digit = runeAlphabet.IndexOf(c);
 
-            if (digit < 0) throw new Exception($"domain error: wire symbol '{c}' is not in wire alphabet");
+            if (digit < 0) throw new Exception($"domain error: rune symbol '{c}' is not in rune alphabet");
 
-            value = value * wireAlphabet.Length + digit;
+            value = value * runeAlphabet.Length + digit;
         }
 
-        int symbols = SymbolCount(alphabet);
         var parts = new string[runeSize];
 
         for (int i = runeSize - 1; i >= 0; i--)
@@ -83,9 +82,9 @@ public class Translator : Entity, IAggregateRoot
 
     public const char Pad = ':';
 
-    public static string DecodeTail(string wire, string wireAlphabet, string alphabet, int runeSize)
+    public static string DecodeTail(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
     {
-        string text = DecodeRune(wire, wireAlphabet, alphabet, runeSize);
+        string text = DecodeRune(rune, runeAlphabet, alphabet, runeSize, symbols);
 
         int cut = 0;
 
