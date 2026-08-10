@@ -1,23 +1,25 @@
 using System.Diagnostics;
-
+using System.Text;
 using CombineQueries.Domain.Aggregates.Translator;
 using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Services.AFST;
 
-public class Speach : ISpeach
+public class Speach : ISpeech
 {
     public string? Alphabet { get; private set; }
     public string? RuneAlphabet { get; private set; }
     public int RuneSize { get; private set; } = 3;
     public string Scheme { get; private set; } = "https";
+    public List<string> DirectRunes { get; set; } = new();
+    public List<string> DirectUnruned { get; set; } = new();
 
-    private readonly List<string> _runes = new();
+    private readonly List<string> _runes = [];
+    private readonly List<string> _handles = [];
+    private readonly List<long> _firstSendMs = [];
+    private readonly Dictionary<string, int> _byUrl = [];
     private readonly Stopwatch _assembly = new();
-
-    private readonly List<string> _handles = new();
-    private readonly Dictionary<string, int> _byUrl = new();
-    private readonly List<long> _firstSendMs = new();
+    private readonly StringBuilder sb = new();
 
     public void SetContext(ISetContextCommand<char> command)
     {
@@ -40,10 +42,9 @@ public class Speach : ISpeach
         return _runes.Count;
     }
 
-    public int SymbolsOf(TypeRune type) =>
-        type == TypeRune.Direct ? Alphabet!.Length : Domain.Aggregates.Translator.Translator.SymbolCount(Alphabet!);
+    public int SymbolsOf(TypeCombine type) => type == TypeCombine.Direct ? Alphabet!.Length : Translator.SymbolCount(Alphabet!);
 
-    public AssembledResult Close(string tailText, TypeRune type)
+    public AssembledResult Close(string tailText, TypeCombine type)
     {
         if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
@@ -51,10 +52,9 @@ public class Speach : ISpeach
 
         _assembly.Stop();
 
-        var sb = new System.Text.StringBuilder();
 
         foreach (var rune in _runes)
-            sb.Append(Domain.Aggregates.Translator.Translator.DecodeRune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
+            sb.Append(Translator.DecodeRune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
 
         sb.Append(tailText);
 
@@ -81,4 +81,13 @@ public class Speach : ISpeach
     public string? Resolve(int handle) => handle >= 0 && handle < _handles.Count ? _handles[handle] : null;
 
     public long FirstSendMsOf(int handle) => handle >= 0 && handle < _firstSendMs.Count ? _firstSendMs[handle] : -1;
+
+    public void PushDirectRunes(string runes) => DirectRunes = sb.Clear().Append(runes).ToString();
+
+    public void PushDirect(string runes)
+    {
+        throw new NotImplementedException();
+    }
+
+    
 }

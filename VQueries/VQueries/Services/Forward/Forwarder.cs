@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace CombineQueries.Api.Services.Forwarder;
 
-public class Forwarder : IForwarder
+public class Forwarder : IForward
 {
     private readonly ILogger<Forwarder> _logger;
     private readonly HttpClient _httpClient;

@@ -8,10 +8,10 @@ namespace CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
 public class HyperHandler : IRequestHandler<HyperRequest, HyperResponse>
 {
     private readonly ILogger<HyperHandler> _logger;
-    private readonly ISpeach _afst;
-    private readonly IForwarder _forwarder;
+    private readonly ISpeech _afst;
+    private readonly IForward _forwarder;
 
-    public HyperHandler(ILogger<HyperHandler> logger, IForwarder forwarder, ISpeach afst)
+    public HyperHandler(ILogger<HyperHandler> logger, IForward forwarder, ISpeech afst)
     {
         _logger = logger;
         _forwarder = forwarder;

@@ -3,43 +3,78 @@ using MediatR;
 using CombineQueries.Api.Services.AFST;
 using CombineQueries.Api.Services.Forwarder;
 using CombineQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 
 public class TailHandler : IRequestHandler<TailRequest, TailResponse>
 {
     private readonly ILogger<TailHandler> _logger;
-    private readonly ISpeach _speach;
-    private readonly IForwarder _forwarder;
+    private readonly ISpeech _speach;
+    private readonly IForward _forwarder;
 
-    public TailHandler(ILogger<TailHandler> logger, IForwarder forwarder, ISpeach afst)
+    public TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeech speech)
     {
         _logger = logger;
         _forwarder = forwarder;
-        _speach = afst;
+        _speach = speech;
     }
 
     public async Task<TailResponse> Handle(TailRequest request, CancellationToken cancellationToken)
     {
         if (_speach.Alphabet is null || _speach.RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
-        string tail = Translator.DecodeTail(request.Runes, _speach.RuneAlphabet, _speach.Alphabet, _speach.RuneSize, _speach.SymbolsOf(request.Type));
+        int handle = 0;
 
-        var assembled = _speach.Close(tail, request.Type);
+        string tail = string.Empty;
+        string url = string.Empty;
 
-        if (string.IsNullOrEmpty(assembled.Text)) throw new Exception("domain error: nothing was assembled");
+        AssembledResult? assembled = null;
+        ForwardResult? forwarded = null;
 
-        string url = _speach.Scheme + "://" + assembled.Text;
 
-        _logger.LogInformation($"tail: assembled {assembled.Runes} runes + {tail.Length} chars in {assembled.ElapsedMs} ms -> '{url}'");
+        switch (request.Type)
+        {
+            case TypeCombine.Direct:
+                tail = Translator.DirectUnrune(string.Join("", _speach.DirectRunes), _speach.RuneAlphabet, _speach.RuneSize + 1, _speach.SymbolsOf(request.Type));
 
-        var forwarded = await _forwarder.GetAsync(url, cancellationToken);
+                assembled = _speach.Close(tail, request.Type);
 
-        int handle = _speach.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
+                if (string.IsNullOrEmpty(assembled.Text)) throw new Exception("domain error: nothing was assembled");
 
-        _logger.LogInformation(
-            $"tail: first send took {assembled.ElapsedMs + forwarded.ElapsedMs} ms total "
-            + $"({assembled.Runes + 1} requests), handle {handle}");
+                url = _speach.Scheme + "://" + assembled.Text;
+
+                _logger.LogInformation($"tail: assembled {assembled.Runes} runes + {tail.Length} chars in {assembled.ElapsedMs} ms -> '{url}'");
+
+                forwarded = await _forwarder.GetAsync(url, cancellationToken);
+
+                handle = _speach.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
+
+                _logger.LogInformation($"tail: first send took {assembled.ElapsedMs + forwarded.ElapsedMs} ms total " + $"({assembled.Runes + 1} requests), handle {handle}");
+                
+                break;
+
+            case TypeCombine.Fragmentate:
+                tail = Translator.FragmentateUnrune(request.Runes, _speach.RuneAlphabet, _speach.Alphabet, _speach.RuneSize, _speach.SymbolsOf(request.Type));
+
+                assembled = _speach.Close(tail, request.Type);
+
+                if (string.IsNullOrEmpty(assembled.Text)) throw new Exception("domain error: nothing was assembled");
+
+                url = _speach.Scheme + "://" + assembled.Text;
+
+                _logger.LogInformation($"tail: assembled {assembled.Runes} runes + {tail.Length} chars in {assembled.ElapsedMs} ms -> '{url}'");
+
+                forwarded = await _forwarder.GetAsync(url, cancellationToken);
+
+                handle = _speach.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
+
+                _logger.LogInformation($"tail: first send took {assembled.ElapsedMs + forwarded.ElapsedMs} ms total " + $"({assembled.Runes + 1} requests), handle {handle}");
+
+                break;
+            default: throw new ArgumentOutOfRangeException(nameof(request.Type), request.Type, "Unexpected TypeCombine value");
+                // кекичlol
+        }
 
         return new TailResponse
         {

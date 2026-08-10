@@ -8,5 +8,5 @@ public record TailRequest : IRequest<TailResponse>
 {
     [JsonProperty("runes")] public required string Runes { get; set; }
 
-    [JsonProperty("type")] public TypeRune Type { get; set; }
+    [JsonProperty("type")] public TypeCombine Type { get; set; }
 }

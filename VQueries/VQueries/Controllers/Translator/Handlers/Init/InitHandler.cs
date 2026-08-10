@@ -9,9 +9,9 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 {
     private readonly ILogger<InitHandler> _logger;
     private readonly ITranslatorRepo _translatorRepo;
-    private readonly ISpeach _aFST;
+    private readonly ISpeech _aFST;
 
-    public InitHandler(ITranslatorRepo translatorRepo, ILogger<InitHandler> logger, ISpeach aFST)
+    public InitHandler(ITranslatorRepo translatorRepo, ILogger<InitHandler> logger, ISpeech aFST)
     {
         _logger = logger;
         _translatorRepo = translatorRepo;

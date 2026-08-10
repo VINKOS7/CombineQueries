@@ -26,4 +26,5 @@ public record InitCommand<TSymbol> : IAddTranslator<TSymbol>
     public required IArenaTreeRunes<TSymbol> Runes { get; set; }
     public string? Name { get; set; }
     public string? Description { get; set; }
+    public int SizeRune { get; set; }
 }

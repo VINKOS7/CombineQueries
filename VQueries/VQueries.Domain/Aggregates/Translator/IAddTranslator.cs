@@ -12,4 +12,6 @@ public interface IAddTranslator<TSymbol>
     public string? Name { get; set; }
 
     public string? Description { get; set; }
+
+    public int SizeRune { get; set; }
 }

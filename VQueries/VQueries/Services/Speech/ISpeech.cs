@@ -4,7 +4,7 @@ namespace CombineQueries.Api.Services.AFST;
 
 public record AssembledResult(string Text, int Runes, long ElapsedMs);
 
-public interface ISpeach
+public interface ISpeech
 {
     string? Alphabet { get; }
 
@@ -14,17 +14,25 @@ public interface ISpeach
 
     string Scheme { get; }
 
+    List<string> DirectRunes { get; }
+
+    List<string> DirectUnruned { get; }
+
     void SetContext(ISetContextCommand<char> command);
 
     int Accept(string rune);
 
-    int SymbolsOf(TypeRune type);
+    int SymbolsOf(TypeCombine type);
 
-    AssembledResult Close(string tailText, TypeRune type);
+    AssembledResult Close(string tailText, TypeCombine type);
 
     int Intern(string url, long firstSendMs);
 
     string? Resolve(int handle);
 
     long FirstSendMsOf(int handle);
+
+    void PushDirectRunes(string runes);
+
+    void PushDirect(string runes);
 }
