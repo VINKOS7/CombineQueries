@@ -1,42 +1,49 @@
 using MediatR;
 
-using CombineQueries.Api.Services.AFST;
+using CombineQueries.Api.Services.Speech;
+using CombineQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 
 public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
 {
     private readonly ILogger<CombineHandler> _logger;
-    private readonly ISpeech _afst;
+    private readonly ISpeech _speech;
 
-    public CombineHandler(ILogger<CombineHandler> logger, ISpeech afst)
+    public CombineHandler(ILogger<CombineHandler> logger, ISpeech speech)
     {
         _logger = logger;
-        _afst = afst;
+        _speech = speech;
     }
 
     public Task<CombineResponse> Handle(CombineRequest request, CancellationToken cancellationToken)
     {
+        if(_speech.Alphabet is null || string.IsNullOrEmpty(request.Runes)) throw new Exception("CombineHandler: /init was not called");
 
-        switch(request.Type)
+        var received = 0;
+        var typeRune = Translator.TypeFrom(request.Runes.First(), _speech.Alphabet);
+
+        switch (typeRune)
         {
             case TypeCombine.Direct:
+                _speech.PushDirect(Translator.DirectUnrune(string.Join("", _speech.DirectRunes), _speech.RuneAlphabet, _speech.RuneSize + 1, _speech.SymbolsOf(TypeCombine.Direct)));
+                _speech.PushDirectRunes(request.Runes);
 
-                // Handle direct combine logic
+                received = _speech.Accept(Translator.DirectUnrune(string.Join("", _speech.DirectRunes), _speech.RuneAlphabet, _speech.RuneSize + 1, _speech.SymbolsOf(TypeCombine.Direct)));
+
+                _logger.LogInformation($"combine: runes the {request.Runes} directly accepted");
+
                 break;
 
             case TypeCombine.Fragmentate:
-                if (_afst.Alphabet is null) throw new Exception("CombineHandler: /init was not called");
+                received = _speech.Accept(request.Runes);
 
-                if (string.IsNullOrEmpty(request.Runes)) throw new Exception("CombineHandler: empty runes");
-
-                received = _afst.Accept(request.Runes);
-
-                _logger.LogInformation($"combine: rune {received} accepted");
+                _logger.LogInformation($"combine: runes digit {received} accepted");
 
                 break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(request.Type), request.Type, "Unexpected TypeCombine value");
+           
+            default: throw new ArgumentOutOfRangeException(nameof(typeRune), request, "Unexpected TypeCombine value");
         }
 
         return Task.FromResult(new CombineResponse { Received = received });

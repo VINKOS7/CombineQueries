@@ -1,6 +1,6 @@
 using MediatR;
 
-using CombineQueries.Api.Services.AFST;
+using CombineQueries.Api.Services.Speech;
 using CombineQueries.Api.Services.Forwarder;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Hyper;

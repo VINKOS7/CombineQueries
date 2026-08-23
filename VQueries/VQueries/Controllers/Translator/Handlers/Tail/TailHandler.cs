@@ -1,6 +1,6 @@
 using MediatR;
 
-using CombineQueries.Api.Services.AFST;
+using CombineQueries.Api.Services.Speech;
 using CombineQueries.Api.Services.Forwarder;
 using CombineQueries.Domain.Aggregates.Translator;
 using CombineQueries.Domain.Aggregates.Translator.types;
@@ -24,10 +24,9 @@ public class TailHandler : IRequestHandler<TailRequest, TailResponse>
     {
         if (_speach.Alphabet is null || _speach.RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
-        int handle = 0;
-
-        string tail = string.Empty;
-        string url = string.Empty;
+        var handle = 0;
+        var tail = string.Empty;
+        var url = string.Empty;
 
         AssembledResult? assembled = null;
         ForwardResult? forwarded = null;
@@ -50,6 +49,8 @@ public class TailHandler : IRequestHandler<TailRequest, TailResponse>
 
                 handle = _speach.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
 
+                // _speach.DropSB();
+
                 _logger.LogInformation($"tail: first send took {assembled.ElapsedMs + forwarded.ElapsedMs} ms total " + $"({assembled.Runes + 1} requests), handle {handle}");
                 
                 break;
@@ -68,6 +69,8 @@ public class TailHandler : IRequestHandler<TailRequest, TailResponse>
                 forwarded = await _forwarder.GetAsync(url, cancellationToken);
 
                 handle = _speach.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
+
+                // _speach.DropSB();
 
                 _logger.LogInformation($"tail: first send took {assembled.ElapsedMs + forwarded.ElapsedMs} ms total " + $"({assembled.Runes + 1} requests), handle {handle}");
 

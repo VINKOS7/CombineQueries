@@ -3,8 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 
 using MediatR;
 
-using CombineQueries.Api.Services.AFST;
-
+using CombineQueries.Domain.Aggregates.Translator.types;
 using CombineQueries.Api.Controllers.Translators.Handlers.Init;
 using CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 using CombineQueries.Api.Controllers.Translators.Handlers.Tail;

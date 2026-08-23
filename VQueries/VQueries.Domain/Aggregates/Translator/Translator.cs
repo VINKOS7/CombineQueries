@@ -190,9 +190,9 @@ public class Translator : Entity, IAggregateRoot
         return sb.ToString();
     }
 
-    public static TypeCombine TypeFrom<TRune> (TRune symbol, string alphabet) where TRune : struct=> Func<bool> switch
+
+    public static TypeCombine TypeFrom<TRune>(TRune symbol, string alphabet) where TRune : notnull => true switch
     {
-        _ when IsFragmentate(RuneFrom(symbol), alphabet) => TypeCombine.Fragmentate,
         _ when IsFragmentate(RuneFrom(symbol), alphabet) => TypeCombine.Fragmentate,
         _ when IsDirect(RuneFrom(symbol), alphabet) => TypeCombine.Direct,
         _ => throw new Exception($"domain error: unknown type symbol '{symbol}'")
@@ -213,14 +213,13 @@ public class Translator : Entity, IAggregateRoot
         return true;
     }
 
-    private static char RuneFrom<TRune>(TRune symbol) where TRune : struct => symbol switch
+    private static char RuneFrom<TRune>(TRune symbol) where TRune : notnull => symbol switch
     {
         char c => c,
         int i => (char)i,
         _ => throw new Exception($"domain error: unsupported rune type '{typeof(TRune)}'")
     };
 
-    private static bool IsFragmentate(int index, string alphabet) => index >= alphabet.Length;
     private static bool IsFragmentate(char symbol, string alphabet) => alphabet.IndexOf(symbol) < 0;
     private static bool IsDirect(int index, string alphabet) => index >= alphabet.Length;
 

@@ -1,6 +1,6 @@
 using CombineQueries.Domain.Aggregates.Translator.types;
 
-namespace CombineQueries.Api.Services.AFST;
+namespace CombineQueries.Api.Services.Speech;
 
 public record AssembledResult(string Text, int Runes, long ElapsedMs);
 
@@ -14,9 +14,9 @@ public interface ISpeech
 
     string Scheme { get; }
 
-    List<string> DirectRunes { get; }
+    string DirectRunes { get; }
 
-    List<string> DirectUnruned { get; }
+    string DirectUnruned { get; }
 
     void SetContext(ISetContextCommand<char> command);
 
@@ -35,4 +35,6 @@ public interface ISpeech
     void PushDirectRunes(string runes);
 
     void PushDirect(string runes);
+
+    void DropSB();
 }

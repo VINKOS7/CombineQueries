@@ -1,6 +1,8 @@
 using MediatR;
-using CombineQueries.Api.Services.AFST;
+
 using Newtonsoft.Json;
+
+using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 

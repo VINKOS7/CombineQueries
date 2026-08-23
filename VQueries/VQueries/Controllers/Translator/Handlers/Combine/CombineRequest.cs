@@ -1,4 +1,4 @@
-using CombineQueries.Api.Services.AFST;
+using CombineQueries.Api.Services.Speech;
 using MediatR;
 using Newtonsoft.Json;
 

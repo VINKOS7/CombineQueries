@@ -1,6 +1,6 @@
 using CombineQueries.Domain.Aggregates.Translator.types;
 
-namespace CombineQueries.Api.Services.AFST;
+namespace CombineQueries.Api.Services.Speech;
 
 public interface ISetContextCommand<TRunes>
 {

@@ -3,7 +3,7 @@ using System.Text;
 using CombineQueries.Domain.Aggregates.Translator;
 using CombineQueries.Domain.Aggregates.Translator.types;
 
-namespace CombineQueries.Api.Services.AFST;
+namespace CombineQueries.Api.Services.Speech;
 
 public class Speach : ISpeech
 {
@@ -11,8 +11,8 @@ public class Speach : ISpeech
     public string? RuneAlphabet { get; private set; }
     public int RuneSize { get; private set; } = 3;
     public string Scheme { get; private set; } = "https";
-    public List<string> DirectRunes { get; set; } = new();
-    public List<string> DirectUnruned { get; set; } = new();
+    public string DirectRunes { get; set; } = string.Empty;
+    public string DirectUnruned { get; set; } = string.Empty;
 
     private readonly List<string> _runes = [];
     private readonly List<string> _handles = [];
@@ -24,7 +24,7 @@ public class Speach : ISpeech
     public void SetContext(ISetContextCommand<char> command)
     {
         Alphabet = command.Alphabet;
-        RuneAlphabet = Domain.Aggregates.Translator.Translator.RuneAlphabetOf(command.Alphabet);
+        RuneAlphabet = Translator.RuneAlphabetOf(command.Alphabet);
         RuneSize = command.RuneSize;
         Scheme = command.Scheme;
 
@@ -52,9 +52,7 @@ public class Speach : ISpeech
 
         _assembly.Stop();
 
-
-        foreach (var rune in _runes)
-            sb.Append(Translator.DecodeRune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
+        foreach (var rune in _runes) sb.Append(Translator.DecodeRune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
 
         sb.Append(tailText);
 
@@ -82,12 +80,9 @@ public class Speach : ISpeech
 
     public long FirstSendMsOf(int handle) => handle >= 0 && handle < _firstSendMs.Count ? _firstSendMs[handle] : -1;
 
-    public void PushDirectRunes(string runes) => DirectRunes = sb.Clear().Append(runes).ToString();
+    public void PushDirectRunes(string runes) => DirectRunes = sb.Append(runes).ToString();
 
-    public void PushDirect(string runes)
-    {
-        throw new NotImplementedException();
-    }
+    public void PushDirect(string runes) => DirectUnruned = sb.Append(runes).ToString();
 
-    
+    public void DropSB() => sb.Clear();
 }
