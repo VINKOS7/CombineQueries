@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 
 using MediatR;
 
@@ -10,7 +10,7 @@ public static class EntityFrameworkCoreExtensions
 {
     public static IServiceCollection ConfigureEntityFramework(this IServiceCollection services, IConfiguration configuration)
     {
-        string connectionString = configuration.GetConnectionString("Context");
+        string? connectionString = configuration.GetConnectionString("Context");
         services
             .AddEntityFrameworkNpgsql()
             .AddDbContext<Context>(
@@ -28,7 +28,7 @@ public static class EntityFrameworkCoreExtensions
     public static void RunMigrations(this WebApplication app, IConfiguration configuration)
     {
         var mediator = app.Services.GetRequiredService<IMediator>();
-        string connectionString = configuration.GetConnectionString("Context");
+        string? connectionString = configuration.GetConnectionString("Context");
 
         var options = new DbContextOptionsBuilder<Context>()
             .UseNpgsql(

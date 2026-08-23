@@ -20,6 +20,8 @@ public class Speach : ISpeech
     private readonly Dictionary<string, int> _byUrl = [];
     private readonly Stopwatch _assembly = new();
     private readonly StringBuilder sb = new();
+    private readonly StringBuilder direct = new();
+    private readonly StringBuilder unruned = new();
 
     public void SetContext(ISetContextCommand<char> command)
     {
@@ -52,7 +54,9 @@ public class Speach : ISpeech
 
         _assembly.Stop();
 
-        foreach (var rune in _runes) sb.Append(Translator.DecodeRune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
+        sb.Clear();
+
+        foreach (var rune in _runes) sb.Append(Translator.DirectUnrune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
 
         sb.Append(tailText);
 
@@ -80,9 +84,17 @@ public class Speach : ISpeech
 
     public long FirstSendMsOf(int handle) => handle >= 0 && handle < _firstSendMs.Count ? _firstSendMs[handle] : -1;
 
-    public void PushDirectRunes(string runes) => DirectRunes = sb.Append(runes).ToString();
+    public void PushDirectRunes(string runes) => DirectRunes = direct.Append(runes).ToString();
 
-    public void PushDirect(string runes) => DirectUnruned = sb.Append(runes).ToString();
+    public void PushDirect(string runes) => DirectUnruned = unruned.Append(runes).ToString();
 
-    public void DropSB() => sb.Clear();
+    public void DropSB()
+    {
+        sb.Clear();
+        direct.Clear();
+        unruned.Clear();
+
+        DirectRunes = string.Empty;
+        DirectUnruned = string.Empty;
+    }
 }

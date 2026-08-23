@@ -49,6 +49,8 @@ public class CombineQueries : UdonSharpBehaviour
     public string onDoneEvent = "OnQueryDone";
 
     public string LastError = "";
+    public string LastUrl = "";
+    public int LastSymbols;
 
     private const int PhaseIdle = 0;
     private const int PhaseInit = 1;
@@ -105,16 +107,22 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (problem != "") { Fail(problem + ": " + url); return; }
 
+        int[] symbols = SymbolsOf(payload);
+
+        if (symbols == null) { Fail("character outside the alphabet: " + url); return; }
+
         LastError = "";
         forwarded = "";
         pendingUrl = payload;
+        LastUrl = url;
+        LastSymbols = symbols.Length;
         busy = true;
 
-        if (!withFragments) { SendDirect(payload); return; }
+        if (!withFragments) { SendDirect(symbols); return; }
 
         int handle = HandleOf(payload);
 
-        if (handle < 0) { SendFull(payload); return; }
+        if (handle < 0) { SendFull(symbols); return; }
 
         Load(PhaseHandle, HandlePool[handle]);
     }
@@ -149,12 +157,8 @@ public class CombineQueries : UdonSharpBehaviour
         return "";
     }
 
-    private void SendFull(string url)
+    private void SendFull(int[] symbols)
     {
-        int[] symbols = SymbolsOf(url);
-
-        if (symbols == null) { Fail("character outside the alphabet"); return; }
-
         queueLen = symbols.Length / RuneSize + 1;
 
         if (queueLen > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
@@ -181,12 +185,8 @@ public class CombineQueries : UdonSharpBehaviour
         SendNext();
     }
 
-    private void SendDirect(string url)
+    private void SendDirect(int[] symbols)
     {
-        int[] symbols = SymbolsOf(url);
-
-        if (symbols == null) { Fail("character outside the alphabet"); return; }
-
         queueLen = (symbols.Length + RuneSize - 1) / RuneSize;
 
         if (queueLen > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
@@ -240,7 +240,7 @@ public class CombineQueries : UdonSharpBehaviour
         if (!BoolField(response.Result, "known"))
         {
             Forget(pendingUrl);
-            SendFull(pendingUrl);
+            SendFull(SymbolsOf(pendingUrl));
             return;
         }
 

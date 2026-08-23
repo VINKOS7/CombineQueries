@@ -35,7 +35,7 @@ public class TailHandler : IRequestHandler<TailRequest, TailResponse>
         switch (request.Type)
         {
             case TypeCombine.Direct:
-                tail = Translator.DirectUnrune(string.Join("", _speach.DirectRunes), _speach.RuneAlphabet, _speach.RuneSize + 1, _speach.SymbolsOf(request.Type));
+                tail = Translator.FragmentateUnrune(request.Runes, _speach.RuneAlphabet, _speach.Alphabet, _speach.RuneSize, _speach.SymbolsOf(request.Type));
 
                 assembled = _speach.Close(tail, request.Type);
 

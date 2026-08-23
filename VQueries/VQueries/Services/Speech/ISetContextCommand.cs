@@ -11,7 +11,7 @@ public interface ISetContextCommand<TRunes>
 
 public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
 {
-    public string Alphabet { get; init; }
+    public required string Alphabet { get; init; }
     public int RuneSize { get; init; } = 2;
     public string Scheme { get; init; } = "https";
 }

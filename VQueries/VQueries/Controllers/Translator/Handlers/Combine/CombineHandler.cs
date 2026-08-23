@@ -19,32 +19,19 @@ public class CombineHandler : IRequestHandler<CombineRequest, CombineResponse>
 
     public Task<CombineResponse> Handle(CombineRequest request, CancellationToken cancellationToken)
     {
-        if(_speech.Alphabet is null || string.IsNullOrEmpty(request.Runes)) throw new Exception("CombineHandler: /init was not called");
+        if (_speech.Alphabet is null || _speech.RuneAlphabet is null) throw new Exception("CombineHandler: /init was not called");
+        if (string.IsNullOrEmpty(request.Runes)) throw new Exception("CombineHandler: empty runes");
 
-        var received = 0;
-        var typeRune = Translator.TypeFrom(request.Runes.First(), _speech.Alphabet);
+        int symbols = _speech.SymbolsOf(TypeCombine.Fragmentate);
 
-        switch (typeRune)
-        {
-            case TypeCombine.Direct:
-                _speech.PushDirect(Translator.DirectUnrune(string.Join("", _speech.DirectRunes), _speech.RuneAlphabet, _speech.RuneSize + 1, _speech.SymbolsOf(TypeCombine.Direct)));
-                _speech.PushDirectRunes(request.Runes);
+        bool fragmentate = Translator.HasFragment(request.Runes, _speech.RuneAlphabet, _speech.Alphabet, _speech.RuneSize, symbols);
 
-                received = _speech.Accept(Translator.DirectUnrune(string.Join("", _speech.DirectRunes), _speech.RuneAlphabet, _speech.RuneSize + 1, _speech.SymbolsOf(TypeCombine.Direct)));
+        if (!fragmentate) _speech.PushDirectRunes(request.Runes);
 
-                _logger.LogInformation($"combine: runes the {request.Runes} directly accepted");
+        // походу вообще внутри Accept не нужно проверять на фрагменты, так как мы уже проверили выше и ��сли фрагменты есть, то мы их не пушим в очередь, а если нет, то пушим
+        int received = _speech.Accept(request.Runes);
 
-                break;
-
-            case TypeCombine.Fragmentate:
-                received = _speech.Accept(request.Runes);
-
-                _logger.LogInformation($"combine: runes digit {received} accepted");
-
-                break;
-           
-            default: throw new ArgumentOutOfRangeException(nameof(typeRune), request, "Unexpected TypeCombine value");
-        }
+        _logger.LogInformation($"combine: rune {received} accepted, {(fragmentate ? "with fragments" : "direct")}");
 
         return Task.FromResult(new CombineResponse { Received = received });
     }

@@ -1,12 +1,12 @@
-﻿namespace CombineQueries.Domain.Aggregates.Translator.types;
+namespace CombineQueries.Domain.Aggregates.Translator.types;
 
-public interface IArenaTreeRunes<TSymbol>
+public interface IArenaTreeRunes<TSymbol> where TSymbol : notnull
 {
     public IRune<TSymbol>? Root { get; }
     public IRune<TSymbol> From(IRune<TSymbol> move, TSymbol symbol);
 }
 
-public class ArenaTreeRunes<TSymbol> : IArenaTreeRunes<TSymbol>
+public class ArenaTreeRunes<TSymbol> : IArenaTreeRunes<TSymbol> where TSymbol : notnull
 {
     private readonly List<IRune<TSymbol>> _runes = new();
     public IRune<TSymbol>? Root { get; }

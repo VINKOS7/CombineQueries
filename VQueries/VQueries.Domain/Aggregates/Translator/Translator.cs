@@ -7,16 +7,14 @@ namespace CombineQueries.Domain.Aggregates.Translator;
 public class Translator : Entity, IAggregateRoot
 {
     
-    public Guid Id { get; set; } = new();
+    public new Guid Id { get; set; } = new();
     public required string BaseForwardUrl { get; set; }
     public required string Alphabet { get; set; }
     public required IArenaTreeRunes<char> Runes { get; set; }
     public string? Name { get; set; }
     public string? Description { get; set; }
 
-    private static readonly StringBuilder sb = new ();
-
-    private int BaseRune { get; set; }
+//    private int BaseRune { get; set; }
 
     public static Translator From(IAddTranslator<char> command) => new()
     {
@@ -25,15 +23,15 @@ public class Translator : Entity, IAggregateRoot
         Runes = command.Runes,
 
         Name = command.Name ?? string.Empty,
-        Description = command.Description ?? string.Empty,
-        BaseRune = BaseForRune(command.SizeRune + 1)
+        Description = command.Description ?? string.Empty
+//      BaseRune = BaseForRune(command.SizeRune + 1)
     };
 
     public static IArenaTreeRunes<char> ATRFrom(string alphabet)
     {
         var arena = new ArenaTreeRunes<char>();
 
-        foreach (char c in alphabet) arena.From(arena.Root, c);
+        foreach (char c in alphabet) arena.From(arena.Root!, c);
 
         return arena;
     }
@@ -54,12 +52,14 @@ public class Translator : Entity, IAggregateRoot
 
     public static string RuneAlphabetOf(string alphabet)
     {
-        foreach (char c in alphabet) if (UrlUnsafe.IndexOf(c) < 0) sb.Clear().Append(c);
+        var runeAlphabet = new StringBuilder();
 
-        return sb.ToString();
+        foreach (char c in alphabet) if (UrlUnsafe.IndexOf(c) < 0) runeAlphabet.Append(c);
+
+        return runeAlphabet.ToString();
     }
 
-    public static string DecodeRune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    public static long ValueOf(string rune, string runeAlphabet)
     {
         long value = 0;
 
@@ -72,13 +72,38 @@ public class Translator : Entity, IAggregateRoot
             value = value * runeAlphabet.Length + digit;
         }
 
-        var parts = new string[runeSize];
+        return value;
+    }
+
+    public static int[] IndexesOf(string rune, string runeAlphabet, int runeSize, int symbols)
+    {
+        long value = ValueOf(rune, runeAlphabet);
+        var indexes = new int[runeSize];
 
         for (int i = runeSize - 1; i >= 0; i--)
         {
-            parts[i] = SymbolOf(alphabet, (int) (value % symbols));
+            indexes[i] = (int)(value % symbols);
             value /= symbols;
         }
+
+        return indexes;
+    }
+
+    public static bool IsFragment(int index, string alphabet) => index >= alphabet.Length;
+
+    public static bool HasFragment(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    {
+        foreach (int index in IndexesOf(rune, runeAlphabet, runeSize, symbols)) if (IsFragment(index, alphabet)) return true;
+
+        return false;
+    }
+
+    public static string DirectUnrune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    {
+        int[] indexes = IndexesOf(rune, runeAlphabet, runeSize, symbols);
+        var parts = new string[runeSize];
+
+        for (int i = 0; i < runeSize; i++) parts[i] = SymbolOf(alphabet, indexes[i]);
 
         return string.Concat(parts);
     }
@@ -87,7 +112,7 @@ public class Translator : Entity, IAggregateRoot
 
     public static string FragmentateUnrune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
     {
-        string text = DecodeRune(rune, runeAlphabet, alphabet, runeSize, symbols);
+        string text = DirectUnrune(rune, runeAlphabet, alphabet, runeSize, symbols);
 
         int cut = 0;
 
@@ -96,23 +121,23 @@ public class Translator : Entity, IAggregateRoot
         return text.Substring(0, text.Length - cut);
     }
 
-    private static int BaseForRune(int runeSize)
-    {
-        if (runeSize < 1) return 0;
-        if (runeSize == 1) return int.MaxValue;
-
-        int lo = 1, hi = 46340; // 46340^2 - предел даже для руны из двух разрядов
-
-        while (lo < hi)
-        {
-            int mid = lo + (hi - lo + 1) / 2;
-
-            if (FitsInInt(mid, runeSize)) lo = mid;
-            else hi = mid - 1;
-        }
-
-        return lo;
-    }
+//    private static int BaseForRune(int runeSize)
+//    {
+//        if (runeSize < 1) return 0;
+//        if (runeSize == 1) return int.MaxValue;
+//
+//        int lo = 1, hi = 46340; // 46340^2 - предел даже для руны из двух разрядов
+//
+//        while (lo < hi)
+//        {
+//            int mid = lo + (hi - lo + 1) / 2;
+//
+//            if (FitsInInt(mid, runeSize)) lo = mid;
+//            else hi = mid - 1;
+//        }
+//
+//        return lo;
+//    }
 
     public static int[] Compress(string input, string alphabet, int group, int baseRune)
     {
@@ -147,32 +172,7 @@ public class Translator : Entity, IAggregateRoot
         if (input == null || input.Length == 0 || groupSize < 1) return "";
 
         char[] block = new char[groupSize];
-
-        sb.Clear();
-
-        foreach (int id in input)
-        {
-            int rest = id;
-
-            for (int k = groupSize - 1; k >= 0; k--)
-            {
-                block[k] = alphabet[rest % baseRune];
-                rest /= baseRune;
-            }
-
-            sb.Append(block);
-        }
-
-        return sb.ToString();
-    }
-
-    public static string DirectUnrune(string input, string alphabet, int groupSize, int baseRune)
-    {
-        if (input == null || input.Length == 0 || groupSize < 1) return "";
-
-        char[] block = new char[groupSize];
-
-        sb.Clear();
+        var text = new StringBuilder();
 
         foreach (int id in input)
         {
@@ -184,44 +184,43 @@ public class Translator : Entity, IAggregateRoot
                 rest /= baseRune;
             }
 
-            sb.Append(block);
+            text.Append(block);
         }
 
-        return sb.ToString();
+        return text.ToString();
     }
 
+//    public static TypeCombine TypeFrom<TRune>(TRune symbol, string alphabet) where TRune : notnull => true switch
+//    {
+//        _ when IsFragmentate(RuneFrom(symbol), alphabet) => TypeCombine.Fragmentate,
+//        _ when IsDirect(RuneFrom(symbol), alphabet) => TypeCombine.Direct,
+//        _ => throw new Exception($"domain error: unknown type symbol '{symbol}'")
+//    };
 
-    public static TypeCombine TypeFrom<TRune>(TRune symbol, string alphabet) where TRune : notnull => true switch
-    {
-        _ when IsFragmentate(RuneFrom(symbol), alphabet) => TypeCombine.Fragmentate,
-        _ when IsDirect(RuneFrom(symbol), alphabet) => TypeCombine.Direct,
-        _ => throw new Exception($"domain error: unknown type symbol '{symbol}'")
-    };
+//    private static bool FitsInInt(int b, int runeSize)
+//    {
+//        long limit = (long)int.MaxValue + 1;
+//        long p = 1;
+//
+//        for (int i = 0; i < runeSize; i++)
+//        {
+//            p *= b;
+//
+//            if (p > limit) return false;
+//        }
+//
+//        return true;
+//    }
 
-    private static bool FitsInInt(int b, int runeSize)
-    {
-        long limit = (long)int.MaxValue + 1;
-        long p = 1;
-
-        for (int i = 0; i < runeSize; i++)
-        {
-            p *= b;
-
-            if (p > limit) return false;
-        }
-
-        return true;
-    }
-
-    private static char RuneFrom<TRune>(TRune symbol) where TRune : notnull => symbol switch
-    {
-        char c => c,
-        int i => (char)i,
-        _ => throw new Exception($"domain error: unsupported rune type '{typeof(TRune)}'")
-    };
-
+//    private static char RuneFrom<TRune>(TRune symbol) where TRune : notnull => symbol switch
+//    {
+//        char c => c,
+//        int i => (char)i,
+//        _ => throw new Exception($"domain error: unsupported rune type '{typeof(TRune)}'")
+//    };
+//
     private static bool IsFragmentate(char symbol, string alphabet) => alphabet.IndexOf(symbol) < 0;
-    private static bool IsDirect(int index, string alphabet) => index >= alphabet.Length;
+//    private static bool IsDirect(int index, string alphabet) => index >= alphabet.Length;
 
 
 }

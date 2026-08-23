@@ -19,7 +19,7 @@ public record InitRequest : IRequest<InitResponse>
     [JsonProperty("scheme")] public string Scheme { get; set; } = "https";
 }
 
-public record InitCommand<TSymbol> : IAddTranslator<TSymbol>
+public record InitCommand<TSymbol> : IAddTranslator<TSymbol> where TSymbol : notnull
 {
     public required string Alphabet { get; set; }
     public required string BaseForwardUrl { get; set; }
