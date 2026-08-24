@@ -16,9 +16,9 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
         if (request.Type != TypeCombine.Fragmentate && request.Type != TypeCombine.Direct)
             throw new ArgumentOutOfRangeException(nameof(request), request.Type, "Unexpected TypeCombine value");
 
-        string tail = request.Type == TypeCombine.Direct
+        string tail = Translator.TrimPad(request.Type == TypeCombine.Direct
             ? Translator.DirectUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize)
-            : Translator.TrimPad(Translator.FragmentateUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize, speech.SymbolsOf(request.Type)), speech.RuneSize);
+            : Translator.FragmentateUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize, speech.SymbolsOf(request.Type)), speech.RuneSize);
 
         var assembled = speech.Close(tail, request.Type);
 

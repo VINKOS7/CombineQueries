@@ -125,7 +125,7 @@ public class Translator : Entity, IAggregateRoot
             value /= alphabet.Length;
         }
 
-        return TrimPad(new string(text), chars) + DirectFragments[piece];
+        return new string(text) + DirectFragments[piece];
     }
 
     public const char Pad = ':';

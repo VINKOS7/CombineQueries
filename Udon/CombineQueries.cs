@@ -22,6 +22,10 @@ public class CombineQueries : UdonSharpBehaviour
         "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "/users/", "com"
     };
 
+    private readonly string[] DirectFragments = new string[] { "", "o", ".com/", "." };
+
+    private const int DirectPieces = 4;
+
     private const int FragmentCount = 35;
     private const int Symbols = 59 + FragmentCount;
 
@@ -39,7 +43,7 @@ public class CombineQueries : UdonSharpBehaviour
 
     private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
-    private readonly VRCUrl[] DirectTailPool = PoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
+    private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h/", MaxHandles);
 
     private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme);
@@ -118,7 +122,7 @@ public class CombineQueries : UdonSharpBehaviour
         LastSymbols = symbols.Length;
         busy = true;
 
-        if (!withFragments) { SendDirect(symbols); return; }
+        if (!withFragments) { SendDirect(payload); return; }
 
         int handle = HandleOf(payload);
 
@@ -185,27 +189,47 @@ public class CombineQueries : UdonSharpBehaviour
         SendNext();
     }
 
-    private void SendDirect(int[] symbols)
+    private void SendDirect(string payload)
     {
-        queueLen = (symbols.Length + RuneSize - 1) / RuneSize;
+        int[] buffer = new int[payload.Length];
+        int count = 0, at = 0;
 
-        if (queueLen > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
-
-        queue = new int[queueLen];
-
-        for (int i = 0; i < queueLen; i++)
+        while (at < payload.Length)
         {
             int value = 0;
 
             for (int j = 0; j < RuneSize; j++)
             {
-                int at = i * RuneSize + j;
+                value = value * Alphabet.Length + (at < payload.Length ? Alphabet.IndexOf(payload[at]) : Alphabet.IndexOf(':'));
 
-                value = value * Alphabet.Length + (at < symbols.Length ? symbols[at] : Alphabet.IndexOf(':'));
+                if (at < payload.Length) at++;
             }
 
-            queue[i] = value;
+            int piece = 0, pieceLength = 0;
+
+            for (int f = 1; f < DirectPieces; f++)
+            {
+                if (DirectFragments[f].Length <= pieceLength || at + DirectFragments[f].Length >= payload.Length) continue;
+                if (payload.Substring(at, DirectFragments[f].Length) != DirectFragments[f]) continue;
+
+                piece = f;
+                pieceLength = DirectFragments[f].Length;
+            }
+
+            at += pieceLength;
+
+            buffer[count] = value * DirectPieces + piece;
+            count++;
         }
+
+        if (count > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
+
+        queueLen = count;
+        queue = new int[queueLen];
+
+        for (int i = 0; i < queueLen; i++) queue[i] = buffer[i];
+
+        queue[queueLen - 1] /= DirectPieces;
 
         queuePos = 0;
 
@@ -381,6 +405,19 @@ public class CombineQueries : UdonSharpBehaviour
 
             pool[v] = new VRCUrl(baseUri + RunesOf(value, runeAlph, runeWidth));
         }
+
+        return pool;
+    }
+
+    private static VRCUrl[] DirectTailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth)
+    {
+        int total = 1;
+
+        for (int i = 0; i < runeSize; i++) total *= symbols;
+
+        VRCUrl[] pool = new VRCUrl[total];
+
+        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v * DirectPieces, runeAlph, runeWidth));
 
         return pool;
     }
