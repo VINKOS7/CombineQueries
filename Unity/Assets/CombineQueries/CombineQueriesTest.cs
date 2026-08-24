@@ -39,7 +39,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         running = true;
         step = StepFull;
-        board = "";
+        board = testUrl + "   " + NumberOf(testUrl.Length) + " chars\n\n";
 
         SendStep();
     }
@@ -59,7 +59,8 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (!ready) { ready = true; Say("ready - touch the green cube"); return; }
         if (!running) return;
 
-        string line = TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms";
+        string line = TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   "
+                    + NumberOf(client.LastSymbols) + " symbols";
 
         board += line + "\n";
         step++;
@@ -83,7 +84,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
         awaiting = true;
         startedAt = Time.time;
 
-        Note(TitleOf(step) + "   sending...");
+        Note(TitleOf(step) + "   sending " + client.LastUrl);
         Show(TitleOf(step) + "   sending...");
     }
 

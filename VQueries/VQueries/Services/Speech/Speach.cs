@@ -56,7 +56,10 @@ public class Speach : ISpeech
 
         sb.Clear();
 
-        foreach (var rune in _runes) sb.Append(Translator.DirectUnrune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
+        foreach (var rune in _runes)
+            sb.Append(type == TypeCombine.Direct
+                ? Translator.DirectUnrune(rune, RuneAlphabet, Alphabet, RuneSize)
+                : Translator.FragmentateUnrune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
 
         sb.Append(tailText);
 
@@ -88,7 +91,7 @@ public class Speach : ISpeech
 
     public void PushDirect(string runes) => DirectUnruned = unruned.Append(runes).ToString();
 
-    public void DropSB()
+    public void Foget()
     {
         sb.Clear();
         direct.Clear();

@@ -36,5 +36,5 @@ public interface ISpeech
 
     void PushDirect(string runes);
 
-    void DropSB();
+    void Foget();
 }

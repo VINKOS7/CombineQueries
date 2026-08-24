@@ -98,7 +98,9 @@ public class Translator : Entity, IAggregateRoot
         return false;
     }
 
-    public static string DirectUnrune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    public static readonly string[] DirectFragments = ["", "o", ".com/", "."];
+
+    public static string FragmentateUnrune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
     {
         int[] indexes = IndexesOf(rune, runeAlphabet, runeSize, symbols);
         var parts = new string[runeSize];
@@ -108,17 +110,33 @@ public class Translator : Entity, IAggregateRoot
         return string.Concat(parts);
     }
 
+    public static string DirectUnrune(string rune, string runeAlphabet, string alphabet, int chars)
+    {
+        long value = ValueOf(rune, runeAlphabet);
+
+        int piece = (int)(value % DirectFragments.Length);
+        value /= DirectFragments.Length;
+
+        var text = new char[chars];
+
+        for (int i = chars - 1; i >= 0; i--)
+        {
+            text[i] = alphabet[(int)(value % alphabet.Length)];
+            value /= alphabet.Length;
+        }
+
+        return TrimPad(new string(text), chars) + DirectFragments[piece];
+    }
+
     public const char Pad = ':';
 
-    public static string FragmentateUnrune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    public static string TrimPad(string text, int runeSize)
     {
-        string text = DirectUnrune(rune, runeAlphabet, alphabet, runeSize, symbols);
-
         int cut = 0;
 
         while (cut < runeSize && cut < text.Length && text[text.Length - 1 - cut] == Pad) cut++;
 
-        return text.Substring(0, text.Length - cut);
+        return text[..^cut];
     }
 
 //    private static int BaseForRune(int runeSize)
@@ -219,7 +237,7 @@ public class Translator : Entity, IAggregateRoot
 //        _ => throw new Exception($"domain error: unsupported rune type '{typeof(TRune)}'")
 //    };
 //
-    private static bool IsFragmentate(char symbol, string alphabet) => alphabet.IndexOf(symbol) < 0;
+//    private static bool IsFragmentate(char symbol, string alphabet) => alphabet.IndexOf(symbol) < 0;
 //    private static bool IsDirect(int index, string alphabet) => index >= alphabet.Length;
 
 
