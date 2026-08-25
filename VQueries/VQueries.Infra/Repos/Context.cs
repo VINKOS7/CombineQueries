@@ -4,6 +4,7 @@ using MediatR;
 
 using CombineQueries.Infra.Configures;
 using CombineQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Account;
 
 namespace CombineQueries.Infra.Repos;
 
@@ -11,11 +12,16 @@ namespace CombineQueries.Infra.Repos;
 public class Context : UnitOfWorkContext
 {
     public DbSet<Translator> Translators { get; set; }
+    public DbSet<Account> Accounts { get; set; }
     public Context(DbContextOptions options, IMediator mediator) : base(options, mediator) { }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<Translator>().Ignore(t => t.Runes);
+
+        modelBuilder.ApplyConfiguration(new AccountEntityConfiguration());
 
         // modelBuilder.ApplyConfiguration(new TranslatorEntityConfiguration());
     }

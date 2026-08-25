@@ -58,3 +58,7 @@ Thumbs.db
 !/Unity/Packages/manifest.json
 !/Unity/Packages/vpm-manifest.json
 !/Unity/Packages/packages-lock.json
+
+### Настройки окружений - в них строки подключения и токены
+/VQueries/VQueries/appsettings.Alpha.json
+/VQueries/VQueries/appsettings.Production.json

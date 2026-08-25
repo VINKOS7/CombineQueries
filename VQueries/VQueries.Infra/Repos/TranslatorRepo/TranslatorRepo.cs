@@ -15,5 +15,10 @@ public class TranslatorRepo : ITranslatorRepo
 
     public async Task AddAsync(Translator translator) => await _db.Translators.AddAsync(translator);
 
-    public async Task<Guid> GetIdByAlphabetAsync(string alphabet) => _db.Translators.FirstAsync(t => t.Alphabet == alphabet).Result.Id;
+    public async Task<Guid> GetIdByAlphabetAsync(string alphabet)
+    {
+        var translator = await _db.Translators.AsNoTracking().FirstOrDefaultAsync(t => t.Alphabet == alphabet);
+
+        return translator is null ? Guid.Empty : translator.Id;
+    }
 }

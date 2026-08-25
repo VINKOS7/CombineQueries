@@ -6,7 +6,15 @@ using VRC.SDKBase;
 
 public class CombineQueries : UdonSharpBehaviour
 {
-    private const string baseUrl = "http://localhost:5017";
+    private const string DevUrl = "http://localhost:5017";
+    private const string AlphaUrl = "https://api.vink0s.com";
+
+#if CQ_ALPHA
+    private const string baseUrl = AlphaUrl;
+#else
+    private const string baseUrl = DevUrl;
+#endif
+
     private const string baseForwardUrl = "vink0s.com";
 
     private const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
@@ -33,6 +41,8 @@ public class CombineQueries : UdonSharpBehaviour
 
     private const string Scheme = "https";
 
+    private const string Token = "p1hfc9m8vzjgrstd";
+
     private const int RuneSize = 3;
     private const string RuneSizeStr = "3";
     private const int RuneWidth = 4;
@@ -46,7 +56,7 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h/", MaxHandles);
 
-    private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme);
+    private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token);
 
     [Header("Where to report completion (optional)")]
     public UdonSharpBehaviour target;

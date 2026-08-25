@@ -11,6 +11,7 @@ public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech) : IR
     public Task<CombineResponse> Handle(CombineRequest request, CancellationToken cancellationToken)
     {
         if (speech.Alphabet is null || speech.RuneAlphabet is null) throw new Exception("CombineHandler: /init was not called");
+
         if (string.IsNullOrEmpty(request.Runes)) throw new Exception("CombineHandler: empty runes");
 
         int symbols = speech.SymbolsOf(TypeCombine.Fragmentate);

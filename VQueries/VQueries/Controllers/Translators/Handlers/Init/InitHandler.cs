@@ -2,6 +2,7 @@ using MediatR;
 
 using CombineQueries.Api.Services.Speech;
 using CombineQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Account;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Init;
 
@@ -9,12 +10,16 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 {
     private readonly ILogger<InitHandler> _logger;
     private readonly ITranslatorRepo _translatorRepo;
+    private readonly IAccountRepo _accountRepo;
+    private readonly IConfiguration _configuration;
     private readonly ISpeech _aFST;
 
-    public InitHandler(ITranslatorRepo translatorRepo, ILogger<InitHandler> logger, ISpeech aFST)
+    public InitHandler(ITranslatorRepo translatorRepo, IAccountRepo accountRepo, IConfiguration configuration, ILogger<InitHandler> logger, ISpeech aFST)
     {
         _logger = logger;
         _translatorRepo = translatorRepo;
+        _accountRepo = accountRepo;
+        _configuration = configuration;
         _aFST = aFST;
     }
 
@@ -22,6 +27,8 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
     {
         try
         {
+            if (!await Allowed(request.Token)) throw new Exception("auth error: token rejected");
+
             int runeSize = request.RuneSize;
 
             if (runeSize < 2) throw new Exception($"domain error: runeSize={runeSize}, must be >= 2");
@@ -50,6 +57,27 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 
             throw;
         }
+    }
+
+    private async Task<bool> Allowed(string token)
+    {
+        if (!Domain.Aggregates.Account.Account.IsToken(token)) return false;
+
+        try
+        {
+            if (await _accountRepo.GetIdByTokenAsync(token) != Guid.Empty) return true;
+        }
+        catch (Exception ex)
+        {
+            bool configured = token == _configuration["Auth:Token"];
+
+            _logger.LogWarning("init: accounts unavailable, configured token {Verdict} ({Kind}: {Message})",
+                configured ? "accepted" : "rejected", ex.GetType().Name, ex.Message);
+
+            return configured;
+        }
+
+        return false;
     }
 
     private async Task TryPersist(Domain.Aggregates.Translator.types.IArenaTreeRunes<char> runes, InitRequest request, CancellationToken cancellationToken)

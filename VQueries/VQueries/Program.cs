@@ -20,7 +20,7 @@ builder.Services.AddCors(options =>
             builder.WithOrigins("http://localhost:3000", "chrome-extension://*");
         });
 });
-builder.Services.ConfigureEntityFramework(builder.Configuration);
+builder.Services.ConfigureEntityFramework(builder.Configuration, builder.Environment.IsDevelopment());
 
 builder.Services.AddEndpointsApiExplorer();
 
@@ -36,7 +36,7 @@ builder.Services.AddMediatR(cfg =>
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Alpha"))
 {
     app.UseSwagger();
     app.UseSwaggerUI();
