@@ -44,9 +44,9 @@ public class Speach : ISpeech
         return _runes.Count;
     }
 
-    public int SymbolsOf(TypeCombine type) => type == TypeCombine.Direct ? Alphabet!.Length : Translator.SymbolCount(Alphabet!);
+    public int SymbolsOf(TypeQuery type) => type == TypeQuery.Direct ? Alphabet!.Length : Translator.SymbolCount(Alphabet!);
 
-    public AssembledResult Close(string tailText, TypeCombine type)
+    public AssembledResult Close(string tailText, TypeQuery type)
     {
         if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
@@ -57,7 +57,7 @@ public class Speach : ISpeech
         sb.Clear();
 
         foreach (var rune in _runes)
-            sb.Append(type == TypeCombine.Direct
+            sb.Append(type == TypeQuery.Direct
                 ? Translator.DirectUnrune(rune, RuneAlphabet, Alphabet, RuneSize)
                 : Translator.FragmentateUnrune(rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type)));
 

@@ -13,9 +13,9 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
     {
         if (speech.Alphabet is null || speech.RuneAlphabet is null) throw new Exception("CRIT: /init was not called");
 
-        if (request.Type != TypeCombine.Fragmentate && request.Type != TypeCombine.Direct) throw new ArgumentOutOfRangeException(nameof(request), request.Type, "Unexpected TypeCombine value");
+        if (request.Type != TypeQuery.Fragmentate && request.Type != TypeQuery.Direct) throw new ArgumentOutOfRangeException(nameof(request), request.Type, "Unexpected TypeCombine value");
 
-        string tail = Translator.TrimPad(request.Type == TypeCombine.Direct
+        string tail = Translator.TrimPad(request.Type == TypeQuery.Direct
             ? Translator.DirectUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize)
             : Translator.FragmentateUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize, speech.SymbolsOf(request.Type)), speech.RuneSize);
 

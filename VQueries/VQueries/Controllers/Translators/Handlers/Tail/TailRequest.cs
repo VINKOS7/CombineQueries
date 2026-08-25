@@ -10,5 +10,5 @@ public record TailRequest : IRequest<TailResponse>
 {
     [JsonProperty("runes")] public required string Runes { get; set; }
 
-    [JsonProperty("type")] public TypeCombine Type { get; set; }
+    [JsonProperty("type")] public TypeQuery Type { get; set; }
 }

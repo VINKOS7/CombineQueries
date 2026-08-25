@@ -1,8 +1,9 @@
 namespace CombineQueries.Domain.Aggregates.Translator.types;
 
-public enum TypeCombine
+public enum TypeQuery
 {
     Fragmentate,
     Direct,
+    Merge,
     Default
 }

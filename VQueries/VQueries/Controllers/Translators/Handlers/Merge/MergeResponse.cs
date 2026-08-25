@@ -1,6 +1,6 @@
 using Newtonsoft.Json;
 
-namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Merge;
 
 public record MergeResponse
 {

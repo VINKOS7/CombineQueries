@@ -1,18 +1,19 @@
 using MediatR;
 
 using CombineQueries.Api.Services.Speech;
+using CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 using CombineQueries.Domain.Aggregates.Translator;
 using CombineQueries.Domain.Aggregates.Translator.types;
 
-namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
+namespace MergeQueries.Api.Controllers.Translators.Handlers.Merge;
 
 public class MergeHandler(ILogger<MergeHandler> logger, ISpeech speech) : IRequestHandler<MergeRequest, MergeResponse>
 {
     public Task<MergeResponse> Handle(MergeRequest request, CancellationToken cancellationToken)
     {
-        if (speech.Alphabet is null || speech.RuneAlphabet is null) throw new Exception("CombineHandler: /init was not called");
+        if (speech.Alphabet is null || speech.RuneAlphabet is null) throw new Exception("MergeHandler: /init was not called");
 
-        if (string.IsNullOrEmpty(request.Runes)) throw new Exception("CombineHandler: empty runes");
+        if (string.IsNullOrEmpty(request.Runes)) throw new Exception("MergeHandler: empty runes");
 
         int symbols = speech.SymbolsOf(TypeQuery.Fragmentate);
 
@@ -22,7 +23,7 @@ public class MergeHandler(ILogger<MergeHandler> logger, ISpeech speech) : IReque
 
         int received = speech.Accept(request.Runes);
 
-        logger.LogInformation("combine: rune {Received} accepted, {Kind}", received, fragmentate ? "with fragments" : "direct");
+        logger.LogInformation("Merge: rune {Received} accepted, {Kind}", received, fragmentate ? "with fragments" : "direct");
 
         return Task.FromResult(new MergeResponse { Received = received });
     }

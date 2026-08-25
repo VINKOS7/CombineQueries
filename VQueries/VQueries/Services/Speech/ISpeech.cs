@@ -22,9 +22,9 @@ public interface ISpeech
 
     int Accept(string rune);
 
-    int SymbolsOf(TypeCombine type);
+    int SymbolsOf(TypeQuery type);
 
-    AssembledResult Close(string tailText, TypeCombine type);
+    AssembledResult Close(string tailText, TypeQuery type);
 
     int Intern(string url, long firstSendMs);
 

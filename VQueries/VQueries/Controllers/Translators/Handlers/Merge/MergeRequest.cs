@@ -2,7 +2,7 @@ using CombineQueries.Api.Services.Speech;
 using MediatR;
 using Newtonsoft.Json;
 
-namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
+namespace CombineQueries.Api.Controllers.Translators.Handlers.Merge;
 
 public record MergeRequest : IRequest<MergeResponse>
 {
