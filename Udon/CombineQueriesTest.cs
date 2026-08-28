@@ -6,18 +6,23 @@ public class CombineQueriesTest : UdonSharpBehaviour
 {
     public CombineQueries client;
 
-    [Tooltip("0 = Init, 1 = run the three-step comparison on testUrl")]
+    [Tooltip("0 = Init, 1 = run the comparison, 2 = Remember (re-auth only)")]
     public int action = 0;
 
-    [Tooltip("One url for all three steps: full send, then its hyper, then full send without the dictionary")]
-    public string testUrl = "https://dummyjson.com/todos/1";
+    [Tooltip("Codeword the server expects (Auth:Codeword); empty in dev")]
+    public string codeword = "";
+
+    // code-only, not serialized - a scene value cannot override these and desync the labels
+    private string testUrlFull = "https://dummyjson.com/comments/1";
+    private string testUrl = "https://dummyjson.com/products/1";
 
     [Tooltip("Optional: status is written here")]
     public Text output;
 
-    private const int StepFull = 0;
-    private const int StepHyper = 1;
-    private const int StepPlain = 2;
+    private const int StepCombineFull = 0;
+    private const int StepCombinePartial = 1;
+    private const int StepDirectFull = 2;
+    private const int StepDirectPartial = 3;
 
     private bool ready;
     private bool awaiting;
@@ -31,15 +36,18 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (client == null) { Say("client is not assigned"); return; }
         if (awaiting) return;
 
-        if (action == 0) { client.Init(); awaiting = true; Say("init sent"); return; }
+        if (action == 0) { client.codeword = codeword; client.Init(); awaiting = true; Say("init sent"); return; }
+
+        if (action == 2) { client.codeword = codeword; client.Remember(); awaiting = true; Say("remember sent"); return; }
 
         if (!ready) { Say("run Init first"); return; }
 
         if (running) { running = false; Say("run stopped"); return; }
 
         running = true;
-        step = StepFull;
-        board = testUrl + "   " + NumberOf(testUrl.Length) + " chars\n\n";
+        step = StepCombineFull;
+        board = testUrlFull + "   " + NumberOf(testUrlFull.Length) + " chars   (full - /comments/)\n"
+              + testUrl + "   " + NumberOf(testUrl.Length) + " chars   (partial - /products/)\n\n";
 
         SendStep();
     }
@@ -60,26 +68,27 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (!running) return;
 
         string line = TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   "
-                    + NumberOf(client.LastSymbols) + " symbols";
+                    + NumberOf(client.LastQueries) + " queries";
 
         board += line + "\n";
         step++;
 
         Note(line);
-        Show("");
+        Show("\n" + client.TakeForwardedBody());
 
-        if (step <= StepPlain) { SendStep(); return; }
+        if (step <= StepDirectPartial) { SendStep(); return; }
 
         running = false;
 
         Note("done");
-        Show("\n" + client.TakeForwardedBody());
     }
 
     private void SendStep()
     {
-        if (step == StepPlain) client.RequestDirect(testUrl);
-        else client.Request(testUrl);
+        if (step == StepCombineFull) client.Request(testUrlFull);
+        else if (step == StepCombinePartial) client.Request(testUrl);
+        else if (step == StepDirectFull) client.RequestDirect(testUrlFull);
+        else client.RequestDirect(testUrl);
 
         awaiting = true;
         startedAt = Time.time;
@@ -90,10 +99,11 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private string TitleOf(int at)
     {
-        if (at == StepFull) return "1  full send, fragment symbols   ";
-        if (at == StepHyper) return "2  hyper, the server knew it     ";
+        if (at == StepCombineFull) return "1  combine, full-fragments (/comments/)";
+        if (at == StepCombinePartial) return "2  combine, partial        (/products/)";
+        if (at == StepDirectFull) return "3  direct                  (/comments/)";
 
-        return "3  full send, direct symbols only";
+        return "4  direct                  (/products/)";
     }
 
     private string NumberOf(int value)
