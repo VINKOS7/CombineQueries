@@ -1,34 +1,20 @@
 using Dotseed.Domain;
 using CombineQueries.Domain.Aggregates.Translator.types;
+using System.Text;
 
 namespace CombineQueries.Domain.Aggregates.Translator;
 
-internal static class IntExtns
-{
-    public static string ArrayToString(this int[] array)
-    {
-        if (array == null || array.Length == 0) return "";
-
-        char[] res = new char[array.Length];
-
-        for (int i = 0; i < array.Length; i++) res[i] = (char)array[i];
-
-        return new string(res);
-    }
-}
-
-public record CompressedResult(int[] runes, IReadOnlyList<string> alphDmension);
-
 public class Translator : Entity, IAggregateRoot
 {
-    public Guid Id { get; set; } = new();
-
+    
+    public new Guid Id { get; set; } = new();
     public required string BaseForwardUrl { get; set; }
     public required string Alphabet { get; set; }
     public required IArenaTreeRunes<char> Runes { get; set; }
-
     public string? Name { get; set; }
     public string? Description { get; set; }
+
+//    private int BaseRune { get; set; }
 
     public static Translator From(IAddTranslator<char> command) => new()
     {
@@ -37,273 +23,222 @@ public class Translator : Entity, IAggregateRoot
         Runes = command.Runes,
 
         Name = command.Name ?? string.Empty,
-        Description = command.Description ?? string.Empty,
+        Description = command.Description ?? string.Empty
+//      BaseRune = BaseForRune(command.SizeRune + 1)
     };
 
     public static IArenaTreeRunes<char> ATRFrom(string alphabet)
     {
         var arena = new ArenaTreeRunes<char>();
 
-        foreach (char c in alphabet) arena.From(arena.Root, c);
+        foreach (char c in alphabet) arena.From(arena.Root!, c);
 
         return arena;
     }
 
-    public static string UnrunedCombine(string alphabet, IArenaTreeRunes<char> runes, string wireRunes)
-    {
-        int wireValue = 0;
-
-        foreach (var c in wireRunes)
-        {
-            int digit = alphabet.IndexOf(c);
-
-            if (digit < 0) throw new Exception($"domain error: symbol '{c}' is not in alphabet");
-
-            wireValue = wireValue * alphabet.Length + digit;
-        }
-
-        int symbolSpan = alphabet.Length + 1;
-        var node = runes.Get(wireValue / symbolSpan);
-        int symbolIndex = wireValue % symbolSpan;
-
-        var chars = new Stack<char>();
-        var walk = node;
-
-        while (walk.ParentId != -1)
-        {
-            chars.Push(walk.ParentSymbol!);
-            walk = runes.Get(walk.ParentId);
-        }
-
-        if (symbolIndex < alphabet.Length) runes.From(node, alphabet[symbolIndex]);
-
-        return new string(chars.ToArray());
-    }
-
-    public static string UnrunedCombineMany(string alphabet, IArenaTreeRunes<char> runes, IEnumerable<string> wireFragments)
-    {
-        string result = "";
-
-        foreach (var fragment in wireFragments) result += UnrunedCombine(alphabet, runes, fragment);
-
-        return result;
-    }
-
-    public string Unrune(string runes) => UnrunedCombine(Alphabet, Runes, runes);
-
-    // БАЗОВАЯ УЖИМКА. Алфавит расширяется частыми кусками URL, и "символом" становится не буква,
-    // а фрагмент. Пара символов по-прежнему схлопывается в один индекс пула - механика та же, что
-    // и была, но платит она теперь сразу.
-    //
-    // Ключевое отличие от прежних alphExts: таблица СТАТИЧЕСКАЯ. Она одинакова у клиента и сервера
-    // и никогда не едет по проводу, поэтому синхронизировать нечего - а именно на синхронизации
-    // растущих уровней прежняя схема и разваливалась. Цена: пул растёт с 59^2 до (59+N)^2.
-    //
-    // ПОРЯДОК ВАЖЕН: индекс символа = его позиция здесь. Добавлять только В КОНЕЦ, иначе клиент
-    // и сервер разъедутся молча, как это уже было с лишней кавычкой в WireAlphabet.
     public static readonly string[] Fragments =
     [
-        "https://", "http://", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
+        "/todos/", "localhost:", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
         "/api/", "/v1/", "/r/", "/comments/", ".html", ".php", ".json",
         "json", "html", "index", "search", "image", "video", "data", "list", "item",
-        "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "://", "com"
+        "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "/users/", "com"
     ];
 
     public static int SymbolCount(string alphabet) => alphabet.Length + Fragments.Length;
 
-    // Индекс -> текст. Первые alphabet.Length индексов это одиночные буквы, дальше фрагменты.
-    public static string SymbolOf(string alphabet, int index) =>
-        index < alphabet.Length ? alphabet[index].ToString() : Fragments[index - alphabet.Length];
+    public static string SymbolOf(string alphabet, int index) => index < alphabet.Length ? alphabet[index].ToString() : Fragments[index - alphabet.Length];
 
-    // Символы, которыми нельзя писать САМ запрос:
-    //   # начинает фрагмент, % начинает percent-encoding, [ ] зарезервированы под IPv6-литералы.
-    // / и ? остаются - в query-строке они легальны (в пути нет, поэтому руны и едут в query).
-    // Выводится детерминированно из исходного алфавита, передавать отдельно не нужно.
-    public const string WireUnsafe = "#%[]";
+    public const string UrlUnsafe = "#%[]/?";
 
-    public static string WireAlphabetOf(string alphabet)
+    public static string RuneAlphabetOf(string alphabet)
     {
-        var sb = new System.Text.StringBuilder();
+        var runeAlphabet = new StringBuilder();
 
-        foreach (char c in alphabet) if (WireUnsafe.IndexOf(c) < 0) sb.Append(c);
+        foreach (char c in alphabet) if (UrlUnsafe.IndexOf(c) < 0) runeAlphabet.Append(c);
 
-        return sb.ToString();
+        return runeAlphabet.ToString();
     }
 
-    // Один кусок: wire-разряды -> значение -> runeSize СИМВОЛОВ -> их текст.
-    // Символ это буква или фрагмент из Fragments, поэтому длина результата в символах фиксирована,
-    // а в ЗНАКАХ - нет: один кусок может нести и два знака, и шестнадцать.
-    public static string DecodeRune(string wire, string wireAlphabet, string alphabet, int runeSize)
+    public static long ValueOf(string rune, string runeAlphabet)
     {
         long value = 0;
 
-        foreach (char c in wire)
+        foreach (char c in rune)
         {
-            int digit = wireAlphabet.IndexOf(c);
+            int digit = runeAlphabet.IndexOf(c);
 
-            if (digit < 0) throw new Exception($"domain error: wire symbol '{c}' is not in wire alphabet");
+            if (digit < 0) throw new Exception($"domain error: rune symbol '{c}' is not in rune alphabet");
 
-            value = value * wireAlphabet.Length + digit;
+            value = value * runeAlphabet.Length + digit;
         }
 
-        int symbols = SymbolCount(alphabet);
-        var parts = new string[runeSize];
+        return value;
+    }
+
+    public static int[] IndexesOf(string rune, string runeAlphabet, int runeSize, int symbols)
+    {
+        long value = ValueOf(rune, runeAlphabet);
+        var indexes = new int[runeSize];
 
         for (int i = runeSize - 1; i >= 0; i--)
         {
-            parts[i] = SymbolOf(alphabet, (int)(value % symbols));
+            indexes[i] = (int)(value % symbols);
             value /= symbols;
         }
+
+        return indexes;
+    }
+
+    public static bool IsFragment(int index, string alphabet) => index >= alphabet.Length;
+
+    public static bool HasFragment(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    {
+        foreach (int index in IndexesOf(rune, runeAlphabet, runeSize, symbols)) if (IsFragment(index, alphabet)) return true;
+
+        return false;
+    }
+
+    public static readonly string[] DirectFragments = ["", "o", ".com/", "."];
+
+    public static string FragmentateUnrune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    {
+        int[] indexes = IndexesOf(rune, runeAlphabet, runeSize, symbols);
+        var parts = new string[runeSize];
+
+        for (int i = 0; i < runeSize; i++) parts[i] = SymbolOf(alphabet, indexes[i]);
 
         return string.Concat(parts);
     }
 
-    public static int TailSpan(string alphabet)
+    public static string DirectUnrune(string rune, string runeAlphabet, string alphabet, int chars)
     {
-        int s = SymbolCount(alphabet);
+        long value = ValueOf(rune, runeAlphabet);
 
-        return 1 + s + s * s;
-    }
+        int piece = (int)(value % DirectFragments.Length);
+        value /= DirectFragments.Length;
 
-    public static string DecodeTail(string wire, string wireAlphabet, string alphabet)
-    {
-        long value = 0;
+        var text = new char[chars];
 
-        foreach (char c in wire)
+        for (int i = chars - 1; i >= 0; i--)
         {
-            int digit = wireAlphabet.IndexOf(c);
-
-            if (digit < 0) throw new Exception($"domain error: wire symbol '{c}' is not in wire alphabet");
-
-            value = value * wireAlphabet.Length + digit;
+            text[i] = alphabet[(int)(value % alphabet.Length)];
+            value /= alphabet.Length;
         }
 
-        int s = SymbolCount(alphabet);
-
-        if (value >= TailSpan(alphabet)) throw new Exception($"domain error: tail value {value} is out of range");
-
-        if (value == 0) return "";
-
-        if (value <= s) return SymbolOf(alphabet, (int)value - 1);
-
-        long two = value - 1 - s;
-
-        return SymbolOf(alphabet, (int)(two / s)) + SymbolOf(alphabet, (int)(two % s));
+        return new string(text) + DirectFragments[piece];
     }
 
-    // Растит дерево из ГОТОВОГО текста тем же правилом, что и энкодер: жадно матчим самый длинный
-    // известный префикс, добавляем ровно одно расширение, сдвигаемся на длину матча.
-    // Нужно для простого режима: там дерево ничем не кормится (руны не адресуют узлы), и без этого
-    // оно никогда не прогреется. КРИТИЧНО: клиент и сервер обязаны звать это на ОДНОМ И ТОМ ЖЕ
-    // тексте, иначе деревья разъедутся и tree-режим начнёт врать.
-    public static void Learn(string text, IArenaTreeRunes<char> runes)
+    public const char Pad = ':';
+
+    public static string TrimPad(string text, int runeSize)
     {
-        if (string.IsNullOrEmpty(text)) return;
+        int cut = 0;
 
-        int pos = 0;
+        while (cut < runeSize && cut < text.Length && text[text.Length - 1 - cut] == Pad) cut++;
 
-        while (pos < text.Length)
-        {
-            var node = runes.Root;
-            int depth = 0;
-
-            while (pos + depth < text.Length && node.Next.TryGetValue(text[pos + depth], out int childId))
-            {
-                node = runes.Get(childId);
-                depth++;
-            }
-
-            if (pos + depth < text.Length) runes.From(node, text[pos + depth]);
-
-            // depth==0 бывает только если символа нет даже в преседе - иначе зациклимся
-            pos += depth == 0 ? 1 : depth;
-        }
+        return text[..^cut];
     }
 
-    // Во сколько раз tree-режим плотнее простого для этого текста при текущем дереве.
-    // Простой режим - всегда 1 исходный символ на 1 wire-символ, поэтому знаменатель = text.Length.
-    // Считает БЕЗ роста дерева (чистая оценка, дерево не трогает).
-    public static double TreeDensity(string text, string alphabet, IArenaTreeRunes<char> runes)
+//    private static int BaseForRune(int runeSize)
+//    {
+//        if (runeSize < 1) return 0;
+//        if (runeSize == 1) return int.MaxValue;
+//
+//        int lo = 1, hi = 46340; // 46340^2 - предел даже для руны из двух разрядов
+//
+//        while (lo < hi)
+//        {
+//            int mid = lo + (hi - lo + 1) / 2;
+//
+//            if (FitsInInt(mid, runeSize)) lo = mid;
+//            else hi = mid - 1;
+//        }
+//
+//        return lo;
+//    }
+
+    public static int[] Compress(string input, string alphabet, int group, int baseRune)
     {
-        if (string.IsNullOrEmpty(text)) return 0;
+        if (string.IsNullOrEmpty(input) || group < 1) return [];
 
-        int symbolSpan = alphabet.Length + 1;
-        int wireChars = 0;
-        int pos = 0;
+        if (input.Length % group != 0) return [];
 
-        while (pos < text.Length)
-        {
-            var node = runes.Root;
-            int depth = 0;
+        int n = input.Length / group;
+        int[] res = new int[n];
 
-            while (pos + depth < text.Length && node.Next.TryGetValue(text[pos + depth], out int childId))
-            {
-                node = runes.Get(childId);
-                depth++;
-            }
-
-            long wireValue = (long)node.Id * symbolSpan + (pos + depth < text.Length ? 0 : alphabet.Length);
-
-            // сколько base-alphabet разрядов нужно, чтобы записать wireValue
-            int digits = 1;
-            for (long v = wireValue; v >= alphabet.Length; v /= alphabet.Length) digits++;
-
-            wireChars += digits;
-            pos += depth == 0 ? 1 : depth;
-        }
-
-        return wireChars == 0 ? 0 : (double)text.Length / wireChars;
-    }
-
-    public static int[] Rune(string s, string alphabet)
-    {
-        if (string.IsNullOrEmpty(s) || s.Length % 2 != 0 || string.IsNullOrEmpty(alphabet)) return [];
-        int L = alphabet.Length, n = s.Length / 2;
-        var r = new int[n];
         for (int b = 0; b < n; b++)
         {
-            int i1 = alphabet.IndexOf(s[b * 2]), i2 = alphabet.IndexOf(s[b * 2 + 1]);
-            if (i1 < 0 || i2 < 0) return [];
-            r[b] = i1 * L + i2;
+            int acc = 0;
+
+            for (int k = 0; k < group; k++)
+            {
+                int idx = alphabet.IndexOf(input[b * group + k]);
+
+                if (idx < 0) return [];
+
+                acc = acc * baseRune + idx;
+            }
+
+            res[b] = acc;
         }
-        return r;
+
+        return res;
     }
 
-    public static string Derune(int[] ids, string a)
+    public static string Decompress(int[] input, string alphabet, int groupSize, int baseRune)
     {
-        if (ids is null || ids.Length == 0 || string.IsNullOrEmpty(a)) return "";
-        int L = a.Length;
-        var c = new char[ids.Length * 2];
-        for (int b = 0; b < ids.Length; b++) { c[b * 2] = a[ids[b] / L]; c[b * 2 + 1] = a[ids[b] % L]; }
-        return new string(c);
+        if (input == null || input.Length == 0 || groupSize < 1) return "";
+
+        char[] block = new char[groupSize];
+        var text = new StringBuilder();
+
+        foreach (int id in input)
+        {
+            int rest = id;
+
+            for (int k = groupSize - 1; k >= 0; k--)
+            {
+                block[k] = alphabet[rest % baseRune];
+                rest /= baseRune;
+            }
+
+            text.Append(block);
+        }
+
+        return text.ToString();
     }
 
+//    public static TypeCombine TypeFrom<TRune>(TRune symbol, string alphabet) where TRune : notnull => true switch
+//    {
+//        _ when IsFragmentate(RuneFrom(symbol), alphabet) => TypeCombine.Fragmentate,
+//        _ when IsDirect(RuneFrom(symbol), alphabet) => TypeCombine.Direct,
+//        _ => throw new Exception($"domain error: unknown type symbol '{symbol}'")
+//    };
 
-    public static CompressedResult CompressRecursive(string s, string alphabet, int target) => CompressRecursive(s, alphabet, target, new List<string> { alphabet });
+//    private static bool FitsInInt(int b, int runeSize)
+//    {
+//        long limit = (long)int.MaxValue + 1;
+//        long p = 1;
+//
+//        for (int i = 0; i < runeSize; i++)
+//        {
+//            p *= b;
+//
+//            if (p > limit) return false;
+//        }
+//
+//        return true;
+//    }
 
-    public static CompressedResult CompressRecursive(string s, string alphabet, int target, List<string> levels)
-    {
-        int[] cur = Rune(s, alphabet);
+//    private static char RuneFrom<TRune>(TRune symbol) where TRune : notnull => symbol switch
+//    {
+//        char c => c,
+//        int i => (char)i,
+//        _ => throw new Exception($"domain error: unsupported rune type '{typeof(TRune)}'")
+//    };
+//
+//    private static bool IsFragmentate(char symbol, string alphabet) => alphabet.IndexOf(symbol) < 0;
+//    private static bool IsDirect(int index, string alphabet) => index >= alphabet.Length;
 
-        if (cur.Length <= target || cur.Length % 2 != 0 || cur.Length == 0)
-            return new CompressedResult(cur, levels);
 
-        string str = new(cur.Select(id => (char)id).ToArray());
-        string nextAlphabet = alphabet + str;
-
-        levels.Add(nextAlphabet);
-
-        return CompressRecursive(str, nextAlphabet, target, levels); // самовызов
-    }
-
-    public static string Derune(CompressedResult r) => Derune(r.runes, r.alphDmension, r.alphDmension.Count - 1);
-
-    private static string Derune(int[] ids, IReadOnlyList<string> levels, int level)
-    {
-        if (level == 0) return Derune(ids, levels[0]);
-
-        int[] next = Derune(ids, levels[level]).Select(c => (int)c).ToArray();
-
-        return Derune(next, levels, level - 1); // самовызов
-    }
 }

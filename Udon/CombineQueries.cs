@@ -6,284 +6,349 @@ using VRC.SDKBase;
 
 public class CombineQueries : UdonSharpBehaviour
 {
-    private const string baseUrl = "http://localhost:5017";
+    private const string baseUrl = CombineQueriesEnvironment.BaseUrl;
+
     private const string baseForwardUrl = "vink0s.com";
 
     private const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
-    private const string WireAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?@!$&'()*+,;=";
+    private const string RuneAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:@!$&'()*+,;=";
     private const string Digits = "0123456789";
+    private const string Upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     private readonly string[] Fragments = new string[]
     {
-        "https://", "http://", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
+        "/todos/", "localhost:", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
         "/api/", "/v1/", "/r/", "/comments/", ".html", ".php", ".json",
         "json", "html", "index", "search", "image", "video", "data", "list", "item",
-        "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "://", "com"
+        "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "/users/", "com"
     };
+
+    private readonly string[] DirectFragments = new string[] { "", "o", ".com/", "." };
+
+    private const int DirectPieces = 4;
 
     private const int FragmentCount = 35;
     private const int Symbols = 59 + FragmentCount;
 
     private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
 
+    private const string Scheme = "https";
+
+    private const string Token = CombineQueriesEnvironment.Token;
+
+    private const string AuthAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+    private const bool RequireCode = CombineQueriesEnvironment.RequireCode;
+
     private const int RuneSize = 3;
     private const string RuneSizeStr = "3";
-    private const int WireSize = 4;
-    private const int TailWireSize = 3;
+    private const int RuneWidth = 4;
     private const int NumSize = 4;
 
-    private const int MaxRunes = 256;
+    private const int MaxChunks = 256;
     private const int MaxHandles = 4096;
 
-    private readonly VRCUrl[] RunePool = PoolOf(baseUrl + "/c?r=", Symbols, WireAlphabet, RuneSize, WireSize);
-    private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/n?r=", Symbols, WireAlphabet, TailWireSize);
-    private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h?r=", MaxHandles);
+    private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
+    private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
+    private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
+    private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h/", MaxHandles);
+    private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
+    private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
 
-    private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr);
+    private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token);
 
     [Header("Where to report completion (optional)")]
     public UdonSharpBehaviour target;
     public string onDoneEvent = "OnQueryDone";
 
-    private int[] runes;
-    private int runeCount;
-    private int runeAt;
-    private int tailValue;
-    private bool busy;
-    private string pendingUrl = "";
+    [Header("Codeword typed in-world before Init/Remember")]
+    public string codeword = "";
+
+    public string LastError = "";
+    public string LastUrl = "";
+    public int LastSymbols;
 
     private const int PhaseIdle = 0;
     private const int PhaseInit = 1;
-    private const int PhaseRunes = 2;
+    private const int PhaseChunks = 2;
     private const int PhaseTail = 3;
     private const int PhaseHandle = 4;
+    private const int PhaseCode = 5;
+    private const int PhaseVerify = 6;
+
     private int phase;
+    private bool initOk;
+    private bool busy;
+    private bool chainInit;
+
+    private int[] queue;
+    private int queueLen;
+    private int queuePos;
+    private bool fragments = true;
+
+    private string pendingUrl = "";
+    private string forwarded = "";
 
     private string[] cachedUrls = new string[0];
     private int[] cachedHandles = new int[0];
 
-    public string InitInfo = string.Empty;
-    public string LastError = string.Empty;
-
-    private bool initOk;
-    private string forwarded = string.Empty;
-    private bool hasForwarded;
-
-    private bool lastCached;
-    private int lastRequests;
-
-    private float sendStartedAt;
-    private int lastSendMs;
-
-    public bool IsInitialized() => initOk;
-    public bool IsBusy() => busy;
-    public bool HasResult() => hasForwarded;
-
-    public bool LastSendWasCached() => lastCached;
-
-    public int LastRequestCount() => lastRequests;
-
-    public int LastSendMs() => lastSendMs;
-
-    public int SymbolsPerRune() => RuneSize;
-
-    public string TakeForwardedBody()
-    {
-        if (!hasForwarded) return string.Empty;
-
-        hasForwarded = false;
-
-        return StringField(forwarded, "response");
-    }
-
     public void Init()
     {
+        if (busy) return;
+
         LastError = "";
 
-        if (Fragments.Length != FragmentCount)
-        {
-            LastError = "Fragments table and FragmentCount disagree - fix the constant";
-            Debug.LogError("CombineQueries: " + LastError);
-            return;
-        }
+        if (Fragments.Length != FragmentCount) { Fail("Fragments table and FragmentCount disagree"); return; }
+        if (RuneAlphabet.Length != Alphabet.Length - 6) { Fail("RuneAlphabet must be Alphabet minus #%[]/?"); return; }
 
-        if (WireAlphabet.Length != Alphabet.Length - 4)
-        {
-            LastError = "WireAlphabet must be Alphabet minus the four unsafe characters";
-            Debug.LogError("CombineQueries: " + LastError);
-            return;
-        }
+        if (!RequireCode) { busy = true; Load(PhaseInit, InitQuery); return; }
 
-        phase = PhaseInit;
-
-        VRCStringDownloader.LoadUrl(InitQuery, this);
+        StartCode(true);
     }
 
-    public void Send(string url)
+    public void Remember()
     {
-        if (busy) { Debug.LogWarning("CombineQueries: previous send is still in flight"); return; }
-        if (string.IsNullOrEmpty(url)) return;
+        if (busy || !RequireCode) return;
 
-        if (!initOk)
+        LastError = "";
+
+        StartCode(false);
+    }
+
+    private void StartCode(bool chain)
+    {
+        chainInit = chain;
+
+        queueLen = codeword.Length;
+        queue = new int[queueLen];
+
+        for (int i = 0; i < queueLen; i++)
         {
-            LastError = "Init has not run - call Init first, then Send";
-            Debug.LogError("CombineQueries: " + LastError);
-            return;
+            int index = AuthAlphabet.IndexOf(codeword[i]);
+
+            if (index < 0) { Fail("codeword must be lowercase letters and digits only"); return; }
+
+            queue[i] = index;
         }
 
-        pendingUrl = url;
         busy = true;
-        sendStartedAt = Time.time;
+        queuePos = 0;
 
-        int cached = HandleOf(url);
-
-        if (cached >= 0)
-        {
-            phase = PhaseHandle;
-            lastCached = true;
-            lastRequests = 1;
-
-            VRCStringDownloader.LoadUrl(HandlePool[cached], this);
-            return;
-        }
-
-        SendFull(url);
+        SendCode();
     }
 
-    private void SendFull(string url)
+    private void SendCode()
     {
-        int[] symbols = SymbolsOf(url);
+        if (queuePos < queueLen) { Load(PhaseCode, AuthPool[queue[queuePos]]); return; }
 
-        if (symbols == null)
-        {
-            LastError = "Character outside the alphabet";
-            Debug.LogError("CombineQueries: " + LastError);
-            busy = false;
-            return;
-        }
-
-        int used = symbols.Length;
-
-        runeCount = used / RuneSize;
-
-        int rest = used - runeCount * RuneSize;
-
-        if (runeCount > MaxRunes)
-        {
-            LastError = "Url needs more than " + MaxRunes + " runes";
-            Debug.LogError("CombineQueries: " + LastError);
-            busy = false;
-            return;
-        }
-
-        runes = new int[runeCount];
-
-        for (int i = 0; i < runeCount; i++)
-        {
-            int v = 0;
-
-            for (int j = 0; j < RuneSize; j++) v = v * Symbols + symbols[i * RuneSize + j];
-
-            runes[i] = v;
-        }
-
-        if (rest == 0) tailValue = 0;
-        else if (rest == 1) tailValue = 1 + symbols[used - 1];
-        else tailValue = 1 + Symbols + symbols[used - 2] * Symbols + symbols[used - 1];
-
-        runeAt = 0;
-        lastCached = false;
-        lastRequests = runeCount + 1;
-
-        SendNextRune();
+        Load(PhaseVerify, VerifyQuery);
     }
 
-    private void SendNextRune()
-    {
-        if (runeAt >= runeCount)
-        {
-            phase = PhaseTail;
+    public void Request(string url) => Send(url, true);
 
-            VRCStringDownloader.LoadUrl(TailPool[tailValue], this);
-            return;
+    public void RequestDirect(string url) => Send(url, false);
+
+    private void Send(string url, bool withFragments)
+    {
+        if (busy || string.IsNullOrEmpty(url)) return;
+
+        if (!initOk) { Fail("Init has not run - call Init first, then Request"); return; }
+
+        fragments = withFragments;
+
+        string payload = PayloadOf(url);
+
+        if (payload == "") { Fail("Init fixed the scheme to " + Scheme + ", this url asks for another one"); return; }
+
+        string problem = ProblemWith(payload);
+
+        if (problem != "") { Fail(problem + ": " + url); return; }
+
+        int[] symbols = SymbolsOf(payload);
+
+        if (symbols == null) { Fail("character outside the alphabet: " + url); return; }
+
+        LastError = "";
+        forwarded = "";
+        pendingUrl = payload;
+        LastUrl = url;
+        LastSymbols = symbols.Length;
+        busy = true;
+
+        if (!withFragments) { SendDirect(payload); return; }
+
+        int handle = HandleOf(payload);
+
+        if (handle < 0) { SendFull(symbols); return; }
+
+        Load(PhaseHandle, HandlePool[handle]);
+    }
+
+    public string TakeForwardedBody() => StringField(forwarded, "response");
+
+    private string PayloadOf(string url)
+    {
+        if (url.IndexOf(Scheme + "://") == 0) return url.Substring(Scheme.Length + 3);
+        if (url.IndexOf("http://") == 0 || url.IndexOf("https://") == 0) return "";
+
+        return url;
+    }
+
+    private string ProblemWith(string payload)
+    {
+        if (payload.IndexOf("/") == 0 || payload.IndexOf("?") == 0 || payload.IndexOf(":") == 0) return "url has no host";
+        if (payload.IndexOf(".") < 0 && payload.IndexOf("localhost") != 0) return "url has no domain";
+
+        for (int i = 0; i < payload.Length; i++)
+        {
+            if (Alphabet.IndexOf(payload[i]) >= 0) continue;
+
+            string letter = payload.Substring(i, 1);
+
+            if (letter == " ") return "url contains a space";
+            if (Upper.IndexOf(payload[i]) >= 0) return "the alphabet is lowercase only, this url has " + letter;
+
+            return "character outside the alphabet: " + letter;
         }
 
-        phase = PhaseRunes;
+        return "";
+    }
 
-        VRCStringDownloader.LoadUrl(RunePool[runes[runeAt]], this);
+    private void SendFull(int[] symbols)
+    {
+        queueLen = symbols.Length / RuneSize + 1;
+
+        if (queueLen > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
+
+        queue = new int[queueLen];
+
+        for (int i = 0; i < queueLen - 1; i++)
+        {
+            int value = 0;
+
+            for (int j = 0; j < RuneSize; j++) value = value * Symbols + symbols[i * RuneSize + j];
+
+            queue[i] = value;
+        }
+
+        int rest = symbols.Length - (queueLen - 1) * RuneSize;
+
+        if (rest == 0) queue[queueLen - 1] = 0;
+        else if (rest == 1) queue[queueLen - 1] = 1 + symbols[symbols.Length - 1];
+        else queue[queueLen - 1] = 1 + Symbols + symbols[symbols.Length - 2] * Symbols + symbols[symbols.Length - 1];
+
+        queuePos = 0;
+
+        SendNext();
+    }
+
+    private void SendDirect(string payload)
+    {
+        int[] buffer = new int[payload.Length];
+        int count = 0, at = 0;
+
+        while (at < payload.Length)
+        {
+            int value = 0;
+
+            for (int j = 0; j < RuneSize; j++)
+            {
+                value = value * Alphabet.Length + (at < payload.Length ? Alphabet.IndexOf(payload[at]) : Alphabet.IndexOf(':'));
+
+                if (at < payload.Length) at++;
+            }
+
+            int piece = 0, pieceLength = 0;
+
+            for (int f = 1; f < DirectPieces; f++)
+            {
+                if (DirectFragments[f].Length <= pieceLength || at + DirectFragments[f].Length >= payload.Length) continue;
+                if (payload.Substring(at, DirectFragments[f].Length) != DirectFragments[f]) continue;
+
+                piece = f;
+                pieceLength = DirectFragments[f].Length;
+            }
+
+            at += pieceLength;
+
+            buffer[count] = value * DirectPieces + piece;
+            count++;
+        }
+
+        if (count > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
+
+        queueLen = count;
+        queue = new int[queueLen];
+
+        for (int i = 0; i < queueLen; i++) queue[i] = buffer[i];
+
+        queue[queueLen - 1] /= DirectPieces;
+
+        queuePos = 0;
+
+        SendNext();
+    }
+
+    private void SendNext()
+    {
+        if (queuePos < queueLen - 1) { Load(PhaseChunks, ChunkPool[queue[queuePos]]); return; }
+
+        Load(PhaseTail, fragments ? TailPool[queue[queuePos]] : DirectTailPool[queue[queuePos]]);
     }
 
     public override void OnStringLoadSuccess(IVRCStringDownload response)
     {
-        if (phase == PhaseInit)
+        if (phase == PhaseCode) { queuePos++; SendCode(); return; }
+
+        if (phase == PhaseVerify)
         {
-            InitInfo = response.Result;
-            initOk = true;
-            LastError = "";
-            phase = PhaseIdle;
+            if (chainInit) { Load(PhaseInit, InitQuery); return; }
+
+            Done();
             return;
         }
 
-        if (phase == PhaseRunes)
-        {
-            runeAt++;
+        if (phase == PhaseInit) { initOk = true; Done(); return; }
 
-            SendNextRune();
-            return;
-        }
+        if (phase == PhaseChunks) { queuePos++; SendNext(); return; }
 
         if (phase == PhaseTail)
         {
             int handle = IntField(response.Result, "handle");
 
-            if (handle >= 0 && handle < MaxHandles) Remember(pendingUrl, handle);
+            if (handle >= 0 && handle < MaxHandles) Cache(pendingUrl, handle);
 
             forwarded = response.Result;
-            hasForwarded = true;
 
             Done();
             return;
         }
 
-        if (phase == PhaseHandle)
+        if (!BoolField(response.Result, "known"))
         {
-
-            if (!BoolField(response.Result, "known"))
-            {
-                Debug.LogWarning("CombineQueries: handle is stale, resending the full url");
-
-                Forget(pendingUrl);
-                SendFull(pendingUrl);
-                return;
-            }
-
-            forwarded = response.Result;
-            hasForwarded = true;
-
-            Done();
+            Forget(pendingUrl);
+            SendFull(SymbolsOf(pendingUrl));
+            return;
         }
+
+        forwarded = response.Result;
+
+        Done();
     }
 
     public override void OnStringLoadError(IVRCStringDownload result)
     {
-        if (phase == PhaseInit)
-        {
-            initOk = false;
-            InitInfo = "";
-            LastError = "NO CONNECTION TO SERVER (init): " + Describe(result);
+        if (phase == PhaseInit) initOk = false;
 
-            Debug.LogError("CombineQueries: init failed. " + Describe(result)
-                         + "\nCheck that the server is running and the address matches: " + InitQuery.Get());
+        if (phase == PhaseVerify) { Fail("codeword rejected"); return; }
 
-            phase = PhaseIdle;
-            return;
-        }
+        Fail((result.ErrorCode == 0 ? "host unreachable (server not running?), " : "") + result.Error);
+    }
 
-        LastError = "Send failed: " + Describe(result);
+    private void Load(int nextPhase, VRCUrl url)
+    {
+        phase = nextPhase;
 
-        Debug.LogError("CombineQueries: " + LastError);
-
-        Done();
+        VRCStringDownloader.LoadUrl(url, this);
     }
 
     private void Done()
@@ -291,20 +356,16 @@ public class CombineQueries : UdonSharpBehaviour
         busy = false;
         phase = PhaseIdle;
 
-        lastSendMs = (int)((Time.time - sendStartedAt) * 1000f);
-
-        if (target != null && onDoneEvent != "") { target.SendCustomEvent(onDoneEvent); return; }
-
-        Debug.LogWarning("CombineQueries: nobody to notify - set `target` and `onDoneEvent`. "
-                       + "The result is ready but will not be delivered.");
+        if (target != null && onDoneEvent != "") target.SendCustomEvent(onDoneEvent);
     }
 
-    private string Describe(IVRCStringDownload r)
+    private void Fail(string reason)
     {
+        LastError = reason;
 
-        if (r.ErrorCode == 0) return "host unreachable (server not running?), " + r.Error;
+        Debug.LogError("CombineQueries: " + reason);
 
-        return r.Error;
+        Done();
     }
 
     private int HandleOf(string url)
@@ -314,79 +375,71 @@ public class CombineQueries : UdonSharpBehaviour
         return -1;
     }
 
-    private void Remember(string url, int handle)
+    private void Cache(string url, int handle)
     {
         if (HandleOf(url) >= 0) return;
 
-        var u = new string[cachedUrls.Length + 1];
-        var h = new int[cachedHandles.Length + 1];
+        string[] urls = new string[cachedUrls.Length + 1];
+        int[] handles = new int[cachedHandles.Length + 1];
 
-        for (int i = 0; i < cachedUrls.Length; i++) { u[i] = cachedUrls[i]; h[i] = cachedHandles[i]; }
+        for (int i = 0; i < cachedUrls.Length; i++) { urls[i] = cachedUrls[i]; handles[i] = cachedHandles[i]; }
 
-        u[cachedUrls.Length] = url;
-        h[cachedHandles.Length] = handle;
+        urls[cachedUrls.Length] = url;
+        handles[cachedHandles.Length] = handle;
 
-        cachedUrls = u;
-        cachedHandles = h;
+        cachedUrls = urls;
+        cachedHandles = handles;
     }
 
     private void Forget(string url)
     {
-        int idx = -1;
-
-        for (int i = 0; i < cachedUrls.Length; i++) if (cachedUrls[i] == url) { idx = i; break; }
-
-        if (idx < 0) return;
-
-        var u = new string[cachedUrls.Length - 1];
-        var h = new int[cachedHandles.Length - 1];
-
-        int j = 0;
+        string[] urls = new string[cachedUrls.Length];
+        int[] handles = new int[cachedHandles.Length];
+        int kept = 0;
 
         for (int i = 0; i < cachedUrls.Length; i++)
         {
-            if (i == idx) continue;
+            if (cachedUrls[i] == url) continue;
 
-            u[j] = cachedUrls[i];
-            h[j] = cachedHandles[i];
-            j++;
+            urls[kept] = cachedUrls[i];
+            handles[kept] = cachedHandles[i];
+            kept++;
         }
 
-        cachedUrls = u;
-        cachedHandles = h;
+        cachedUrls = new string[kept];
+        cachedHandles = new int[kept];
+
+        for (int i = 0; i < kept; i++) { cachedUrls[i] = urls[i]; cachedHandles[i] = handles[i]; }
     }
 
     private int IntField(string json, string field)
     {
         if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return -1;
         if (root.TokenType != TokenType.DataDictionary) return -1;
-        if (!root.DataDictionary.TryGetValue(field, out DataToken v)) return -1;
-        if (v.TokenType != TokenType.Double) return -1;
+        if (!root.DataDictionary.TryGetValue(field, out DataToken value)) return -1;
 
-        return (int)v.Double;
+        return value.TokenType == TokenType.Double ? (int)value.Double : -1;
     }
 
     private string StringField(string json, string field)
     {
-        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return string.Empty;
-        if (root.TokenType != TokenType.DataDictionary) return string.Empty;
-        if (!root.DataDictionary.TryGetValue(field, out DataToken v)) return string.Empty;
-        if (v.TokenType != TokenType.String) return string.Empty;
+        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return "";
+        if (root.TokenType != TokenType.DataDictionary) return "";
+        if (!root.DataDictionary.TryGetValue(field, out DataToken value)) return "";
 
-        return v.String;
+        return value.TokenType == TokenType.String ? value.String : "";
     }
 
     private bool BoolField(string json, string field)
     {
         if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return false;
         if (root.TokenType != TokenType.DataDictionary) return false;
-        if (!root.DataDictionary.TryGetValue(field, out DataToken v)) return false;
-        if (v.TokenType != TokenType.Boolean) return false;
+        if (!root.DataDictionary.TryGetValue(field, out DataToken value)) return false;
 
-        return v.Boolean;
+        return value.TokenType == TokenType.Boolean && value.Boolean;
     }
 
-    private static VRCUrl[] PoolOf(string baseUri, int symbols, string wireAlph, int runeSize, int wireSize)
+    private static VRCUrl[] PoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth)
     {
         int total = 1;
 
@@ -394,18 +447,41 @@ public class CombineQueries : UdonSharpBehaviour
 
         VRCUrl[] pool = new VRCUrl[total];
 
-        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + WiresOf(v, wireAlph, wireSize));
+        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v, runeAlph, runeWidth));
 
         return pool;
     }
 
-    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string wireAlph, int wireSize)
+    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth)
     {
-        int total = 1 + symbols + symbols * symbols;
+        int pad = Alphabet.IndexOf(':');
+
+        VRCUrl[] pool = new VRCUrl[1 + symbols + symbols * symbols];
+
+        for (int v = 0; v < pool.Length; v++)
+        {
+            int first = v == 0 ? pad : (v <= symbols ? v - 1 : (v - 1 - symbols) / symbols);
+            int second = v > symbols ? (v - 1 - symbols) % symbols : pad;
+
+            int value = first * symbols + second;
+
+            for (int i = 2; i < runeSize; i++) value = value * symbols + pad;
+
+            pool[v] = new VRCUrl(baseUri + RunesOf(value, runeAlph, runeWidth));
+        }
+
+        return pool;
+    }
+
+    private static VRCUrl[] DirectTailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth)
+    {
+        int total = 1;
+
+        for (int i = 0; i < runeSize; i++) total *= symbols;
 
         VRCUrl[] pool = new VRCUrl[total];
 
-        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + WiresOf(v, wireAlph, wireSize));
+        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v * DirectPieces, runeAlph, runeWidth));
 
         return pool;
     }
@@ -414,20 +490,28 @@ public class CombineQueries : UdonSharpBehaviour
     {
         VRCUrl[] pool = new VRCUrl[total];
 
-        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + WiresOf(v, Digits, NumSize));
+        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v, Digits, NumSize));
 
         return pool;
     }
 
-    private static string WiresOf(int value, string alph, int width)
+    private static VRCUrl[] AuthPoolOf(string baseUri, string authAlphabet)
     {
-        int len = alph.Length, rest = value;
+        VRCUrl[] pool = new VRCUrl[authAlphabet.Length];
+
+        for (int i = 0; i < authAlphabet.Length; i++) pool[i] = new VRCUrl(baseUri + authAlphabet[i]);
+
+        return pool;
+    }
+
+    private static string RunesOf(int value, string alph, int width)
+    {
         string runes = "";
 
         for (int d = 0; d < width; d++)
         {
-            runes = alph[rest % len] + runes;
-            rest /= len;
+            runes = alph[value % alph.Length] + runes;
+            value /= alph.Length;
         }
 
         return runes;
@@ -435,48 +519,35 @@ public class CombineQueries : UdonSharpBehaviour
 
     private int[] SymbolsOf(string url)
     {
-        int[] buf = new int[url.Length];
-        int n = 0, i = 0;
+        int[] buffer = new int[url.Length];
+        int count = 0, position = 0;
 
-        while (i < url.Length)
+        while (position < url.Length)
         {
-            int best = -1, bestLen = 0;
+            int best = -1, bestLength = 0;
 
-            for (int f = 0; f < Fragments.Length; f++)
+            for (int f = 0; fragments && f < Fragments.Length; f++)
             {
-                string frag = Fragments[f];
-
-                if (frag.Length <= bestLen) continue;
-                if (i + frag.Length > url.Length) continue;
-                if (url.Substring(i, frag.Length) != frag) continue;
+                if (Fragments[f].Length <= bestLength || position + Fragments[f].Length > url.Length) continue;
+                if (url.Substring(position, Fragments[f].Length) != Fragments[f]) continue;
 
                 best = f;
-                bestLen = frag.Length;
+                bestLength = Fragments[f].Length;
             }
 
-            if (best >= 0)
-            {
-                buf[n] = Alphabet.Length + best;
-                i += bestLen;
-            }
-            else
-            {
-                int letter = Alphabet.IndexOf(url[i]);
+            int letter = best < 0 ? Alphabet.IndexOf(url[position]) : -1;
 
-                if (letter < 0) return null;
+            if (best < 0 && letter < 0) return null;
 
-                buf[n] = letter;
-                i++;
-            }
-
-            n++;
+            buffer[count] = best < 0 ? letter : Alphabet.Length + best;
+            position += best < 0 ? 1 : bestLength;
+            count++;
         }
 
-        int[] res = new int[n];
+        int[] symbols = new int[count];
 
-        for (int k = 0; k < n; k++) res[k] = buf[k];
+        for (int i = 0; i < count; i++) symbols[i] = buffer[i];
 
-        return res;
+        return symbols;
     }
-
 }

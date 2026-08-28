@@ -6,203 +6,99 @@ public class CombineQueriesTest : UdonSharpBehaviour
 {
     public CombineQueries client;
 
-    [Tooltip("0 = Init, 1 = send a single url, 2 = cycle through a list")]
+    [Tooltip("0 = Init, 1 = run the three-step comparison on testUrl, 2 = Remember (re-auth only)")]
     public int action = 0;
 
-    [Tooltip("What to send when action = 1")]
-    public string testUrl = "http://example.com/";
+    [Tooltip("Codeword the server expects (Auth:Codeword); empty in dev")]
+    public string codeword = "";
 
-    [Header("Cycling run (action = 2)")]
-
-    [Tooltip("A number is appended to it: .../todos/1, .../todos/2, ...")]
-    public string cycleBaseUrl = "https://dummyjson.com/todos/";
-
-    [Tooltip("How many different urls in one lap")]
-    public int cycleCount = 3;
-
-    [Tooltip("Extra seconds between sends while urls are unknown. 0 = platform cooldown only")]
-    public float cyclePeriod = 0f;
-
-    [Tooltip("Extra seconds between sends once cached. 0 = platform cooldown only")]
-    public float cachedPeriod = 0f;
+    [Tooltip("One url for all three steps: full send, then its hyper, then full send without the dictionary")]
+    public string testUrl = "https://dummyjson.com/todos/1";
 
     [Tooltip("Optional: status is written here")]
     public Text output;
 
-    private bool awaitingResult;
-    private bool cycling;
-    private int cycleIndex;
-    private int lap;
-    private float nextSendAt;
+    private const int StepFull = 0;
+    private const int StepHyper = 1;
+    private const int StepPlain = 2;
+
+    private bool ready;
+    private bool awaiting;
+    private bool running;
+    private int step;
+    private float startedAt;
+    private string board = "";
 
     public override void Interact()
     {
-        if (client == null) { Log("client is not assigned"); return; }
+        if (client == null) { Say("client is not assigned"); return; }
+        if (awaiting) return;
 
-        if (action == 0)
+        if (action == 0) { client.codeword = codeword; client.Init(); awaiting = true; Say("init sent"); return; }
+
+        if (action == 2) { client.codeword = codeword; client.Remember(); awaiting = true; Say("remember sent"); return; }
+
+        if (!ready) { Say("run Init first"); return; }
+
+        if (running) { running = false; Say("run stopped"); return; }
+
+        running = true;
+        step = StepFull;
+        board = testUrl + "   " + NumberOf(testUrl.Length) + " chars\n\n";
+
+        SendStep();
+    }
+
+    public void OnQueryDone()
+    {
+        awaiting = false;
+
+        if (client.LastError != "")
         {
-            client.Init();
-            Log("Init sent");
+            running = false;
 
+            Say("ERROR\n" + client.LastError);
             return;
         }
 
-        if (action == 1)
-        {
-            client.Send(testUrl);
-            awaitingResult = true;
-            Log("Send sent: " + testUrl);
+        if (!ready) { ready = true; Say("ready - touch the green cube"); return; }
+        if (!running) return;
 
-            return;
-        }
+        string line = TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   "
+                    + NumberOf(client.LastSymbols) + " symbols";
 
-        if (cycling)
-        {
-            cycling = false;
-            Log("cycle stopped");
+        board += line + "\n";
+        step++;
 
-            return;
-        }
+        Note(line);
+        Show("");
 
-        if (!client.IsInitialized()) { Log("run Init first"); return; }
+        if (step <= StepPlain) { SendStep(); return; }
 
-        cycling = true;
-        cycleIndex = 0;
-        lap = 1;
-        nextSendAt = Time.time;
+        running = false;
 
-        Log("cycle started: " + NumberOf(cycleCount) + " urls, one every " + cyclePeriod + "s");
+        Note("done");
+        Show("\n" + client.TakeForwardedBody());
     }
 
-    public void OnQueryDone() => ShowResult();
-
-    private void ShowResult()
+    private void SendStep()
     {
-        if (client.LastError != "") { Log("ERROR\n" + client.LastError); return; }
+        if (step == StepPlain) client.RequestDirect(testUrl);
+        else client.Request(testUrl);
 
-        string body = client.TakeForwardedBody();
+        awaiting = true;
+        startedAt = Time.time;
 
-        if (!cycling) { lastResult = "done\n" + body; Log(lastResult); return; }
-
-        bool cached = client.LastSendWasCached();
-
-        nextSendAt = Time.time + (cached ? cachedPeriod : cyclePeriod);
-
-        int ms = client.LastSendMs();
-
-        if (!cached) { fullSendMs = ms; fullRequests = client.LastRequestCount(); }
-
-        lastResult = Explain(cached, client.LastRequestCount(), ms) + "\n\n" + body;
-
-        Log(lastResult);
+        Note(TitleOf(step) + "   sending " + client.LastUrl);
+        Show(TitleOf(step) + "   sending...");
     }
 
-    private string lastResult = "";
-
-    private int fullSendMs = -1;
-
-    private string Explain(bool cached, int requests, int ms)
+    private string TitleOf(int at)
     {
-        string head = "lap " + NumberOf(lap) + "   url " + NumberOf(cycleIndex == 0 ? cycleCount : cycleIndex)
-                    + "/" + NumberOf(cycleCount) + "\n";
+        if (at == StepFull) return "1  combine, fragment symbols     ";
+        if (at == StepHyper) return "2  hyper, the server knew it     ";
 
-        if (cached)
-        {
-
-            string versus = fullSendMs > 0 ? "  vs " + NumberOf(fullSendMs) + " ms full" : "";
-
-            return head
-                 + "CACHED - 1 request - " + NumberOf(ms) + " ms" + versus + "\n\n"
-                 + "The server kept a short handle for this url, so the whole thing\n"
-                 + "fits in one request - one cooldown instead of " + NumberOf(fullRequests) + ".\n"
-                 + CostTable(requests);
-        }
-
-        return head
-             + "FULL SEND - " + NumberOf(requests) + " requests - " + NumberOf(ms) + " ms\n\n"
-             + "VRChat only loads urls baked in at build time, so an arbitrary url is\n"
-             + "spelled out " + NumberOf(client.SymbolsPerRune()) + " characters per request - and every request\n"
-             + "pays the platform's string-load cooldown. That, not bandwidth, is the cost.\n"
-             + CostTable(requests);
-    }
-
-    private string CostTable(int requests)
-    {
-        int rs = client.SymbolsPerRune();
-
-        int symbols = (fullRequests > 1 ? fullRequests - 1 : requests - 1) * rs;
-
-        string rows = "";
-
-        for (int w = 2; w <= 4; w++)
-        {
-            int runes = (symbols + w - 1) / w + 1;
-
-            rows += "   " + NumberOf(w) + " symbols/rune    " + NumberOf(runes) + " requests"
-                  + (w == rs ? "   <- now\n" : "\n");
-        }
-
-        return "\n" + NumberOf(symbols) + " symbols after base compression:\n"
-             + rows
-             + "   cached            1 request";
-    }
-
-    private int fullRequests = 0;
-
-    private string lastSeen = "";
-
-    void Update()
-    {
-        if (client == null) return;
-
-        if (awaitingResult && !client.IsBusy())
-        {
-            awaitingResult = false;
-
-            ShowResult();
-            return;
-        }
-
-        Tick();
-
-        string now;
-
-        if (client.LastError != "") now = "ERROR\n" + client.LastError;
-        else if (!client.IsInitialized()) now = "not initialized - touch the blue cube";
-        else if (client.IsBusy()) return;
-        else if (cycling) return;
-        else now = "ready - touch the green cube to start the demo\ninit: " + client.InitInfo;
-
-        if (now == lastSeen) return;
-
-        lastSeen = now;
-
-        Log(now);
-    }
-
-    private void Tick()
-    {
-        if (!cycling) return;
-
-        if (client.IsBusy()) return;
-
-        if (Time.time < nextSendAt) return;
-
-        string url = cycleBaseUrl + NumberOf(cycleIndex + 1);
-
-        client.Send(url);
-        awaitingResult = true;
-
-        Log("lap " + NumberOf(lap) + "   sending " + url + "\n\n" + lastResult);
-
-        nextSendAt = Time.time + cyclePeriod;
-
-        cycleIndex++;
-
-        if (cycleIndex < cycleCount) return;
-
-        cycleIndex = 0;
-        lap++;
+        return "3  full send, direct symbols only";
     }
 
     private string NumberOf(int value)
@@ -220,10 +116,16 @@ public class CombineQueriesTest : UdonSharpBehaviour
         return digits;
     }
 
-    private void Log(string msg)
-    {
-        Debug.Log("[CombineQueriesTest] " + msg);
+    private void Note(string line) => Debug.Log("[CombineQueriesTest] " + line);
 
-        if (output != null) output.text = msg;
+    private void Show(string tail)
+    {
+        if (output != null) output.text = board + tail;
+    }
+
+    private void Say(string message)
+    {
+        Note(message);
+        Show(message);
     }
 }
