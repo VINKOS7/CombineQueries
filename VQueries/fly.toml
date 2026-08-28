@@ -1,5 +1,5 @@
 app = "cq"
-primary_region = "waw"
+primary_region = "arn"
 
 [build]
   dockerfile = "VQueries/Dockerfile"

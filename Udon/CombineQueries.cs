@@ -6,14 +6,7 @@ using VRC.SDKBase;
 
 public class CombineQueries : UdonSharpBehaviour
 {
-    private const string DevUrl = "http://localhost:5017";
-    private const string AlphaUrl = "https://api.vink0s.com";
-
-#if CQ_ALPHA
-    private const string baseUrl = AlphaUrl;
-#else
-    private const string baseUrl = DevUrl;
-#endif
+    private const string baseUrl = CombineQueriesEnvironment.BaseUrl;
 
     private const string baseForwardUrl = "vink0s.com";
 
@@ -41,7 +34,10 @@ public class CombineQueries : UdonSharpBehaviour
 
     private const string Scheme = "https";
 
-    private const string Token = "p1hfc9m8vzjgrstd";
+    private const string Token = CombineQueriesEnvironment.Token;
+
+    private const string AuthAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+    private const bool RequireCode = CombineQueriesEnvironment.RequireCode;
 
     private const int RuneSize = 3;
     private const string RuneSizeStr = "3";
@@ -55,12 +51,17 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h/", MaxHandles);
+    private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
+    private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
 
     private readonly VRCUrl InitQuery = new VRCUrl(baseUrl + "/init?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token);
 
     [Header("Where to report completion (optional)")]
     public UdonSharpBehaviour target;
     public string onDoneEvent = "OnQueryDone";
+
+    [Header("Codeword typed in-world before Init/Remember")]
+    public string codeword = "";
 
     public string LastError = "";
     public string LastUrl = "";
@@ -71,10 +72,13 @@ public class CombineQueries : UdonSharpBehaviour
     private const int PhaseChunks = 2;
     private const int PhaseTail = 3;
     private const int PhaseHandle = 4;
+    private const int PhaseCode = 5;
+    private const int PhaseVerify = 6;
 
     private int phase;
     private bool initOk;
     private bool busy;
+    private bool chainInit;
 
     private int[] queue;
     private int queueLen;
@@ -96,9 +100,47 @@ public class CombineQueries : UdonSharpBehaviour
         if (Fragments.Length != FragmentCount) { Fail("Fragments table and FragmentCount disagree"); return; }
         if (RuneAlphabet.Length != Alphabet.Length - 6) { Fail("RuneAlphabet must be Alphabet minus #%[]/?"); return; }
 
-        busy = true;
+        if (!RequireCode) { busy = true; Load(PhaseInit, InitQuery); return; }
 
-        Load(PhaseInit, InitQuery);
+        StartCode(true);
+    }
+
+    public void Remember()
+    {
+        if (busy || !RequireCode) return;
+
+        LastError = "";
+
+        StartCode(false);
+    }
+
+    private void StartCode(bool chain)
+    {
+        chainInit = chain;
+
+        queueLen = codeword.Length;
+        queue = new int[queueLen];
+
+        for (int i = 0; i < queueLen; i++)
+        {
+            int index = AuthAlphabet.IndexOf(codeword[i]);
+
+            if (index < 0) { Fail("codeword must be lowercase letters and digits only"); return; }
+
+            queue[i] = index;
+        }
+
+        busy = true;
+        queuePos = 0;
+
+        SendCode();
+    }
+
+    private void SendCode()
+    {
+        if (queuePos < queueLen) { Load(PhaseCode, AuthPool[queue[queuePos]]); return; }
+
+        Load(PhaseVerify, VerifyQuery);
     }
 
     public void Request(string url) => Send(url, true);
@@ -255,6 +297,16 @@ public class CombineQueries : UdonSharpBehaviour
 
     public override void OnStringLoadSuccess(IVRCStringDownload response)
     {
+        if (phase == PhaseCode) { queuePos++; SendCode(); return; }
+
+        if (phase == PhaseVerify)
+        {
+            if (chainInit) { Load(PhaseInit, InitQuery); return; }
+
+            Done();
+            return;
+        }
+
         if (phase == PhaseInit) { initOk = true; Done(); return; }
 
         if (phase == PhaseChunks) { queuePos++; SendNext(); return; }
@@ -263,7 +315,7 @@ public class CombineQueries : UdonSharpBehaviour
         {
             int handle = IntField(response.Result, "handle");
 
-            if (handle >= 0 && handle < MaxHandles) Remember(pendingUrl, handle);
+            if (handle >= 0 && handle < MaxHandles) Cache(pendingUrl, handle);
 
             forwarded = response.Result;
 
@@ -286,6 +338,8 @@ public class CombineQueries : UdonSharpBehaviour
     public override void OnStringLoadError(IVRCStringDownload result)
     {
         if (phase == PhaseInit) initOk = false;
+
+        if (phase == PhaseVerify) { Fail("codeword rejected"); return; }
 
         Fail((result.ErrorCode == 0 ? "host unreachable (server not running?), " : "") + result.Error);
     }
@@ -321,7 +375,7 @@ public class CombineQueries : UdonSharpBehaviour
         return -1;
     }
 
-    private void Remember(string url, int handle)
+    private void Cache(string url, int handle)
     {
         if (HandleOf(url) >= 0) return;
 
@@ -437,6 +491,15 @@ public class CombineQueries : UdonSharpBehaviour
         VRCUrl[] pool = new VRCUrl[total];
 
         for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v, Digits, NumSize));
+
+        return pool;
+    }
+
+    private static VRCUrl[] AuthPoolOf(string baseUri, string authAlphabet)
+    {
+        VRCUrl[] pool = new VRCUrl[authAlphabet.Length];
+
+        for (int i = 0; i < authAlphabet.Length; i++) pool[i] = new VRCUrl(baseUri + authAlphabet[i]);
 
         return pool;
     }

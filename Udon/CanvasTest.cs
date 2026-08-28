@@ -6,7 +6,7 @@ using UnityEngine.UI;
 //
 // The client is a VRChat url forwarder: a world can only load urls that were baked in at build
 // time, so an arbitrary url is spelled out to the server one chunk at a time and the server
-// fetches it for you. Three members, nothing else is public.
+// fetches it for you.
 //
 //   client.Init()                     once, on world start. Hands the alphabet to the server.
 //   client.Request(url)               any url, any time after Init. One send at a time.

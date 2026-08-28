@@ -6,8 +6,11 @@ public class CombineQueriesTest : UdonSharpBehaviour
 {
     public CombineQueries client;
 
-    [Tooltip("0 = Init, 1 = run the three-step comparison on testUrl")]
+    [Tooltip("0 = Init, 1 = run the three-step comparison on testUrl, 2 = Remember (re-auth only)")]
     public int action = 0;
+
+    [Tooltip("Codeword the server expects (Auth:Codeword); empty in dev")]
+    public string codeword = "";
 
     [Tooltip("One url for all three steps: full send, then its hyper, then full send without the dictionary")]
     public string testUrl = "https://dummyjson.com/todos/1";
@@ -31,7 +34,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (client == null) { Say("client is not assigned"); return; }
         if (awaiting) return;
 
-        if (action == 0) { client.Init(); awaiting = true; Say("init sent"); return; }
+        if (action == 0) { client.codeword = codeword; client.Init(); awaiting = true; Say("init sent"); return; }
+
+        if (action == 2) { client.codeword = codeword; client.Remember(); awaiting = true; Say("remember sent"); return; }
 
         if (!ready) { Say("run Init first"); return; }
 
@@ -90,7 +95,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private string TitleOf(int at)
     {
-        if (at == StepFull) return "1  full send, fragment symbols   ";
+        if (at == StepFull) return "1  combine, fragment symbols     ";
         if (at == StepHyper) return "2  hyper, the server knew it     ";
 
         return "3  full send, direct symbols only";

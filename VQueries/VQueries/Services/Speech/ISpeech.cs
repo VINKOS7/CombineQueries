@@ -18,6 +18,16 @@ public interface ISpeech
 
     string DirectUnruned { get; }
 
+    string? Master { get; }
+
+    bool BindMaster(string key);
+
+    bool IsMaster(string key);
+
+    void AuthAppend(string key, string segment);
+
+    string AuthConsume(string key);
+
     void SetContext(ISetContextCommand<char> command);
 
     int Accept(string rune);
