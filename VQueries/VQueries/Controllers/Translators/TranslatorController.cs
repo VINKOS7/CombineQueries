@@ -22,8 +22,7 @@ public class TranslatorController : Controller
 
     [AllowAnonymous] [HttpGet("/k/{seg}")] public Task<CodeAppendResponse> Code(string seg) => _mediator.Send(new CodeAppendRequest { Segment = seg });
 
-    [AllowAnonymous]
-    [HttpGet("/kf")]
+    [AllowAnonymous] [HttpGet("/kf")]
     public async Task<IActionResult> CodeVerify()
     {
         var result = await _mediator.Send(new CodeVerifyRequest());
