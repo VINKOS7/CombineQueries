@@ -13,7 +13,7 @@ public class Speach : ISpeech
     public string Scheme { get; private set; } = "https";
     public string DirectRunes { get; set; } = string.Empty;
     public string DirectUnruned { get; set; } = string.Empty;
-    public string? Master { get; private set; }
+    public bool Authorized { get; private set; }
 
     private readonly List<string> _runes = [];
     private readonly List<string> _handles = [];
@@ -24,43 +24,26 @@ public class Speach : ISpeech
     private readonly StringBuilder direct = new();
     private readonly StringBuilder unruned = new();
 
-    private readonly Dictionary<string, string> _auth = [];
+    private string _authBuffer = "";
 
     private const int AuthMax = 128;
 
-    public bool BindMaster(string key)
+    public void Authorize() => Authorized = true;
+
+    public void AuthAppend(string segment)
     {
-        if (string.IsNullOrEmpty(key)) return false;
+        _authBuffer += segment;
 
-        if (Master is null) { Master = key; return true; }
-
-        return Master == key;
+        if (_authBuffer.Length > AuthMax) _authBuffer = _authBuffer[..AuthMax];
     }
 
-    public bool IsMaster(string key) => !string.IsNullOrEmpty(key) && Master == key;
-
-    public void AuthAppend(string key, string segment)
+    public string AuthConsume()
     {
-        if (string.IsNullOrEmpty(key)) return;
+        string current = _authBuffer;
 
-        _auth.TryGetValue(key, out string? current);
+        _authBuffer = "";
 
-        string next = (current ?? "") + segment;
-
-        if (next.Length > AuthMax) next = next[..AuthMax];
-
-        _auth[key] = next;
-    }
-
-    public string AuthConsume(string key)
-    {
-        if (string.IsNullOrEmpty(key)) return "";
-
-        _auth.TryGetValue(key, out string? current);
-
-        _auth.Remove(key);
-
-        return current ?? "";
+        return current;
     }
 
     public void SetContext(ISetContextCommand<char> command)

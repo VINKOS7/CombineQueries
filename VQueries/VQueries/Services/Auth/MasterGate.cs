@@ -15,24 +15,15 @@ public class MasterGate
         _enabled = !string.IsNullOrEmpty(configuration["Auth:Codeword"]);
     }
 
-    public static string KeyOf(HttpContext context)
-    {
-        // Behind Fly the socket peer is a proxy whose address hops between requests, which scatters the
-        // codeword letters across buffers. Fly-Client-IP is the real player, stable across the whole chain.
-        string fly = context.Request.Headers["Fly-Client-IP"].ToString();
-
-        if (!string.IsNullOrEmpty(fly)) return fly;
-
-        return context.Connection.RemoteIpAddress?.ToString() ?? "";
-    }
-
     public async Task Invoke(HttpContext context, ISpeech speech)
     {
         string path = context.Request.Path.Value ?? "";
 
-        if (_enabled && Gated(path) && !speech.IsMaster(KeyOf(context)))
+        // Single tenant: the codeword authorizes the whole server for the session, no per-IP binding.
+        // The client's address hops between IPv4/IPv6 and Fly's proxy, so keying by it would 403 at random.
+        if (_enabled && Gated(path) && !speech.Authorized)
         {
-            _logger.LogWarning("gate: {Path} from {Ip} rejected - not the master", path, KeyOf(context));
+            _logger.LogWarning("gate: {Path} rejected - server not authorized (codeword not accepted yet)", path);
 
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
 

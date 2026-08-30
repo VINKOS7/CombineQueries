@@ -73,7 +73,7 @@ public static class TestSceneBuilder
             var initTest = initBtn.AddUdonSharpComponent<CombineQueriesTest>();
             initTest.client = client;
             initTest.action = 0;
-            initTest.codeword = "grach";
+            initTest.codeword = CombineQueriesEnvironment.Codeword;
             initTest.output = text;
 
             var sendTest = sendBtn.AddUdonSharpComponent<CombineQueriesTest>();

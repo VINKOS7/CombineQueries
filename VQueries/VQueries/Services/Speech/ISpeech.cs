@@ -18,15 +18,13 @@ public interface ISpeech
 
     string DirectUnruned { get; }
 
-    string? Master { get; }
+    bool Authorized { get; }
 
-    bool BindMaster(string key);
+    void Authorize();
 
-    bool IsMaster(string key);
+    void AuthAppend(string segment);
 
-    void AuthAppend(string key, string segment);
-
-    string AuthConsume(string key);
+    string AuthConsume();
 
     void SetContext(ISetContextCommand<char> command);
 
