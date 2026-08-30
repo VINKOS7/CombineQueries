@@ -73,15 +73,12 @@ public static class TestSceneBuilder
             var initTest = initBtn.AddUdonSharpComponent<CombineQueriesTest>();
             initTest.client = client;
             initTest.action = 0;
+            initTest.codeword = CombineQueriesEnvironment.Codeword;
             initTest.output = text;
 
             var sendTest = sendBtn.AddUdonSharpComponent<CombineQueriesTest>();
             sendTest.client = client;
-            sendTest.action = 2;
-            sendTest.cycleBaseUrl = "https://dummyjson.com/todos/";
-            sendTest.cycleCount = 3;
-            sendTest.cyclePeriod = 0f;
-            sendTest.cachedPeriod = 0f;
+            sendTest.action = 1;
             sendTest.output = text;
 
             client.target = sendTest;
@@ -95,7 +92,6 @@ public static class TestSceneBuilder
         }
         catch (Exception e)
         {
-
             Debug.LogError("[TestSceneBuilder] Udon components were not attached: " + e.Message
                          + "\nGeometry is already in the scene. Wait for U# to finish compiling and run the menu item again.");
         }

@@ -1,4 +1,4 @@
-﻿using CombineQueries.Api.Services.AFST;
+﻿using CombineQueries.Api.Services.Speech;
 using CombineQueries.Api.Services.Forwarder;
 
 namespace CombineQueries.Api.Extensions;
@@ -15,7 +15,7 @@ public static class ApplicationExtensions
         // синглтон, а AddHttpClient: фабрика держит handler общим и РОТИРУЕТ его раз в 2 минуты.
         // Вечный синглтон ротации не делает и залипает на первом DNS-ответе намертво - для
         // форвардера по произвольным чужим доменам это реальная беда, а не теоретическая.
-        services.AddHttpClient<IForwarder, Forwarder>(client =>
+        services.AddHttpClient<IForward, Forwarder>(client =>
         {
             // Дефолт 100 секунд: мёртвый целевой хост держал бы наш запрос всё это время,
             // а Udon отвалится по своему таймауту сильно раньше и будет ждать впустую.
@@ -29,7 +29,7 @@ public static class ApplicationExtensions
         // ТОЛЬКО Singleton. AFST держит состояние МЕЖДУ запросами (алфавит, дерево, буфер склейки),
         // а Scoped создаёт новый экземпляр на каждый HTTP-запрос - тогда /init ставит контекст и он
         // тут же теряется, и первый же /m/ падает с "CRIT: /init не вызван".
-        services.AddSingleton<IAFST, AFST>();
+        services.AddSingleton<ISpeech, Speach>();
 
         return services;
     }

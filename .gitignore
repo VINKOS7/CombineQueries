@@ -58,3 +58,15 @@ Thumbs.db
 !/Unity/Packages/manifest.json
 !/Unity/Packages/vpm-manifest.json
 !/Unity/Packages/packages-lock.json
+
+### Настройки окружений - в них строки подключения и токены
+/VQueries/VQueries/appsettings.Alpha.json
+/VQueries/VQueries/appsettings.Production.json
+
+### Окружение клиента - адреса и токен, в гит не едут (рядом лежат .example)
+/Udon/CombineQueries.dev.cs
+/Udon/CombineQueries.alpha.cs
+/Unity/Assets/CombineQueries/CombineQueries.dev.cs
+/Unity/Assets/CombineQueries/CombineQueries.dev.cs.meta
+/Unity/Assets/CombineQueries/CombineQueries.alpha.cs
+/Unity/Assets/CombineQueries/CombineQueries.alpha.cs.meta
