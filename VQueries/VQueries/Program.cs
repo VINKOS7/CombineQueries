@@ -1,12 +1,24 @@
 using System.Reflection;
 
+using Microsoft.AspNetCore.HttpOverrides;
+
 using CombineQueries.Api.Extensions;
+using CombineQueries.Api.Services.Auth;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 
 builder.Services.AddControllers();
+
+builder.Services.AddHttpContextAccessor();
+
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 
 builder.Services.AddCors(options =>
@@ -35,14 +47,16 @@ builder.Services.AddMediatR(cfg =>
 
 var app = builder.Build();
 
+app.UseForwardedHeaders();
+
+app.UseMiddleware<MasterGate>();
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Alpha"))
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-
-app.UseHttpsRedirection();
 
 app.UseAuthorization();
 

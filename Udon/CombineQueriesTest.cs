@@ -14,15 +14,15 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     // code-only, not serialized - a scene value cannot override these and desync the labels
     private string testUrlFull = "https://dummyjson.com/comments/1";
-    private string testUrl = "https://dummyjson.com/products/1";
+    private string testUrl = "https://dummyjson.com/comments/post/1";
 
     [Tooltip("Optional: status is written here")]
     public Text output;
 
     private const int StepCombineFull = 0;
-    private const int StepCombinePartial = 1;
-    private const int StepDirectFull = 2;
-    private const int StepDirectPartial = 3;
+    private const int StepHyper = 1;
+    private const int StepCombinePartial = 2;
+    private const int StepDirect = 3;
 
     private bool ready;
     private bool awaiting;
@@ -47,7 +47,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
         running = true;
         step = StepCombineFull;
         board = testUrlFull + "   " + NumberOf(testUrlFull.Length) + " chars   (full - /comments/)\n"
-              + testUrl + "   " + NumberOf(testUrl.Length) + " chars   (partial - /products/)\n\n";
+              + testUrl + "   " + NumberOf(testUrl.Length) + " chars   (partial - post/1 is plain)\n\n";
 
         SendStep();
     }
@@ -76,7 +76,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
         Note(line);
         Show("\n" + client.TakeForwardedBody());
 
-        if (step <= StepDirectPartial) { SendStep(); return; }
+        if (step <= StepDirect) { SendStep(); return; }
 
         running = false;
 
@@ -86,8 +86,8 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private void SendStep()
     {
         if (step == StepCombineFull) client.Request(testUrlFull);
+        else if (step == StepHyper) client.Request(testUrlFull);
         else if (step == StepCombinePartial) client.Request(testUrl);
-        else if (step == StepDirectFull) client.RequestDirect(testUrlFull);
         else client.RequestDirect(testUrl);
 
         awaiting = true;
@@ -99,11 +99,11 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private string TitleOf(int at)
     {
-        if (at == StepCombineFull) return "1  combine, full-fragments (/comments/)";
-        if (at == StepCombinePartial) return "2  combine, partial        (/products/)";
-        if (at == StepDirectFull) return "3  direct                  (/comments/)";
+        if (at == StepCombineFull) return "1  combine, full-fragments (comments/1)     ";
+        if (at == StepHyper) return "2  hyper (cached handle)   (comments/1)     ";
+        if (at == StepCombinePartial) return "3  combine, partial        (comments/post/1)";
 
-        return "4  direct                  (/products/)";
+        return "4  direct                  (comments/post/1)";
     }
 
     private string NumberOf(int value)

@@ -8,6 +8,7 @@ using CombineQueries.Api.Controllers.Translators.Handlers.Init;
 using CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 using CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 using CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
+using CombineQueries.Api.Controllers.Translators.Handlers.Code;
 
 
 namespace CombineQueries.Api.Controllers.Translators;
@@ -18,6 +19,17 @@ public class TranslatorController : Controller
     private readonly IMediator _mediator;
 
     public TranslatorController(IMediator mediator) => _mediator = mediator;
+
+    [AllowAnonymous] [HttpGet("/k/{seg}")] public Task<CodeAppendResponse> Code(string seg) => _mediator.Send(new CodeAppendRequest { Segment = seg });
+
+    [AllowAnonymous]
+    [HttpGet("/kf")]
+    public async Task<IActionResult> CodeVerify()
+    {
+        var result = await _mediator.Send(new CodeVerifyRequest());
+
+        return result.Bound ? Ok(result) : StatusCode(StatusCodes.Status403Forbidden, result);
+    }
 
     [AllowAnonymous] [HttpGet("/init")] public Task<InitResponse> Init(InitRequest request) => _mediator.Send(request);
 

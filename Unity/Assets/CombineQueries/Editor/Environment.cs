@@ -1,18 +1,12 @@
+// Environment toggle (Tools > CombineQueries > Environment > Use alpha / Use dev) is disabled for now.
+// Set the target manually instead: Project Settings > Player > Scripting Define Symbols - add CQ_ALPHA
+// for the published (alpha) build, remove it for local dev. Uncomment below to bring the menu back.
+
+/*
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEngine;
 
-// Tools > CombineQueries > Environment
-//
-// The client bakes its whole VRCUrl pool from one const baseUrl, so a world can only ever talk to
-// one server. Which one is chosen at compile time by the CQ_ALPHA define:
-//
-//   dev    (no define)  -> DevUrl,   the server you run locally
-//   alpha  (CQ_ALPHA)   -> AlphaUrl, the server a published build talks to
-//
-// Switching flips the define for the ACTIVE build target, Unity recompiles UdonSharp, and the pool
-// is rebaked on the next world load. Check the mark here before every publish - a world built in
-// dev points at localhost and will look broken to everyone but you.
 public static class Environment
 {
     private const string Define = "CQ_ALPHA";
@@ -63,3 +57,4 @@ public static class Environment
                 + ". UdonSharp recompiles, the url pool is rebaked on the next world load.");
     }
 }
+*/
