@@ -29,4 +29,7 @@ public class Account : Entity, IAggregateRoot
 
         return true;
     }
+
+    // Поднимает доменное событие подключения. Dotseed диспатчит его на SaveEntitiesAsync.
+    public void Connect(string alphabet, string baseForwardUrl) => AddDomainEvent(new AccountConnected(alphabet, baseForwardUrl));
 }

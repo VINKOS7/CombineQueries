@@ -8,6 +8,7 @@ public interface ISetContextCommand<TRunes>
     int RuneSize { get; init; }
     string Scheme { get; init; }
     int DfaSize { get; init; }
+    int PageCount { get; init; }
 }
 
 public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
@@ -16,4 +17,5 @@ public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
     public int RuneSize { get; init; } = 2;
     public string Scheme { get; init; } = "https";
     public int DfaSize { get; init; }
+    public int PageCount { get; init; } = 1;
 }

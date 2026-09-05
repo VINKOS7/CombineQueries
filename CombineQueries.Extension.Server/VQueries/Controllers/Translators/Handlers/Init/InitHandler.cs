@@ -1,7 +1,6 @@
 using MediatR;
 
 using CombineQueries.Api.Services.Speech;
-using CombineQueries.Domain.Aggregates.Translator;
 using CombineQueries.Domain.Aggregates.Account;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Init;
@@ -9,15 +8,15 @@ namespace CombineQueries.Api.Controllers.Translators.Handlers.Init;
 public class InitHandler : IRequestHandler<InitRequest, InitResponse>
 {
     private readonly ILogger<InitHandler> _logger;
-    private readonly ITranslatorRepo _translatorRepo;
     private readonly IAccountRepo _accountRepo;
     private readonly IConfiguration _configuration;
     private readonly ISpeech _aFST;
 
-    public InitHandler(ITranslatorRepo translatorRepo, IAccountRepo accountRepo, IConfiguration configuration, ILogger<InitHandler> logger, ISpeech aFST)
+    // Один репозиторий — IAccountRepo (авторизация синхронна, это гейт). Персист Translator
+    // вынесен в ConnectedHandler через доменное событие: правило «один хендлер — один репо».
+    public InitHandler(IAccountRepo accountRepo, IConfiguration configuration, ILogger<InitHandler> logger, ISpeech aFST)
     {
         _logger = logger;
-        _translatorRepo = translatorRepo;
         _accountRepo = accountRepo;
         _configuration = configuration;
         _aFST = aFST;
@@ -27,7 +26,7 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
     {
         try
         {
-            if (!await Allowed(request.Token)) throw new Exception("auth error: token rejected");
+            var account = await Authorize(request.Token);
 
             int runeSize = request.RuneSize;
 
@@ -36,22 +35,28 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
             if (request.Scheme != "http" && request.Scheme != "https")
                 throw new Exception($"domain error: scheme={request.Scheme}, must be http or https");
 
-            var runes = Domain.Aggregates.Translator.Translator.ATRFrom(request.Alphabet);
-
             _aFST.SetContext(new SetContextCommand<char>
             {
                 Alphabet = request.Alphabet,
                 RuneSize = runeSize,
                 Scheme = request.Scheme,
-                DfaSize = request.DfaSize
+                DfaSize = request.DfaSize,
+                PageCount = request.PageCount
             });
 
-            _logger.LogInformation($"init: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}, scheme={request.Scheme}, dfaSize={request.DfaSize}");
+            _logger.LogInformation($"init: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}, scheme={request.Scheme}, dfaSize={request.DfaSize}, pageCount={request.PageCount}");
 
-            await TryPersist(runes, request, cancellationToken);
+            // Кросс-агрегатная связь через доменное событие: Account поднимает Connected, Dotseed
+            // диспатчит на SaveEntitiesAsync -> ConnectedHandler (со своим ITranslatorRepo) обеспечивает
+            // Translator. Без Account (конфиг-фолбэк / нет БД) - протокол просто в памяти.
+            if (account is not null)
+            {
+                account.Connect(request.Alphabet, request.baseForwardUrl);
 
-            // connect-сид: отдаём тёплый словарь мастера (хайперы + фрагменты), чтобы клиент
-            // сразу заполнил свои кэши. Пусто на холодном процессе - персист из БД это следующий слой.
+                await _accountRepo.UnitOfWork.SaveEntitiesAsync(cancellationToken);
+            }
+
+            // connect-сид: тёплый словарь мастера (корни + хайперы + фрагменты) + эхо структуры.
             return new()
             {
                 ShortDomain = "http://v.ro",
@@ -81,13 +86,17 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
         return seed;
     }
 
-    private async Task<bool> Allowed(string token)
+    // Возвращает tracked Account (чтобы поднять событие и сохранить) либо null при конфиг-фолбэке
+    // (БД недоступна). Бросает при отказе авторизации.
+    private async Task<Domain.Aggregates.Account.Account?> Authorize(string token)
     {
-        if (!Domain.Aggregates.Account.Account.IsToken(token)) return false;
+        if (!Domain.Aggregates.Account.Account.IsToken(token)) throw new Exception("auth error: token rejected");
+
+        Domain.Aggregates.Account.Account? account;
 
         try
         {
-            if (await _accountRepo.GetIdByTokenAsync(token) != Guid.Empty) return true;
+            account = await _accountRepo.GetByTokenAsync(token);
         }
         catch (Exception ex)
         {
@@ -96,33 +105,13 @@ public class InitHandler : IRequestHandler<InitRequest, InitResponse>
             _logger.LogWarning("init: accounts unavailable, configured token {Verdict} ({Kind}: {Message})",
                 configured ? "accepted" : "rejected", ex.GetType().Name, ex.Message);
 
-            return configured;
+            if (configured) return null;
+
+            throw new Exception("auth error: token rejected");
         }
 
-        return false;
-    }
+        if (account is null) throw new Exception("auth error: token rejected");
 
-    private async Task TryPersist(Domain.Aggregates.Translator.types.IArenaTreeRunes<char> runes, InitRequest request, CancellationToken cancellationToken)
-    {
-        try
-        {
-            if (await _translatorRepo.GetIdByAlphabetAsync(request.Alphabet) != Guid.Empty) return;
-
-            var translator = Domain.Aggregates.Translator.Translator.From(new InitCommand<char>
-            {
-                Runes = runes,
-                BaseForwardUrl = request.baseForwardUrl,
-                Alphabet = request.Alphabet
-            });
-
-            await _translatorRepo.AddAsync(translator);
-            await _translatorRepo.UnitOfWork.SaveChangesAsync(cancellationToken);
-
-            _logger.LogInformation($"init: new Translator persisted, ID={translator.Id}");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning($"init: persistence unavailable, running in memory only ({ex.GetType().Name}: {ex.Message})");
-        }
+        return account;
     }
 }

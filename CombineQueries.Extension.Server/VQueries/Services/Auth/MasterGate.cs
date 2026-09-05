@@ -34,5 +34,5 @@ public class MasterGate
     }
 
     private static bool Gated(string path) =>
-        path.StartsWith("/init") || path.StartsWith("/c/") || path.StartsWith("/t/") || path.StartsWith("/d/") || path.StartsWith("/h/") || path.StartsWith("/f/");
+        path.StartsWith("/init") || path.StartsWith("/c/") || path.StartsWith("/t/") || path.StartsWith("/d/") || path.StartsWith("/h/") || path.StartsWith("/f/") || path.StartsWith("/g/");
 }

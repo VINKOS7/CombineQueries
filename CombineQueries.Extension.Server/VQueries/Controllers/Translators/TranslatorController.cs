@@ -45,7 +45,10 @@ public class TranslatorController : Controller
     // Динамический фрагмент: /f/<id> вклинивает известную подстроку в поток сборки (см. FragmentHandler).
     [AllowAnonymous] [HttpGet("/f/{id:int}")] public Task<FragmentResponse> DyFragment(int id) => _mediator.Send(new FragmentRequest { Id = id });
 
-    [AllowAnonymous][HttpGet("/c/{runes}/f/{id:int}")] public Task<Handlers.CombineNew.CombineResponse> CombineNew(string runes) => _mediator.Send(new Handlers.CombineNew.CombineRequest { Runes = runes });
+    [AllowAnonymous][HttpGet("/c/{runes}/{id:int}/{page:int}/{q:int}")] public Task<Handlers.CombineNew.CombineResponse> CombineNew(string runes, int id, int page, int q) => _mediator.Send(new Handlers.CombineNew.CombineRequest { Runes = runes, Id = id, Page = page, Q = q });
+
+    // Развязка-2 (L3): /g/<page> ставит страницу для следующего VF.
+    [AllowAnonymous][HttpGet("/g/{page:int}")] public Task<Handlers.Page.PageResponse> Page(int page) => _mediator.Send(new Handlers.Page.PageRequest { Page = page });
 
 
 }

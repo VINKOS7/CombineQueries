@@ -21,4 +21,8 @@ public class AccountRepo : IAccountRepo
 
         return account is null ? Guid.Empty : account.Id;
     }
+
+    // Tracked: возвращаем сам Account, чтобы на нём поднять событие и сохранить (SaveEntitiesAsync).
+    public async Task<Account?> GetByTokenAsync(string token) =>
+        await _db.Accounts.FirstOrDefaultAsync(a => a.Token == token && a.Active);
 }

@@ -23,6 +23,9 @@ public record InitRequest : IRequest<InitResponse>
     // Размер адресной цепи фрагментов: сколько /f/-слотов клиент запёк. Сервер не выдаёт
     // id >= dfaSize (клиент такой не адресует). 0 = клиент фрагменты не поддерживает.
     [JsonProperty("dfaSize")] public int DfaSize { get; set; } = 0;
+
+    // Число страниц Развязки-2 (/g/): L3-ёмкость = dfaSize*pageCount. 1 = только L2.
+    [JsonProperty("pageCount")] public int PageCount { get; set; } = 1;
 }
 
 public record InitCommand<TSymbol> : IAddTranslator<TSymbol> where TSymbol : notnull

@@ -66,7 +66,10 @@ Thumbs.db
 ### Окружение клиента - адреса и токен, в гит не едут (рядом лежат .example)
 /Udon/CombineQueries.dev.cs
 /Udon/CombineQueries.alpha.cs
+/Udon/CombineQueries.prod.cs
 /CombineQueries/Assets/CombineQueries/CombineQueries.dev.cs
 /CombineQueries/Assets/CombineQueries/CombineQueries.dev.cs.meta
 /CombineQueries/Assets/CombineQueries/CombineQueries.alpha.cs
 /CombineQueries/Assets/CombineQueries/CombineQueries.alpha.cs.meta
+/CombineQueries/Assets/CombineQueries/CombineQueries.prod.cs
+/CombineQueries/Assets/CombineQueries/CombineQueries.prod.cs.meta
