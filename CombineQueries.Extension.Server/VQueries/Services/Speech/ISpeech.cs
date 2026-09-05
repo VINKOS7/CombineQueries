@@ -22,6 +22,8 @@ public interface ISpeech
 
     int DfaSize { get; }
 
+    int PageCount { get; }
+
     string DirectRunes { get; }
 
     string DirectUnruned { get; }
@@ -37,6 +39,8 @@ public interface ISpeech
     void SetContext(ISetContextCommand<char> command);
 
     int Accept(string rune);
+
+    void SetFragmentPage(int page);
 
     int AcceptVirtualFragment(int id);
 
