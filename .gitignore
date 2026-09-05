@@ -37,36 +37,36 @@ dist/
 Thumbs.db
 .DS_Store
 
-## Unity-проект (Unity/) - генерируемое не версионируем
-/Unity/[Ll]ibrary/
-/Unity/[Tt]emp/
-/Unity/[Oo]bj/
-/Unity/[Bb]uild*/
-/Unity/[Ll]ogs/
-/Unity/[Uu]ser[Ss]ettings/
-/Unity/ClientSimStorage/
-/Unity/*.sln
-/Unity/*.csproj
-/Unity/.vs/
+## Unity-проект (папка CombineQueries/) - генерируемое не версионируем
+/CombineQueries/[Ll]ibrary/
+/CombineQueries/[Tt]emp/
+/CombineQueries/[Oo]bj/
+/CombineQueries/[Bb]uild*/
+/CombineQueries/[Ll]ogs/
+/CombineQueries/[Uu]ser[Ss]ettings/
+/CombineQueries/ClientSimStorage/
+/CombineQueries/*.sln
+/CombineQueries/*.csproj
+/CombineQueries/.vs/
 
 ### Результат компиляции UdonSharp, ~107 МБ. Пересобирается при первом открытии.
-/Unity/Assets/SerializedUdonPrograms/
-/Unity/Assets/SerializedUdonPrograms.meta
+/CombineQueries/Assets/SerializedUdonPrograms/
+/CombineQueries/Assets/SerializedUdonPrograms.meta
 
 ### Пакеты ставит VCC по манифестам - в репо едут только они
-/Unity/Packages/*
-!/Unity/Packages/manifest.json
-!/Unity/Packages/vpm-manifest.json
-!/Unity/Packages/packages-lock.json
+/CombineQueries/Packages/*
+!/CombineQueries/Packages/manifest.json
+!/CombineQueries/Packages/vpm-manifest.json
+!/CombineQueries/Packages/packages-lock.json
 
 ### Настройки окружений - в них строки подключения и токены
-/VQueries/VQueries/appsettings.Alpha.json
-/VQueries/VQueries/appsettings.Production.json
+/CombineQueries.Extension.Server/VQueries/appsettings.Alpha.json
+/CombineQueries.Extension.Server/VQueries/appsettings.Production.json
 
 ### Окружение клиента - адреса и токен, в гит не едут (рядом лежат .example)
 /Udon/CombineQueries.dev.cs
 /Udon/CombineQueries.alpha.cs
-/Unity/Assets/CombineQueries/CombineQueries.dev.cs
-/Unity/Assets/CombineQueries/CombineQueries.dev.cs.meta
-/Unity/Assets/CombineQueries/CombineQueries.alpha.cs
-/Unity/Assets/CombineQueries/CombineQueries.alpha.cs.meta
+/CombineQueries/Assets/CombineQueries/CombineQueries.dev.cs
+/CombineQueries/Assets/CombineQueries/CombineQueries.dev.cs.meta
+/CombineQueries/Assets/CombineQueries/CombineQueries.alpha.cs
+/CombineQueries/Assets/CombineQueries/CombineQueries.alpha.cs.meta

@@ -4,5 +4,6 @@ public static class CombineQueriesEnvironment
     public const string BaseUrl = "https://cq.fly.dev";
     public const string Token = "p1hfc9m8vzjgrstd";
     public const bool RequireCode = true;
+    public const string Codeword = "";
 }
 #endif
