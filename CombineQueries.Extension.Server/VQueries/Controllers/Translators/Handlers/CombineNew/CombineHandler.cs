@@ -33,9 +33,11 @@ public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech) : IR
         // тогда и этот лог не имеет смысла, поэтому, да, скорее всего он там фрагменты определяет сразу, хммм, ну пока напишу как должно быть, L1 константный задаваемый клиентом 
         else if (speech.ResolveVirtualFragment(request.Id) is null) received = speech.Accept(request.Runes);
         else received = speech.AcceptVirtualFragment(request.Id);
+        // еще о виртуал, тот должен сам думать о L2/3
+        // еще, по идее received, еще по факту сообщает, найден ли в VFs, или иное в чем смысла нет, а вот сообщить в каком L(k) нашелся, и его id или индекс какой, можно синхронить 
 
         switch (received)
-        {
+        {// надо как-то не обязательно эти case, но этими логами, подружить с ответом древа
             case -2: logger.LogWarning("combine: id {Id} is unknown VF - assembly will drop it", request.Id);
                 break;
             case -1: logger.LogWarning("combine: id {Id} is unknown VF - assembly will drop it", request.Id);
@@ -45,6 +47,15 @@ public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech) : IR
             case 1: logger.LogInformation("combine: id {Id} accepted", request.Id);
                 break;
             case 2: logger.LogInformation("combine: id {Id} accepted and completed", request.Id);
+                break;
+            case -3:
+                logger.LogInformation("combine: id {Id} accepted and completed from FL1", request.Id);
+                break;
+            case -4:
+                logger.LogInformation("combine: id {Id} accepted and completed from VFL2", request.Id);
+                break;
+            case -5:
+                logger.LogInformation("combine: id {Id} accepted and completed from VFL3", request.Id);
                 break;
             default: logger.LogInformation("combine: rune {Received} accepted, {Kind}", received, fragmentate ? "with fragments" : "direct");
                 break;
