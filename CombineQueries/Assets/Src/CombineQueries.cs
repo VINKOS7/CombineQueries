@@ -90,13 +90,20 @@ public class CombineQueries : UdonSharpBehaviour
     //
     // Не путать с hypers=on|off: тот решает, попадают ли НОВЫЕ цепочки в БД (накопленное читается
     // в любом случае), а этот - стереть ли хайперы, накопленные в памяти сервера.
+#if CQ_RELEASE
+    // В релизе сброса не просим вовсе: сервер уважает флаг только в dev, а мир, куда зашли игроки,
+    // забывать накопленное не должен ни при каких настройках сервера.
+    private const bool resetHypers = false;
+    private const string ResetHypersStr = "false";
+#else
     private const bool resetHypers = true;
     private const string ResetHypersStr = "true";
+#endif
 
-    // Копить ли НОВЫЕ цепочки в БД сервера. В dev - нет: гиперизация живёт в ОЗУ сервера, а в базе
-    // лежит ровно один хайпер, посеянный dev-миграцией, - его и видно в дампе. Накопленное при
-    // этом читается всегда, флаг гасит только рост.
-    private const string GrowHypersStr = "off";
+    // Копить ли НОВЫЕ цепочки в БД сервера. Задаёт мод сборки: dev - "off" (гиперизация живёт в
+    // ОЗУ сервера, в базе только посев из миграции), release - "on". Накопленное читается всегда,
+    // флаг гасит только рост.
+    private const string GrowHypersStr = CombineQueriesEnvironment.Hypers;
 
     // Роут combine: /c/{runes}/{id}/{page}/{hop}/{q}. Чанк - q=0 (остальное нули), VF - q=1
     // (руна-сентинел, реальные offset/page), Развязка-3 - hop>0. Хвост, хайпер и код своими роутами.
@@ -444,7 +451,9 @@ public class CombineQueries : UdonSharpBehaviour
         {
             queue[0] = jump; queueKind[0] = 4; at = 1;
 
+#if !CQ_RELEASE
             Debug.Log("[CombineQueries] hyper: jump " + jump + " covers all " + skip + " combine steps, tail still goes");
+#endif
         }
 
         for (int i = skip; i < count; i++) { queue[at] = q[i]; queueKind[at] = k[i]; at++; }
@@ -571,7 +580,13 @@ public class CombineQueries : UdonSharpBehaviour
 
             SeedFromConnect(response.Result);
 
+            // В релизе про хайперы молчим: сколько их приехало и когда сработал прыжок - это
+            // внутренняя кухня, по ней видно «до и после персиста», а игроку она ни к чему.
+#if CQ_RELEASE
+            Debug.Log("[CombineQueries] connect: ready, roots " + roots.Length + ", fragments " + cachedFragments.Length);
+#else
             Debug.Log("[CombineQueries] connect: ready, roots " + roots.Length + ", fragments " + cachedFragments.Length + ", jumps " + jumps.Count);
+#endif
 
             Done();
             return;

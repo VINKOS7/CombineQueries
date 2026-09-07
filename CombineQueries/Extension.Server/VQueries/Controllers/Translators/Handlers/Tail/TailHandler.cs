@@ -95,9 +95,15 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
 
             if (translator is null) return;
 
-            translator.Remember(handle, url);
+            // Хайперы - и плоский handle -> url, и узлы дерева - пишутся только при hypers=on.
+            // С off накопленное читается, но не пополняется: очередь узлов забираем и выбрасываем,
+            // иначе при включении в БД уехала бы вся история этого запуска разом.
+            if (speech.Hypers)
+            {
+                translator.Remember(handle, url);
 
-            if (speech.Hypers) foreach (var (id, parentId, step, chainUrl) in speech.TakeChains()) translator.Grow(id, parentId, step, chainUrl);
+                foreach (var (id, parentId, step, chainUrl) in speech.TakeChains()) translator.Grow(id, parentId, step, chainUrl);
+            }
             else speech.TakeChains();
 
             // адрес перевалил за потолок, получат Level=Infinite.

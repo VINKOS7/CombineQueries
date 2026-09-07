@@ -1,6 +1,6 @@
-// Environment toggle (Tools > CombineQueries > Environment > Use alpha / Use dev) is disabled for now.
-// Set the target manually instead: Project Settings > Player > Scripting Define Symbols - add CQ_ALPHA
-// for the published (alpha) build, remove it for local dev. Uncomment below to bring the menu back.
+// Environment toggle (Tools > CombineQueries > Environment > Use release / Use dev) is disabled for now.
+// Set the target manually instead: Project Settings > Player > Scripting Define Symbols - add CQ_RELEASE
+// for the published (release) build, remove it for local dev. Uncomment below to bring the menu back.
 
 /*
 using UnityEditor;
@@ -9,19 +9,19 @@ using UnityEngine;
 
 public static class Environment
 {
-    private const string Define = "CQ_ALPHA";
+    private const string Define = "CQ_RELEASE";
 
     [MenuItem("Tools/CombineQueries/Environment/Use dev")]
     private static void UseDev() => Set(false);
 
-    [MenuItem("Tools/CombineQueries/Environment/Use alpha")]
+    [MenuItem("Tools/CombineQueries/Environment/Use release")]
     private static void UseAlpha() => Set(true);
 
     [MenuItem("Tools/CombineQueries/Environment/Use dev", true)]
     private static bool DevMark() { Menu.SetChecked("Tools/CombineQueries/Environment/Use dev", !IsAlpha()); return true; }
 
-    [MenuItem("Tools/CombineQueries/Environment/Use alpha", true)]
-    private static bool AlphaMark() { Menu.SetChecked("Tools/CombineQueries/Environment/Use alpha", IsAlpha()); return true; }
+    [MenuItem("Tools/CombineQueries/Environment/Use release", true)]
+    private static bool AlphaMark() { Menu.SetChecked("Tools/CombineQueries/Environment/Use release", IsAlpha()); return true; }
 
     private static NamedBuildTarget Target =>
         NamedBuildTarget.FromBuildTargetGroup(BuildPipeline.GetBuildTargetGroup(EditorUserBuildSettings.activeBuildTarget));

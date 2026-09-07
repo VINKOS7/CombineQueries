@@ -1,9 +1,14 @@
-#if !CQ_ALPHA
+#if !CQ_RELEASE
 public static class CombineQueriesEnvironment
 {
     public const string BaseUrl = "http://localhost:5017";
     public const string Token = "p1hfc9m8vzjgrstd";
     public const bool RequireCode = false;
+
+    // Копить ли НОВЫЕ цепочки хайперов в БД. В dev - нет: гиперизация живёт в ОЗУ сервера, а в
+    // базе лежит ровно один посев из миграции, его и показывает дамп. Накопленное читается всегда.
+    public const string Hypers = "off";
+
     public const string Codeword = "";
 }
 #endif

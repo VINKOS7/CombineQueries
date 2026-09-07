@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>CombineQueries.Dump</AssemblyName>
+    <RootNamespace>CombineQueries.Dump</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Ходим в базу напрямую, мимо EF: дамп обязан показывать то, что в таблицах ЛЕЖИТ,
+         а не то, что о них думает модель. -->
+    <PackageReference Include="Npgsql" Version="9.0.4" />
+  </ItemGroup>
+
+</Project>

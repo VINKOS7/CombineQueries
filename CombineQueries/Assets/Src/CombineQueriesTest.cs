@@ -130,14 +130,22 @@ public class CombineQueriesTest : UdonSharpBehaviour
             return;
         }
 
-        if (!ready) { ready = true; Say("ready - touch the green cube"); Note("connect: jumps from db " + NumberOf(client.SeedJumps)); return; }
+        if (!ready)
+        {
+            ready = true;
+
+            Say("ready - touch the green cube");
+
+            if (JumpsNote() != "") Note("connect: " + JumpsNote());
+
+            return;
+        }
         if (!running) return;
 
         // Реконнект ничего не собирает: у него интересно ровно одно число - сколько прыжков
         // сервер вернул из БД. Следующий шаг пойдёт уже по ним.
         string line = step == StepRejoin
-            ? TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   "
-              + "jumps from db " + NumberOf(client.SeedJumps)
+            ? TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   " + JumpsNote()
             : TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   "
               + NumberOf(client.LastQueries) + " queries   "
               + "runes " + NumberOf(client.LastChunks)
@@ -156,6 +164,17 @@ public class CombineQueriesTest : UdonSharpBehaviour
         running = false;
 
         Note("done");
+    }
+
+    // Сколько прыжков приехало из БД. В релизе - пусто: по этому числу и видно «до и после
+    // персиста», а мир такие подробности показывать не должен.
+    private string JumpsNote()
+    {
+#if CQ_RELEASE
+        return "";
+#else
+        return "jumps from db " + NumberOf(client.SeedJumps);
+#endif
     }
 
     private void SendStep()
