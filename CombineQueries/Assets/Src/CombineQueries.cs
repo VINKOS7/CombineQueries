@@ -70,6 +70,15 @@ public class CombineQueries : UdonSharpBehaviour
     private const bool rememberInfinite = false;
     private const string RememberInfiniteStr = "false";
 
+    // Подпись хвоста: сколько у неё значений. Каждый /t/ несёт очередную из выданной на connect
+    // последовательности, сервер сверяет - не совпало, приём валится до повторного connect.
+    //
+    // Живёт в хвосте, а не в чанках: у /t/ свой маленький пул (8931), подпись множит только его -
+    // 71 448 ссылок, +5,6% к общему. В /c/ то же самое стоило бы 830 584 * SignValues.
+    //
+    // ВЫКЛЮЧАТЕЛЬ: 1 - подпись единственная, пул не растёт, сверка тривиальна. Вырезать код не надо.
+    private const int SignValues = 8;
+
     // Сбрасывать ли хайперы при инициализации карты. Собранный однажды url дальше уходит одним
     // запросом /h/, и повторный прогон теста меряет уже не сборку - без сброса второй заход
     // бессмыслен.
@@ -82,7 +91,7 @@ public class CombineQueries : UdonSharpBehaviour
     // Роут combine: /c/{runes}/{id}/{page}/{hop}/{q}. Чанк - q=0 (остальное нули), VF - q=1
     // (руна-сентинел, реальные offset/page), Развязка-3 - hop>0. Хвост, хайпер и код своими роутами.
     private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", "/0/0/0/0", Symbols, RuneAlphabet, RuneSize, RuneWidth);
-    private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth);
+    private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth, SignValues);
     private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h/", MaxHandles);
     private readonly VRCUrl[] VfPool = VfPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, dfaSize, pageCount);
@@ -133,6 +142,11 @@ public class CombineQueries : UdonSharpBehaviour
 
     private string[] cachedUrls = new string[0];
     private int[] cachedHandles = new int[0];
+
+    // Последовательность подписей с connect. Позиции обязаны идти в ногу с серверными: разъедутся -
+    // сервер посчитает хвост чужим и свалит приём.
+    private string signs = "";
+    private int signPos;
 
     // Словарь динамических фрагментов, зеркало серверного: адрес -> подстрока.
     // Заполняется сидом из connect и пиггибэком из /t/.
@@ -456,7 +470,14 @@ public class CombineQueries : UdonSharpBehaviour
         // Развязка-3: старший разряд бесконечного адреса, сдвиг делает сервер.
         if (kind == 3) { Load(PhaseFragment, HopPool[queue[queuePos]]); return; }
 
-        Load(PhaseTail, fragments ? TailPool[queue[queuePos]] : DirectTailPool[queue[queuePos]]);
+        // Direct подписи не несёт: сервер сверяет её только на fragmentate-хвосте.
+        if (!fragments) { Load(PhaseTail, DirectTailPool[queue[queuePos]]); return; }
+
+        int sign = signs.Length == 0 ? 0 : signs[signPos] - '0';
+
+        if (signs.Length > 0) signPos = (signPos + 1) % signs.Length;
+
+        Load(PhaseTail, TailPool[queue[queuePos] * SignValues + sign]);
     }
 
     public override void OnStringLoadSuccess(IVRCStringDownload response)
@@ -664,6 +685,11 @@ public class CombineQueries : UdonSharpBehaviour
             if (n == list.Count) roots = r;
         }
 
+        // Подписи хвоста. Позицию сбрасываем вместе с ними: сервер на connect рождает новую
+        // последовательность и начинает с нуля.
+        signs = DictString(dict, "signs");
+        signPos = 0;
+
         LearnFragmentList(dict);
     }
 
@@ -813,13 +839,17 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth)
+    // Индекс = хвост * signs + подпись. Печём каждое сочетание: подпись обязана быть в самом URL,
+    // добавить её в рантайме нельзя - VRCUrl запечён целиком.
+    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth, int signs)
     {
         int pad = Alphabet.IndexOf(':');
 
-        VRCUrl[] pool = new VRCUrl[1 + symbols + symbols * symbols];
+        int tails = 1 + symbols + symbols * symbols;
 
-        for (int v = 0; v < pool.Length; v++)
+        VRCUrl[] pool = new VRCUrl[tails * signs];
+
+        for (int v = 0; v < tails; v++)
         {
             int first = v == 0 ? pad : (v <= symbols ? v - 1 : (v - 1 - symbols) / symbols);
             int second = v > symbols ? (v - 1 - symbols) % symbols : pad;
@@ -828,7 +858,9 @@ public class CombineQueries : UdonSharpBehaviour
 
             for (int i = 2; i < runeSize; i++) value = value * symbols + pad;
 
-            pool[v] = new VRCUrl(baseUri + RunesOf(value, runeAlph, runeWidth));
+            string runes = RunesOf(value, runeAlph, runeWidth);
+
+            for (int sign = 0; sign < signs; sign++) pool[v * signs + sign] = new VRCUrl(baseUri + runes + "/" + sign);
         }
 
         return pool;
