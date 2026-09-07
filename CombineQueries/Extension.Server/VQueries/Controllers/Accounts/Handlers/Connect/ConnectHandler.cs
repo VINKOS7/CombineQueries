@@ -63,7 +63,12 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
                 await _accountRepo.UnitOfWork.SaveEntitiesAsync(cancellationToken);
 
-                Warm(await TranslatorOf(request, cancellationToken));
+                var translator = await TranslatorOf(request, cancellationToken);
+
+                // Сброс идёт ДО заливки: иначе Warm тут же вернул бы забытое обратно из персиста.
+                await ForgetHypers(request, translator, cancellationToken);
+
+                Warm(translator);
             }
 
             return new()
@@ -72,6 +77,7 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
                 RuneSize = runeSize,
                 Scheme = request.Scheme,
                 DfaSize = _aFST.DfaSize,
+                Signs = _aFST.Signs,
                 Roots = Translator.Fragments,
                 Hypers = Seed(_aFST.HyperUrls, (i, u) => new HyperSeed(i, u), SeedLimit),
                 Fragments = Seed(_aFST.FragmentTexts, (i, t) => new FragmentSeed(i, t), Math.Min(SeedLimit, Reach(request)))
@@ -114,6 +120,26 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
             return null;
         }
+    }
+
+    // Забывает хайперы и в рантайме, и в персисте - иначе они вернулись бы на ближайшем connect.
+    // Только Development: на релизе это стирало бы то, что накопил живой мир.
+    private async Task ForgetHypers(ConnectRequest request, Domain.Aggregates.Translator.Translator? translator, CancellationToken cancellationToken)
+    {
+        if (!request.ResetHypers || !_environment.IsDevelopment()) return;
+
+        int forgotten = _aFST.HyperUrls.Count + (translator?.Hypers.Count ?? 0);
+
+        _aFST.ForgetHypers();
+
+        if (translator is not null && translator.Hypers.Count > 0)
+        {
+            translator.Hypers.Clear();
+
+            await _translatorRepo.UnitOfWork.SaveEntitiesAsync(cancellationToken);
+        }
+
+        _logger.LogInformation("connect: {Forgotten} hypers forgotten (dev reset)", forgotten);
     }
 
     // Тёплый словарь из персиста в рантайм. Адрес и handle - это индексы, поэтому строго по

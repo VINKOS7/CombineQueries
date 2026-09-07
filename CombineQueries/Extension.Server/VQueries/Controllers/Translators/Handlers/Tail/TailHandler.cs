@@ -18,8 +18,17 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
     {
         if (speech.Alphabet is null || speech.RuneAlphabet is null) throw new Exception("CRIT: /connect was not called");
 
-        // Подпись хвоста (Speech.CheckSign + Fault) готова, но НЕ включена: это обновление релиза.
-        // Включение = вернуть сегмент {sign} в роут /t/ и сверку здесь, плюс пул на клиенте.
+        // Подпись сверяется ДО сборки и до форварда: чужой хвост не должен увести наружу URL,
+        // собранный из чужих же чанков. Попытка ровно одна - дальше приём валится до connect.
+        // Выключение - на клиенте: SignValues=1 делает подпись единственной и сверку тривиальной.
+        if (request.Type == TypeQuery.Fragmentate && !speech.CheckSign(request.Sign))
+        {
+            speech.Fault($"tail sign {request.Sign} rejected");
+
+            logger.LogWarning("tail: sign {Sign} rejected, stream dropped until connect", request.Sign);
+
+            throw new Exception("auth error: tail sign rejected");
+        }
 
         if (request.Type != TypeQuery.Fragmentate && request.Type != TypeQuery.Direct) throw new ArgumentOutOfRangeException(nameof(request), request.Type, "Unexpected TypeCombine value");
 

@@ -78,6 +78,9 @@ public interface ISpeech
 
     string? Resolve(int handle);
 
+    // Сброс хайперов: нужен, чтобы прогон теста был повторяемым.
+    void ForgetHypers();
+
     long FirstSendMsOf(int handle);
 
     string? ResolveVirtualFragment(int id);

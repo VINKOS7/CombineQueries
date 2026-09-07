@@ -296,6 +296,14 @@ public class Speech : ISpeech
         return handle;
     }
 
+    // Сброс хайперов (dev): собранный url перестаёт отдаваться одним /h/ и снова идёт сборкой.
+    public void ForgetHypers()
+    {
+        _handles.Clear();
+        _byUrl.Clear();
+        _firstSendMs.Clear();
+    }
+
     public string? Resolve(int handle) => handle >= 0 && handle < _handles.Count ? _handles[handle] : null;
 
     public long FirstSendMsOf(int handle) => handle >= 0 && handle < _firstSendMs.Count ? _firstSendMs[handle] : -1;

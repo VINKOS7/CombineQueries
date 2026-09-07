@@ -70,6 +70,15 @@ public class CombineQueries : UdonSharpBehaviour
     private const bool rememberInfinite = false;
     private const string RememberInfiniteStr = "false";
 
+    // Сбрасывать ли хайперы при инициализации карты. Собранный однажды url дальше уходит одним
+    // запросом /h/, и повторный прогон теста меряет уже не сборку - без сброса второй заход
+    // бессмыслен.
+    //
+    // Едет параметром в самом connect, а не отдельным запросом: инициализация и есть connect,
+    // а лишний round-trip тут стоит дороже всего. Сервер уважает флаг ТОЛЬКО в dev.
+    private const bool resetHypers = true;
+    private const string ResetHypersStr = "true";
+
     // Роут combine: /c/{runes}/{id}/{page}/{hop}/{q}. Чанк - q=0 (остальное нули), VF - q=1
     // (руна-сентинел, реальные offset/page), Развязка-3 - hop>0. Хвост, хайпер и код своими роутами.
     private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", "/0/0/0/0", Symbols, RuneAlphabet, RuneSize, RuneWidth);
@@ -85,7 +94,7 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
 
-    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr);
+    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr);
 
     [Header("Where to report completion (optional)")]
     public UdonSharpBehaviour target;

@@ -13,16 +13,28 @@ public class CombineQueriesTest : UdonSharpBehaviour
     public string codeword = "";
 
     // code-only, not serialized - a scene value cannot override these and desync the labels
+    //
+    // Порядок демонстрации: сперва уровни словаря, потом хайпер, потом бесконечность двумя
+    // заходами, и только в конце частичное покрытие с прямой отправкой - они самые дорогие.
     private string testUrlFull = "https://dummyjson.com/comments/1";
+
+    // Бесконечность показываем ДВУМЯ РАЗНЫМИ url с общей длинной частью. Повтор одного и того же
+    // дал бы хайпер (клиент помнит url -> handle) и ничего про Infinite не сказал бы: на первом
+    // заходе сервер учит общую подстроку, на втором она уже адресуется.
+    private string testUrlLearn = "https://dummyjson.com/products?limit=10&skip=20";
+    private string testUrlLearned = "https://dummyjson.com/products?limit=10&skip=50";
+
     private string testUrl = "https://dummyjson.com/comments/post/1";
 
     [Tooltip("Optional: status is written here")]
     public Text output;
 
-    private const int StepCombineFull = 0;
+    private const int StepLevels = 0;
     private const int StepHyper = 1;
-    private const int StepCombinePartial = 2;
-    private const int StepDirect = 3;
+    private const int StepLearn = 2;
+    private const int StepLearned = 3;
+    private const int StepCombinePartial = 4;
+    private const int StepDirect = 5;
 
     private bool ready;
     private bool awaiting;
@@ -65,8 +77,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (running) { running = false; Say("run stopped"); return; }
 
         running = true;
-        step = StepCombineFull;
-        board = testUrlFull + "   " + NumberOf(testUrlFull.Length) + " chars   (full - /comments/)\n"
+        step = StepLevels;
+        board = testUrlFull + "   " + NumberOf(testUrlFull.Length) + " chars   (levels L1-L3)\n"
+              + testUrlLearn + "   " + NumberOf(testUrlLearn.Length) + " chars   (infinite: learn, then reuse)\n"
               + testUrl + "   " + NumberOf(testUrl.Length) + " chars   (partial - post/1 is plain)\n\n";
 
         SendStep();
@@ -105,8 +118,10 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private void SendStep()
     {
-        if (step == StepCombineFull) client.Request(testUrlFull);
+        if (step == StepLevels) client.Request(testUrlFull);
         else if (step == StepHyper) client.Request(testUrlFull);
+        else if (step == StepLearn) client.Request(testUrlLearn);
+        else if (step == StepLearned) client.Request(testUrlLearned);
         else if (step == StepCombinePartial) client.Request(testUrl);
         else client.RequestDirect(testUrl);
 
@@ -119,11 +134,13 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private string TitleOf(int at)
     {
-        if (at == StepCombineFull) return "1  combine, full-fragments (comments/1)     ";
-        if (at == StepHyper) return "2  hyper (cached handle)   (comments/1)     ";
-        if (at == StepCombinePartial) return "3  combine, partial        (comments/post/1)";
+        if (at == StepLevels) return "1  L1-L3 fragments        (comments/1)       ";
+        if (at == StepHyper) return "2  hyper (cached handle)  (comments/1)       ";
+        if (at == StepLearn) return "3  infinite, learning     (limit=10&skip=20) ";
+        if (at == StepLearned) return "4  infinite, learned      (limit=10&skip=50) ";
+        if (at == StepCombinePartial) return "5  combine, partial       (comments/post/1)";
 
-        return "4  direct                  (comments/post/1)";
+        return "6  direct                 (comments/post/1)";
     }
 
     private string NumberOf(int value)

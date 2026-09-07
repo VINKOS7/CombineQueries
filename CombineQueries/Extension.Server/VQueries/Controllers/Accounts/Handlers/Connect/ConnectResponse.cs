@@ -22,5 +22,9 @@ public record ConnectResponse
 
     // 35 корневых фрагментов-символов (L1). Клиент печёт только их КОЛИЧЕСТВО, а строки берёт
     // отсюда → удон перестаёт хардкодить словарь (спека: содержимое на беке).
+    // Последовательность подписей хвоста: клиент шлёт очередную в /t/, сервер сверяет.
+    // Не совпало - приём валится до повторного connect.
+    [JsonProperty("signs")] public string? Signs { get; set; }
+
     [JsonProperty("roots")] public IReadOnlyList<string>? Roots { get; set; }
 }
