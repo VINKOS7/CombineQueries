@@ -1,5 +1,7 @@
 using Dotseed.Domain;
 
+using CombineQueries.Domain.Aggregates.Account.Events;
+
 namespace CombineQueries.Domain.Aggregates.Account;
 
 public class Account : Entity, IAggregateRoot
@@ -32,24 +34,14 @@ public class Account : Entity, IAggregateRoot
         return true;
     }
 
-    // Первое подключение в сессии: аккаунт заявляет свой алфавит и базовый адрес. Dotseed диспатчит
-    // событие на SaveEntitiesAsync -> ConnectedHandler обеспечивает Translator.
-    //
-    // Событие ВОЗВРАЩАЕМ: обработчик уведомления результата не отдаёт, поэтому он кладёт добытый
-    // агрегат в само событие, а вызвавший забирает его отсюда после сохранения.
-    public AccountConnected Init(string alphabet, string baseForwardUrl) => Raise(alphabet, baseForwardUrl);
+    // Первое подключение в сессии. Dotseed диспатчит событие на SaveEntitiesAsync, и обработчик
+    // обеспечивает Translator под алфавит, стоящий в контексте сервера.
+    public void Init() => Raise();
 
     // Повторное подключение тем же контекстом: мир уже знает алфавит, ему нужен лишь тёплый словарь
     // заново (после гашения хоста или реконнекта). Событие то же - Translator ищется по алфавиту и
     // переиспользуется, а не заводится второй.
-    public AccountConnected Remember(string alphabet, string baseForwardUrl) => Raise(alphabet, baseForwardUrl);
+    public void Remember() => Raise();
 
-    private AccountConnected Raise(string alphabet, string baseForwardUrl)
-    {
-        var connected = new AccountConnected(alphabet, baseForwardUrl);
-
-        AddDomainEvent(connected);
-
-        return connected;
-    }
+    private void Raise() => AddDomainEvent(new AccountConnected());
 }

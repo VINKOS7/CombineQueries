@@ -81,6 +81,13 @@ public class CombineQueries : UdonSharpBehaviour
     // ВЫКЛЮЧАТЕЛЬ: 1 - подпись единственная, пул не растёт, сверка тривиальна. Вырезать код не надо.
     private const int SignValues = 8;
 
+    // Подпись прыжка - та же и полная, что у хвоста: прыжок САМ отдаёт собранный адрес наружу,
+    // значит по правам он равен хвосту, а не куску. Кольцо общее - /h/ и /t/ съедают по позиции.
+    //
+    // Цена: пул прыжков множится на SignValues (4096 -> 32768 ссылок, ~3 МБ). Это плата за то,
+    // что хайпер укладывается в ОДИН запрос вместо двух.
+    private const int JumpSignValues = SignValues;
+
     // Сбрасывать ли хайперы при инициализации карты. Собранный однажды url дальше уходит одним
     // запросом /h/, и повторный прогон теста меряет уже не сборку - без сброса второй заход
     // бессмыслен.
@@ -117,7 +124,7 @@ public class CombineQueries : UdonSharpBehaviour
     // ценой всего hopCount ссылок.
     private readonly VRCUrl[] HopPool = HopPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, hopCount);
     // Прыжок в точку ранее пройденной combine-цепочки: /h/<узел>.
-    private readonly VRCUrl[] JumpPool = NumPoolOf(baseUrl + "/h/", MaxJumps);
+    private readonly VRCUrl[] JumpPool = NumPoolOf(baseUrl + "/h/", MaxJumps, JumpSignValues);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
 
@@ -148,6 +155,10 @@ public class CombineQueries : UdonSharpBehaviour
     public int LastL2;
     public int LastL3;
     public int LastInfinite;
+
+    // Номер прыжка, которым ушёл последний адрес, или -1 - собирали с нуля. Нужен снаружи:
+    // у короткой цепочки прыжок не меняет ЧИСЛО запросов, и по счётчику его не видно.
+    public int LastJump = -1;
 
     // Сколько прыжков приехало сидом в connect: это ровно то, что сервер помнит из БД.
     // При resetHypers=true всегда 0 - dev-сброс стирает дерево вместе с хайперами.
@@ -436,10 +447,14 @@ public class CombineQueries : UdonSharpBehaviour
         // досылаем только хвост. Столько запросов и экономится - все, кроме двух.
         int jump = JumpOf(payload);
 
+        LastJump = -1;
+
         int skip = 0;
 
-        // Прыжок покрывает combine целиком, хвост в цепочку не входит и идёт всегда.
-        if (jump >= 0 && jump < MaxJumps) skip = count - 1;
+        // Прыжок закрывает адрес ЦЕЛИКОМ - сервер знает и хвост, поэтому форвардит сам.
+        // Правило простое: хайпер это один запрос. Не попали в словарь - идём обычной дорогой,
+        // combine + tail по динамической фрагментации.
+        if (jump >= 0 && jump < MaxJumps) skip = count;
 
         queueLen = count - skip + (skip > 0 ? 1 : 0);
         queue = new int[queueLen];
@@ -451,8 +466,10 @@ public class CombineQueries : UdonSharpBehaviour
         {
             queue[0] = jump; queueKind[0] = 4; at = 1;
 
+            LastJump = jump;
+
 #if !CQ_RELEASE
-            Debug.Log("[CombineQueries] hyper: jump " + jump + " covers all " + skip + " combine steps, tail still goes");
+            Debug.Log("[CombineQueries] hyper: jump " + jump + " replaces all " + skip + " queries with one");
 #endif
         }
 
@@ -487,6 +504,8 @@ public class CombineQueries : UdonSharpBehaviour
 
     private void SendDirect(string payload)
     {
+        LastJump = -1;
+
         int[] buffer = new int[payload.Length];
         int count = 0, at = 0;
 
@@ -545,17 +564,26 @@ public class CombineQueries : UdonSharpBehaviour
         // Развязка-3: старший разряд бесконечного адреса, сдвиг делает сервер.
         if (kind == 3) { Load(PhaseFragment, HopPool[queue[queuePos]]); return; }
 
-        // Прыжок в известную точку combine-цепочки.
-        if (kind == 4) { Load(PhaseJump, JumpPool[queue[queuePos]]); return; }
+        // Прыжок в известную точку combine-цепочки. Подпись берём из общего кольца - её позицию
+        // сервер сдвинет тем же движением, что и на хвосте.
+        if (kind == 4) { Load(PhaseJump, JumpPool[queue[queuePos] * JumpSignValues + NextSign() % JumpSignValues]); return; }
 
         // Direct подписи не несёт: сервер сверяет её только на fragmentate-хвосте.
         if (!fragments) { Load(PhaseTail, DirectTailPool[queue[queuePos]]); return; }
 
-        int sign = signs.Length == 0 ? 0 : signs[signPos] - '0';
+        Load(PhaseTail, TailPool[queue[queuePos] * SignValues + NextSign()]);
+    }
 
-        if (signs.Length > 0) signPos = (signPos + 1) % signs.Length;
+    // Очередная подпись кольца. Позицию двигают ОБА потребителя - и хвост, и прыжок.
+    private int NextSign()
+    {
+        if (signs.Length == 0) return 0;
 
-        Load(PhaseTail, TailPool[queue[queuePos] * SignValues + sign]);
+        int sign = signs[signPos] - '0';
+
+        signPos = (signPos + 1) % signs.Length;
+
+        return sign;
     }
 
     public override void OnStringLoadSuccess(IVRCStringDownload response)
@@ -592,7 +620,36 @@ public class CombineQueries : UdonSharpBehaviour
             return;
         }
 
-        if (phase == PhaseChunks || phase == PhaseFragment || phase == PhaseJump) { queuePos++; SendNext(); return; }
+        if (phase == PhaseChunks || phase == PhaseFragment) { queuePos++; SendNext(); return; }
+
+        // Прыжок отдаёт адрес и тело сразу - это и есть весь запрос.
+        if (phase == PhaseJump)
+        {
+            // Сервер такого узла не знает (например, базу почистили): забываем прыжок и идём
+            // обычной дорогой - собираем адрес с нуля.
+            if (!BoolField(response.Result, "known"))
+            {
+                Debug.Log("[CombineQueries] hyper: jump " + LastJump + " unknown on server ("
+                    + StringField(response.Result, "note") + "), assembling instead");
+
+                jumps.Remove(pendingUrl);
+
+                LastJump = -1;
+
+                SendCombine(pendingUrl);
+                return;
+            }
+
+            LastChunks = 0;
+            LastL2 = 0;
+            LastL3 = 0;
+            LastInfinite = 0;
+
+            forwarded = response.Result;
+
+            Done();
+            return;
+        }
 
         if (phase == PhaseTail)
         {
@@ -626,7 +683,11 @@ public class CombineQueries : UdonSharpBehaviour
     // Секунд ожидания ответа. VRChat отбивает загрузку молча - ни успеха, ни ошибки, - и тогда
     // busy остаётся поднятым навсегда: клиент внешне «висит», а все следующие нажатия молча
     // выходят через if (busy). Сторож превращает это в понятную ошибку.
-    private const float Timeout = 20f;
+    //
+    // Порог с запасом: SDK САМ откладывает старт загрузки, выдерживая свой интервал между ними
+    // (в трассе это видно как StartAtCorrectTime). Мы же считаем время от вызова LoadUrl, то есть
+    // ждём и очередь SDK тоже. На 20 с сторож срабатывал вхолостую на живых запросах.
+    private const float Timeout = 60f;
 
     private float lastLoadAt;
 
@@ -652,7 +713,8 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (Time.time - lastLoadAt < Timeout - 1f) return;
 
-        Fail("no answer in " + Timeout + "s on phase " + phase + " - url blocked by the SDK or server unreachable");
+        Fail("no answer in " + Timeout + "s on phase " + phase + ", query " + LastQueries
+            + " of " + queueLen + " for " + LastUrl + " - url blocked by the SDK or server unreachable");
     }
 
     // Номер узла, который назвал сервер: сюда можно прыгнуть в следующий раз за этим же адресом.
@@ -665,7 +727,13 @@ public class CombineQueries : UdonSharpBehaviour
 
     private int JumpOf(string url)
     {
-        if (!jumps.TryGetValue(url, out DataToken value)) return -1;
+        if (!jumps.TryGetValue(url, out DataToken value))
+        {
+#if !CQ_RELEASE
+            if (jumps.Count > 0) Debug.Log("[CombineQueries] no jump for '" + url + "' (known " + jumps.Count + ")");
+#endif
+            return -1;
+        }
 
         return value.TokenType == TokenType.Int ? value.Int : -1;
     }
@@ -741,7 +809,16 @@ public class CombineQueries : UdonSharpBehaviour
             string url = DictString(item.DataDictionary, "url");
             int jump = DictInt(item.DataDictionary, "jump");
 
-            if (url != "" && jump >= 0) { jumps.SetValue(url, jump); SeedJumps++; }
+            if (url == "" || jump < 0) continue;
+
+            jumps.SetValue(url, jump);
+            SeedJumps++;
+
+            // Ключ словаря - адрес БЕЗ схемы, ровно в том виде, в каком его собирает сервер.
+            // Если прыжок не срабатывает, расходятся обычно именно ключи - печатаем первый.
+#if !CQ_RELEASE
+            if (SeedJumps == 1) Debug.Log("[CombineQueries] seed jump: '" + url + "' -> " + jump);
+#endif
         }
     }
 
@@ -931,11 +1008,18 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-    private static VRCUrl[] NumPoolOf(string baseUri, int total)
+    // Индекс = номер * signs + подпись. Как и у хвоста, подпись обязана быть в самом URL:
+    // печётся каждое сочетание, иначе её нельзя было бы поставить в рантайме.
+    private static VRCUrl[] NumPoolOf(string baseUri, int total, int signs)
     {
-        VRCUrl[] pool = new VRCUrl[total];
+        VRCUrl[] pool = new VRCUrl[total * signs];
 
-        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v, Digits, NumSize));
+        for (int v = 0; v < total; v++)
+        {
+            string num = RunesOf(v, Digits, NumSize);
+
+            for (int sign = 0; sign < signs; sign++) pool[v * signs + sign] = new VRCUrl(baseUri + num + "/" + sign);
+        }
 
         return pool;
     }

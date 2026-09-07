@@ -8,6 +8,10 @@ public record HyperResponse
 
     [JsonProperty("known")] public bool Known { get; set; }
 
+    // Что делать клиенту, если прыжок не сработал. Не ошибка: адрес просто собирается заново и
+    // на хвосте снова попадает в индекс.
+    [JsonProperty("note")] public string? Note { get; set; }
+
     [JsonProperty("forwardedUrl")] public string? ForwardedUrl { get; set; }
 
     [JsonProperty("response")] public string? Response { get; set; }

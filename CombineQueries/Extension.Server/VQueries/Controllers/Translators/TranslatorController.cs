@@ -23,7 +23,7 @@ public class TranslatorController : Controller
 
     [AllowAnonymous] [HttpGet("/d/{runes}")] public Task<TailResponse> Direct(string runes) => _mediator.Send(new TailRequest { Runes = runes, Type = TypeQuery.Direct });
 
-    [AllowAnonymous] [HttpGet("/h/{jump:int}")] public Task<HyperResponse> Hyper(int jump) => _mediator.Send(new HyperRequest { Value = jump });
+    [AllowAnonymous] [HttpGet("/h/{jump:int}/{sign:int}")] public Task<HyperResponse> Hyper(int jump, int sign) => _mediator.Send(new HyperRequest { Value = jump, Sign = sign });
 
     [AllowAnonymous] [HttpGet("/c/{runes}/{id:int}/{page:int}/{hop:int}/{q:int}")] public Task<CombineResponse> Combine(string runes, int id, int page, int hop, int q) => _mediator.Send(new CombineRequest { Runes = runes, Id = id, Page = page, Hop = hop, Q = q });
 

@@ -17,6 +17,11 @@ public class Speech : ISpeech
 
     // Кладём ли НОВЫЕ цепочки в персист. Решает клиент параметром hypers в connect.
     public bool Hypers { get; private set; } = true;
+
+    // Контекст подключения, за которым обработчик события идёт вместо аргументов.
+    public string BaseForwardUrl { get; private set; } = "";
+
+    public bool ResetHypers { get; private set; }
     public string DirectRunes { get; set; } = string.Empty;
     public string DirectUnruned { get; set; } = string.Empty;
     public bool Authorized { get; private set; }
@@ -70,6 +75,9 @@ public class Speech : ISpeech
             if (step.Length == 0) continue;
 
             // Шаг закодирован как "f<адрес>" либо "r<руны>" - разбираем обратно в кусок сборки.
+            // Хвост ("t<текст>") куском не был: он закрывает сборку, а не участвует в ней.
+            if (step[0] == 't') continue;
+
             if (step[0] == 'f' && int.TryParse(step[1..], out int id)) _pieces.Add(new Piece(true, "", id));
             else _pieces.Add(new Piece(false, step[1..], 0));
         }
@@ -145,16 +153,28 @@ public class Speech : ISpeech
 
     // Сверяет очередную подпись и продвигает позицию. Последовательность идёт по кругу: длины
     // хватает, чтобы наблюдение за одним URL не выдавало следующую.
-    public bool CheckSign(int sign)
+    //
+    // Кольцо ОДНО на /t/ и /h/: каждый из них съедает по позиции, поэтому расходятся они сразу же,
+    // если кто-то влез в поток. Разница только в разрешении: хвост сверяет подпись целиком
+    // (SignValues значений), прыжок - её младший бит.
+    //
+    // Почему у прыжка бит: печётся КАЖДОЕ сочетание, поэтому полная подпись умножила бы пул
+    // прыжков на SignValues (4096 -> 32768 ссылок), а бит удваивает (4096 -> 8192).
+    public bool CheckSign(int sign) => CheckSign(sign, SignValues);
+
+    public bool CheckSign(int sign, int values)
     {
         if (Signs.Length == 0) return true;
 
-        bool ok = sign >= 0 && sign < SignValues && Signs[_signPos] - '0' == sign;
+        bool ok = sign >= 0 && sign < values && (Signs[_signPos] - '0') % values == sign;
 
         _signPos = (_signPos + 1) % Signs.Length;
 
         return ok;
     }
+
+    // Сколько значений у подписи прыжка: один бит.
+    public const int JumpSignValues = 2;
 
     private static string NewSigns()
     {
@@ -210,6 +230,8 @@ public class Speech : ISpeech
         PageCount = command.PageCount < 1 ? 1 : command.PageCount;
         HopCount = command.HopCount < 1 ? 1 : command.HopCount;
         Hypers = command.Hypers;
+        BaseForwardUrl = command.BaseForwardUrl;
+        ResetHypers = command.ResetHypers;
 
         // Чистим только незавершённую сборку. Хайперы и фрагменты НЕ трогаем: при реконнекте
         // (повторный connect) они остаются тёплыми и уезжают сидом.
@@ -359,7 +381,15 @@ public class Speech : ISpeech
 
         // Цепочку кладём в дерево до очистки: путь от корня и есть поток запросов этого url.
         // Leaf - прыжок на весь адрес, Prefix - докуда он совпал с уже известными.
-        (LastLeaf, LastPrefix, LastShared) = _tree.Remember(StepsOf(), sb.ToString());
+        //
+        // ХВОСТ ВХОДИТ ПОСЛЕДНИМ ШАГОМ, хотя запросом он и не был. Без него лист неоднозначен:
+        // comments/1 и comments/2 дают одну и ту же combine-часть и перетирали бы адрес друг друга,
+        // а значит прыжок не мог бы сразу форвардить - и стоил бы двух запросов вместо одного.
+        var steps = StepsOf();
+
+        steps.Add(HyperTree.TailStep(tailText));
+
+        (LastLeaf, LastPrefix, LastShared) = _tree.Remember(steps, sb.ToString());
 
         _pieces.Clear();
 

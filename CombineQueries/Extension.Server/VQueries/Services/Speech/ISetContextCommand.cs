@@ -15,6 +15,12 @@ public interface ISetContextCommand<TRunes>
 
     // Класть ли НОВЫЕ цепочки в персист. false - дерево читается, но не растёт в БД.
     bool Hypers { get; init; }
+
+    // Куда транслятор форвардит, если его придётся заводить впервые.
+    string BaseForwardUrl { get; init; }
+
+    // Забыть накопленные хайперы при подключении. Уважается только в Development.
+    bool ResetHypers { get; init; }
 }
 
 public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
@@ -26,4 +32,6 @@ public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
     public int PageCount { get; init; } = 1;
     public int HopCount { get; init; } = 1;
     public bool Hypers { get; init; } = true;
+    public string BaseForwardUrl { get; init; } = "";
+    public bool ResetHypers { get; init; }
 }

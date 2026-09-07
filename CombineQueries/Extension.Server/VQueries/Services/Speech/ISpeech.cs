@@ -40,6 +40,11 @@ public interface ISpeech
     // Класть ли НОВЫЕ цепочки в персист: с hypers=off накопленное читается, но не пополняется.
     bool Hypers { get; }
 
+    // Контекст подключения: обработчик доменного события берёт его отсюда, а не из аргументов.
+    string BaseForwardUrl { get; }
+
+    bool ResetHypers { get; }
+
     string DirectRunes { get; }
 
     string DirectUnruned { get; }
@@ -59,6 +64,9 @@ public interface ISpeech
     void Fault(string reason);
 
     bool CheckSign(int sign);
+
+    // Подпись пониженного разрешения: то же кольцо, но сверяется остаток по values.
+    bool CheckSign(int sign, int values);
 
     void AuthAppend(string segment);
 

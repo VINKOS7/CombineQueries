@@ -24,6 +24,52 @@ public class Translator : Entity, IAggregateRoot
     // Дерево цепочек combine-запросов: узлы ссылаются на родителя внутри этой же коллекции.
     public ICollection<Chain> Chains { get; set; } = [];
 
+    // Словарь по возрастанию адреса. Адрес - это индекс, поэтому порядок и есть часть контракта:
+    // тот, кто заливает словарь в рантайм, полагается на него, а не сортирует заново.
+    public IReadOnlyList<(int Id, string Text)> LearnedOrdered()
+    {
+        var learned = new List<(int Id, string Text)>(VirtualFragments.Count);
+
+        foreach (var fragment in VirtualFragments) learned.Add((fragment.Id, fragment.Text));
+
+        learned.Sort((a, b) => a.Id.CompareTo(b.Id));
+
+        return learned;
+    }
+
+    // Хайперы по возрастанию handle - тот же контракт, handle это тоже индекс.
+    public IReadOnlyList<(int Handle, string Url)> RememberedOrdered()
+    {
+        var remembered = new List<(int Handle, string Url)>(Hypers.Count);
+
+        foreach (var hyper in Hypers) remembered.Add((hyper.Id, hyper.Url));
+
+        remembered.Sort((a, b) => a.Handle.CompareTo(b.Handle));
+
+        return remembered;
+    }
+
+    // Дерево цепочек как плоский список узлов: связи держит ParentId.
+    public IReadOnlyList<(int Id, int? ParentId, string Step, string? Url)> Grown()
+    {
+        var grown = new List<(int Id, int? ParentId, string Step, string? Url)>(Chains.Count);
+
+        foreach (var chain in Chains) grown.Add((chain.Id, chain.ParentId, chain.Step, chain.Url));
+
+        return grown;
+    }
+
+    // Забыть накопленные хайперы. Цепочки НЕ трогаем: сброс касается только того, что копилось
+    // само, а посев остаётся - иначе прыгать станет не по чему.
+    public int Forget()
+    {
+        int forgotten = Hypers.Count;
+
+        Hypers.Clear();
+
+        return forgotten;
+    }
+
     // Кладёт узел дерева. Дубль по номеру отбиваем - номера назначает дерево в рантайме.
     public Chain? Grow(int id, int? parentId, string step, string? url)
     {
@@ -46,6 +92,17 @@ public class Translator : Entity, IAggregateRoot
     }
 
 //    private int BaseRune { get; set; }
+
+    // Новый транслятор под алфавит. Рун-дерево строится здесь же - снаружи о нём знать незачем.
+    public static Translator For(string alphabet, string baseForwardUrl) => new()
+    {
+        Alphabet = alphabet,
+        BaseForwardUrl = baseForwardUrl,
+        Runes = ATRFrom(alphabet),
+
+        Name = string.Empty,
+        Description = string.Empty
+    };
 
     public static Translator From(IAddTranslator<char> command) => new()
     {

@@ -29,6 +29,10 @@ public class HyperTree
     public static string StepOf(bool isFragment, string rune, int fragmentId) =>
         isFragment ? "f" + fragmentId : "r" + rune;
 
+    // Шаг хвоста. Запросом он не был, но в путь входит: иначе два адреса с общей combine-частью
+    // сходятся в один лист, и прыжок не знает, какой из них отдавать.
+    public static string TailStep(string tail) => "t" + tail;
+
     // Кладёт цепочку целиком.
     //
     // Leaf - номер листа: прыжок на весь url. Prefix - номер последнего узла, который СУЩЕСТВОВАЛ

@@ -43,23 +43,21 @@ public class CombineQueriesTest : UdonSharpBehaviour
     [Tooltip("Optional: status is written here")]
     public Text output;
 
-    // Порядок: сначала БЕЗ персиста, потом с ним.
+    // ПЕРВЫМ идёт хайпер из БД: сид приезжает вместе с connect, поэтому адрес, которого клиент не
+    // собирал ни разу, уходит в два запроса сразу - /h/ поднимает всю combine-часть, /t/ закрывает.
+    // Реконнект для этого не нужен, знание уже на руках; поэтому шага «забыть прыжки» тут и нет.
     //
-    // Шаги 3-4 - хайпер на ходу: цепочка заведена в этом же прогоне, дерево живёт в памяти сервера.
-    // Шаг 3 прыгает по ней целиком, шаг 4 показывает промах на похожем адресе.
-    //
-    // Дальше 5-6 - хайпер из БД. Реконнект включает персист (hypers=on) и забывает свои прыжки,
-    // а сервер отдаёт сидом цепочку, которую клиент не собирал вовсе - её завёл dev-сид. Адрес
-    // уходит в два запроса С ПЕРВОГО РАЗА: так это увидит игрок, зашедший в мир впервые.
-    //
-    // Шаг 9 - хайпер поверх ОБУЧЕНИЯ: к этому моменту сервер выучил фрагменты запроса и цепочка
-    // состоит из них. Прыжок схлопывает и её - кешируются не буквы, а выученные фрагменты.
-    private const int StepLevels = 0;
-    private const int StepPartialBig = 1;
-    private const int StepHyperFull = 2;
-    private const int StepHyperPrefix = 3;
-    private const int StepRejoin = 4;
-    private const int StepHyperDb = 5;
+    // Дальше - парами: сборка, следом тот же адрес прыжком. Видно, что именно экономится.
+    // Пара 2-3 - цепочка из ОДНОГО шага: 2 запроса против 2, прыжок не выигрывает ничего.
+    // Пара 4-5 - цепочка из трёх: 4 против 2.
+    // Шаг 6 - промах: похожий адрес прыжка не даёт, у клиента плоский словарь, а не дерево.
+    // Шаг 9 - прыжок поверх ОБУЧЕНИЯ: цепочка собрана из выученных фрагментов, кешируются они.
+    private const int StepHyperDb = 0;
+    private const int StepLevels = 1;
+    private const int StepHyperLevels = 2;
+    private const int StepPartialBig = 3;
+    private const int StepHyperFull = 4;
+    private const int StepHyperPrefix = 5;
     private const int StepLearn = 6;
     private const int StepLearned = 7;
     private const int StepHyperLearned = 8;
@@ -110,8 +108,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (running) { running = false; Say("run stopped"); return; }
 
         running = true;
-        step = StepLevels;
-        board = testUrlFull + "   " + NumberOf(testUrlFull.Length) + " chars   (levels L1-L3)\n"
+        step = StepHyperDb;
+        board = testUrlSeeded + "   " + NumberOf(testUrlSeeded.Length) + " chars   (hyper from db, never sent)\n"
+              + testUrlFull + "   " + NumberOf(testUrlFull.Length) + " chars   (levels L1-L3)\n"
               + testUrlLearn + "   " + NumberOf(testUrlLearn.Length) + " chars   (infinite: learn, then reuse)\n"
               + testUrl + "   " + NumberOf(testUrl.Length) + " chars   (partial - post/1 is plain)\n\n";
 
@@ -142,16 +141,13 @@ public class CombineQueriesTest : UdonSharpBehaviour
         }
         if (!running) return;
 
-        // Реконнект ничего не собирает: у него интересно ровно одно число - сколько прыжков
-        // сервер вернул из БД. Следующий шаг пойдёт уже по ним.
-        string line = step == StepRejoin
-            ? TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   " + JumpsNote()
-            : TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   "
-              + NumberOf(client.LastQueries) + " queries   "
-              + "runes " + NumberOf(client.LastChunks)
-              + "  L2 " + NumberOf(client.LastL2)
-              + "  L3 " + NumberOf(client.LastL3)
-              + "  inf " + NumberOf(client.LastInfinite);
+        string line = TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   "
+                    + NumberOf(client.LastQueries) + " queries   "
+                    + (client.LastJump < 0 ? "no jump   " : "jump " + NumberOf(client.LastJump) + "   ")
+                    + "runes " + NumberOf(client.LastChunks)
+                    + "  L2 " + NumberOf(client.LastL2)
+                    + "  L3 " + NumberOf(client.LastL3)
+                    + "  inf " + NumberOf(client.LastInfinite);
 
         board += line + "\n";
         step++;
@@ -179,12 +175,12 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private void SendStep()
     {
-        if (step == StepLevels) client.Request(testUrlFull);
+        if (step == StepHyperDb) client.Request(testUrlSeeded);
+        else if (step == StepLevels) client.Request(testUrlFull);
+        else if (step == StepHyperLevels) client.Request(testUrlFull);
         else if (step == StepPartialBig) client.Request(testUrlPartialBig);
         else if (step == StepHyperFull) client.Request(testUrlPartialBig);
         else if (step == StepHyperPrefix) client.Request(testUrlSameStart);
-        else if (step == StepRejoin) { client.ForgetJumps(); client.Remember(); }
-        else if (step == StepHyperDb) client.Request(testUrlSeeded);
         else if (step == StepLearn) client.Request(testUrlLearn);
         else if (step == StepLearned) client.Request(testUrlLearned);
         else if (step == StepHyperLearned) client.Request(testUrlLearned);
@@ -200,12 +196,12 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private string TitleOf(int at)
     {
-        if (at == StepLevels) return "1  L1-L3 fragments        (comments/1)       ";
-        if (at == StepPartialBig) return "2  partial big            (products/12/comments)";
-        if (at == StepHyperFull) return "3  hyper, same run       (products/12/comments)";
-        if (at == StepHyperPrefix) return "4  no hyper, near miss    (products/12/reviews) ";
-        if (at == StepRejoin) return "5  rejoin, forget jumps   (client knows nothing) ";
-        if (at == StepHyperDb) return "6  hyper from db          (carts/5, never sent) ";
+        if (at == StepHyperDb) return "1  hyper from db          (carts/5, never sent) ";
+        if (at == StepLevels) return "2  combine                (comments/1)       ";
+        if (at == StepHyperLevels) return "3  hyper, one step        (comments/1)       ";
+        if (at == StepPartialBig) return "4  combine, partial big   (products/12/comments)";
+        if (at == StepHyperFull) return "5  hyper, three steps     (products/12/comments)";
+        if (at == StepHyperPrefix) return "6  no hyper, near miss    (products/12/reviews) ";
         if (at == StepLearn) return "7  partial, learning      (limit=10&skip=20) ";
         if (at == StepLearned) return "8  partial, learned       (limit=10&skip=50) ";
         if (at == StepHyperLearned) return "9  hyper over learned     (limit=10&skip=50) ";

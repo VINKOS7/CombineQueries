@@ -9,23 +9,24 @@ using CombineQueries.Domain.Aggregates.Translator;
 
 namespace CombineQueries.Api.Controllers.Accounts.Handlers.Connect;
 
+// Свой агрегат тут ровно один - Account, и репозиторий тоже один. Всё, что касается Translator,
+// уехало в AccountConnectedHandler и приходит туда доменным событием: аккаунт подключился -
+// обработчик обеспечил словарь. Событие синхронное, поэтому ответ строится уже по прогретому.
 public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 {
     private readonly ILogger<ConnectHandler> _logger;
     private readonly ISpeech _speech;
     private readonly IAccountRepo _accountRepo;
     private readonly IConfiguration _configuration;
-    private readonly ITranslatorRepo _translatorRepo;
     private readonly IWebHostEnvironment _environment;
 
-    public ConnectHandler(IAccountRepo accountRepo, ITranslatorRepo translatorRepo, IConfiguration configuration, ILogger<ConnectHandler> logger, ISpeech speech, IWebHostEnvironment environment)
+    public ConnectHandler(IAccountRepo accountRepo, IConfiguration configuration, ILogger<ConnectHandler> logger, ISpeech speech, IWebHostEnvironment environment)
     {
         _logger = logger;
         _speech = speech;
         _accountRepo = accountRepo;
         _environment = environment;
         _configuration = configuration;
-        _translatorRepo = translatorRepo;
     }
 
     public async Task<ConnectResponse> Handle(ConnectRequest request, CancellationToken cancellationToken)
@@ -52,24 +53,21 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
                 DfaSize = dfaSize,
                 PageCount = pageCount,
                 HopCount = request.HopCount,
-                Hypers = request.Persist
+                Hypers = request.Persist,
+                BaseForwardUrl = request.baseForwardUrl,
+                ResetHypers = request.ResetHypers
             });
 
             _logger.LogInformation($"connect: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}, scheme={request.Scheme}, dfaSize={dfaSize}, pageCount={pageCount}");
 
             if (account is not null)
             {
-                if (again) account.Remember(request.Alphabet, request.baseForwardUrl);
-                else account.Init(request.Alphabet, request.baseForwardUrl);
+                if (again) account.Remember();
+                else account.Init();
 
+                // Тут и происходит работа с чужим агрегатом: SaveEntitiesAsync диспатчит
+                // AccountConnected и ДОЖИДАЕТСЯ обработчика, поэтому дальше словарь уже тёплый.
                 await _accountRepo.UnitOfWork.SaveEntitiesAsync(cancellationToken);
-
-                var translator = await TranslatorOf(request, cancellationToken);
-
-                // Сброс идёт ДО заливки: иначе Warm тут же вернул бы забытое обратно из персиста.
-                await ForgetHypers(request, translator, cancellationToken);
-
-                Warm(translator);
             }
 
             return new()
@@ -91,91 +89,6 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
             throw;
         }
-    }
-
-    private async Task<Translator?> TranslatorOf(ConnectRequest request, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var translator = await _translatorRepo.GetByAlphabetAsync(request.Alphabet);
-
-            if (translator is not null) return translator;
-
-            translator = Translator.From(new InitCommand<char>
-            {
-                Runes = Translator.ATRFrom(request.Alphabet),
-                BaseForwardUrl = request.baseForwardUrl,
-                Alphabet = request.Alphabet
-            });
-
-            await _translatorRepo.AddAsync(translator);
-            await _translatorRepo.UnitOfWork.SaveChangesAsync(cancellationToken);
-
-            _logger.LogInformation("connect: new Translator persisted, ID={Id}", translator.Id);
-
-            return translator;
-        }
-        // Только отказ БД. Ошибки кода обязаны падать, а не притворяться «базы нет».
-        catch (Exception ex) when (ex is DbException or DbUpdateException)
-        {
-            _logger.LogWarning("connect: persistence unavailable, memory only ({Kind}: {Message})", ex.GetType().Name, ex.Message);
-
-            return null;
-        }
-    }
-
-    // Забывает хайперы и в рантайме, и в персисте - иначе они вернулись бы на ближайшем connect.
-    // Только Development: на релизе это стирало бы то, что накопил живой мир.
-    private async Task ForgetHypers(ConnectRequest request, Translator? translator, CancellationToken cancellationToken)
-    {
-        if (!request.ResetHypers || !_environment.IsDevelopment()) return;
-
-        int forgotten = _speech.HyperUrls.Count + (translator?.Hypers.Count ?? 0);
-
-        _speech.ForgetHypers();
-
-        // Цепочки НЕ трогаем: в dev в БД лежит ровно одна, посеянная миграцией, и она должна
-        // пережить сброс - иначе прыгать станет не по чему. Накопленное этим прогоном живёт в
-        // памяти, его ForgetHypers уже стёр.
-        if (translator is not null && translator.Hypers.Count > 0)
-        {
-            translator.Hypers.Clear();
-
-            await _translatorRepo.UnitOfWork.SaveEntitiesAsync(cancellationToken);
-        }
-
-        _logger.LogInformation("connect: {Forgotten} hypers forgotten (dev reset)", forgotten);
-    }
-
-    // Тёплый словарь из персиста в рантайм. Адрес и handle - это индексы, поэтому строго по
-    // возрастанию, дырки Restore добьёт сам.
-    private void Warm(Translator? translator)
-    {
-        if (translator is null) return;
-
-        var fragments = new List<FragmentSeed>(translator.VirtualFragments.Count);
-
-        foreach (var fragment in translator.VirtualFragments) fragments.Add(new FragmentSeed(fragment.Id, fragment.Text));
-
-        fragments.Sort((a, b) => a.Id.CompareTo(b.Id));
-
-        var hypers = new List<HyperSeed>(translator.Hypers.Count);
-
-        foreach (var hyper in translator.Hypers) hypers.Add(new HyperSeed(hyper.Id, hyper.Url));
-
-        hypers.Sort((a, b) => a.Handle.CompareTo(b.Handle));
-
-        // Дерево цепочек из персиста: номера узлов сохраняются, иначе выданные прыжки протухнут.
-        // Поднимаем ВСЕГДА - hypers=off гасит появление новых цепочек, а не чтение накопленных.
-        var chains = new List<(int, int?, string, string?)>(translator.Chains.Count);
-
-        foreach (var chain in translator.Chains) chains.Add((chain.Id, chain.ParentId, chain.Step, chain.Url));
-
-        _speech.RestoreChains(chains);
-
-        _speech.Restore(fragments, hypers);
-
-        _logger.LogInformation("connect: restored {Fragments} fragments, {Hypers} hypers, {Chains} chain nodes", fragments.Count, hypers.Count, chains.Count);
     }
 
     private (int DfaSize, int PageCount) SizesOf(ConnectRequest request)
