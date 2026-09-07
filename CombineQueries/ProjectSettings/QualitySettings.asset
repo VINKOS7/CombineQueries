@@ -209,13 +209,18 @@ QualitySettings:
   m_TextureMipmapLimitGroupNames: []
   m_PerPlatformDefaultQuality:
     Android: 2
-    Lumin: 5
-    Nintendo 3DS: 5
+    EmbeddedLinux: 5
+    GameCoreScarlett: 5
+    GameCoreXboxOne: 5
+    LinuxHeadlessSimulation: 5
     Nintendo Switch: 5
     PS4: 5
-    PSP2: 2
+    PS5: 5
+    QNX: 5
+    Server: 5
     Stadia: 5
     Standalone: 5
+    VisionOS: 5
     WebGL: 3
     Windows Store Apps: 5
     XboxOne: 5

@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="VQueries.Domain/CombineQueries.Domain.csproj" />
+  <Project Path="VQueries.Infra/CombineQueries.Infra.csproj">
+    <BuildDependency Project="VQueries.Domain/CombineQueries.Domain.csproj" />
+  </Project>
+  <Project Path="VQueries/CombineQueries.Api.csproj">
+    <BuildDependency Project="VQueries.Domain/CombineQueries.Domain.csproj" />
+    <BuildDependency Project="VQueries.Infra/CombineQueries.Infra.csproj" />
+  </Project>
+</Solution>

@@ -30,7 +30,9 @@ node_modules/
 dist/
 
 ### Compiled publish output
-/publish/
+### По имени, а не по пути: каталог переезжал вместе со структурой, и 34 DLL висели в индексе
+### по старому пути. Внутри лежат и appsettings окружений - лишний путь к утечке.
+publish/
 /out/
 
 ## Operating system files
@@ -60,8 +62,9 @@ Thumbs.db
 !/CombineQueries/Packages/packages-lock.json
 
 ### Настройки окружений - в них строки подключения и токены
-/CombineQueries.Extension.Server/VQueries/appsettings.Alpha.json
-/CombineQueries.Extension.Server/VQueries/appsettings.Production.json
+/CombineQueries/Extension.Server/VQueries/appsettings.Alpha.json
+/CombineQueries/Extension.Server/VQueries/appsettings.Production.json
+/CombineQueries/Extension.Server/VQueries/appsettings.Prod.json
 
 ### Окружение клиента - адреса и токен, в гит не едут (рядом лежат .example)
 /Udon/CombineQueries.dev.cs
@@ -73,3 +76,29 @@ Thumbs.db
 /CombineQueries/Assets/CombineQueries/CombineQueries.alpha.cs.meta
 /CombineQueries/Assets/CombineQueries/CombineQueries.prod.cs
 /CombineQueries/Assets/CombineQueries/CombineQueries.prod.cs.meta
+
+### то же после переименования Assets/CombineQueries -> Assets/Src
+/CombineQueries/Assets/Src/CombineQueries.dev.cs
+/CombineQueries/Assets/Src/CombineQueries.dev.cs.meta
+/CombineQueries/Assets/Src/CombineQueries.alpha.cs
+/CombineQueries/Assets/Src/CombineQueries.alpha.cs.meta
+/CombineQueries/Assets/Src/CombineQueries.prod.cs
+/CombineQueries/Assets/Src/CombineQueries.prod.cs.meta
+
+### Move-proof: env ловим ПО ИМЕНИ на любой глубине, а не по пути.
+### Пути выше ломались при каждом переносе папок (секреты дважды становились видны гиту).
+### Шаблоны .example НЕ попадают под эти маски и продолжают ехать в репо.
+CombineQueries.dev.cs
+CombineQueries.alpha.cs
+CombineQueries.prod.cs
+CombineQueries.release.cs
+Config.*.cs
+Config.*.cs.meta
+*.dev.cs.meta
+*.alpha.cs.meta
+*.prod.cs.meta
+*.release.cs.meta
+appsettings.Alpha.json
+appsettings.Production.json
+appsettings.Prod.json
+appsettings.Release.json
