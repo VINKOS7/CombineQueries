@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Dotseed.Context;
 using MediatR;
 
@@ -33,6 +33,7 @@ public class Context : UnitOfWorkContext
         // достаются только через его навигации.
         modelBuilder.ApplyConfiguration(new VirtualFragmentEntityConfiguration());
         modelBuilder.ApplyConfiguration(new HyperEntityConfiguration());
+        modelBuilder.ApplyConfiguration(new ChainEntityConfiguration());
 
         // modelBuilder.ApplyConfiguration(new TranslatorEntityConfiguration());
     }

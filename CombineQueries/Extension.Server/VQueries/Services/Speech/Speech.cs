@@ -14,6 +14,9 @@ public class Speech : ISpeech
     public int DfaSize { get; private set; }
     public int PageCount { get; private set; } = 1;
     public int HopCount { get; private set; } = 1;
+
+    // Кладём ли НОВЫЕ цепочки в персист. Решает клиент параметром hypers в connect.
+    public bool Hypers { get; private set; } = true;
     public string DirectRunes { get; set; } = string.Empty;
     public string DirectUnruned { get; set; } = string.Empty;
     public bool Authorized { get; private set; }
@@ -33,6 +36,48 @@ public class Speech : ISpeech
     // Сколько адресов ещё возможно после уже принятого префикса. 1 значит, что продолжение
     // однозначно - на этом строится будущий досрочный форвард.
     public int Ahead() => _tree.Ahead(StepsOf());
+
+    // Персист дерева: что появилось с прошлого раза и как поднять сохранённое.
+    public IReadOnlyList<(int Id, int? ParentId, string Step, string? Url)> TakeChains() => _tree.TakePending();
+
+    public void RestoreChains(IEnumerable<(int Id, int? ParentId, string Step, string? Url)> nodes) => _tree.Restore(nodes);
+
+    // Сид хайпера для клиента: адрес -> номер прыжка. Только листы, промежуточные узлы фронту
+    // не нужны - он держит плоский словарь, а не дерево.
+    public IEnumerable<(string Url, int Jump)> ChainLeaves() => _tree.Leaves();
+
+    // Номера последней собранной цепочки: лист (весь url) и последний общий узел с известными.
+    public int LastLeaf { get; private set; } = -1;
+    public int LastPrefix { get; private set; } = -1;
+    public int LastShared { get; private set; }
+
+    // Встать в середину цепочки по номеру узла: восстанавливаем куски пути, дальше поток идёт
+    // обычными /c/. Это и есть новый смысл хайпера - прыжок не на адрес, а в точку цепочки.
+    public int Resume(int handle)
+    {
+        if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /connect was not called");
+
+        var path = _tree.PathOf(handle);
+
+        if (path is null) return -1;
+
+        _pieces.Clear();
+        _pendingPage = 0;
+        _assembly.Restart();
+
+        foreach (string step in path)
+        {
+            if (step.Length == 0) continue;
+
+            // Шаг закодирован как "f<адрес>" либо "r<руны>" - разбираем обратно в кусок сборки.
+            if (step[0] == 'f' && int.TryParse(step[1..], out int id)) _pieces.Add(new Piece(true, "", id));
+            else _pieces.Add(new Piece(false, step[1..], 0));
+        }
+
+        return _pieces.Count;
+    }
+
+    public string? UrlOf(int handle) => _tree.UrlOf(handle);
 
     private List<string> StepsOf()
     {
@@ -164,6 +209,7 @@ public class Speech : ISpeech
         DfaSize = command.DfaSize;
         PageCount = command.PageCount < 1 ? 1 : command.PageCount;
         HopCount = command.HopCount < 1 ? 1 : command.HopCount;
+        Hypers = command.Hypers;
 
         // Чистим только незавершённую сборку. Хайперы и фрагменты НЕ трогаем: при реконнекте
         // (повторный connect) они остаются тёплыми и уезжают сидом.
@@ -312,7 +358,8 @@ public class Speech : ISpeech
         }
 
         // Цепочку кладём в дерево до очистки: путь от корня и есть поток запросов этого url.
-        _tree.Remember(StepsOf(), sb.ToString());
+        // Leaf - прыжок на весь адрес, Prefix - докуда он совпал с уже известными.
+        (LastLeaf, LastPrefix, LastShared) = _tree.Remember(StepsOf(), sb.ToString());
 
         _pieces.Clear();
 

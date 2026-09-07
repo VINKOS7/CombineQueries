@@ -42,6 +42,9 @@ public class CombineQueries : UdonSharpBehaviour
 
     private const int MaxChunks = 256;
 
+    // Сколько узлов цепочек умеем адресовать прыжком. Пул печётся, как и всё остальное.
+    private const int MaxJumps = 4096;
+
     // Размер Развязки-1: сколько слотов печём и сообщаем серверу в connect. Меняешь размер - правишь обе константы (число и строку).
     private const int dfaSize = 1024;
     private const string DfaSizeStr = "1024";
@@ -84,8 +87,16 @@ public class CombineQueries : UdonSharpBehaviour
     //
     // Едет параметром в самом connect, а не отдельным запросом: инициализация и есть connect,
     // а лишний round-trip тут стоит дороже всего. Сервер уважает флаг ТОЛЬКО в dev.
+    //
+    // Не путать с hypers=on|off: тот решает, попадают ли НОВЫЕ цепочки в БД (накопленное читается
+    // в любом случае), а этот - стереть ли хайперы, накопленные в памяти сервера.
     private const bool resetHypers = true;
     private const string ResetHypersStr = "true";
+
+    // Копить ли НОВЫЕ цепочки в БД сервера. В dev - нет: гиперизация живёт в ОЗУ сервера, а в базе
+    // лежит ровно один хайпер, посеянный dev-миграцией, - его и видно в дампе. Накопленное при
+    // этом читается всегда, флаг гасит только рост.
+    private const string GrowHypersStr = "off";
 
     // Роут combine: /c/{runes}/{id}/{page}/{hop}/{q}. Чанк - q=0 (остальное нули), VF - q=1
     // (руна-сентинел, реальные offset/page), Развязка-3 - hop>0. Хвост, хайпер и код своими роутами.
@@ -98,10 +109,19 @@ public class CombineQueries : UdonSharpBehaviour
     // адрес, а один разряд поверх VF-пула, поэтому адресуемое пространство растёт в hopCount раз
     // ценой всего hopCount ссылок.
     private readonly VRCUrl[] HopPool = HopPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, hopCount);
+    // Прыжок в точку ранее пройденной combine-цепочки: /h/<узел>.
+    private readonly VRCUrl[] JumpPool = NumPoolOf(baseUrl + "/h/", MaxJumps);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
 
-    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr);
+    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
+
+    // Тот же connect, но БЕЗ сброса и С ПЕРСИСТОМ: Remember по смыслу возвращает накопленное, и
+    // сбрасывать хайперы тем же движением - значит стирать ровно то, за чем шли.
+    //
+    // Отличается ровно сбросом: рост цепочек в БД задаёт GrowHypersStr, и он одинаков у обоих -
+    // это свойство сборки, а не кнопки. Стоит одну печёную ссылку.
+    private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
 
     [Header("Where to report completion (optional)")]
     public UdonSharpBehaviour target;
@@ -122,6 +142,10 @@ public class CombineQueries : UdonSharpBehaviour
     public int LastL3;
     public int LastInfinite;
 
+    // Сколько прыжков приехало сидом в connect: это ровно то, что сервер помнит из БД.
+    // При resetHypers=true всегда 0 - dev-сброс стирает дерево вместе с хайперами.
+    public int SeedJumps;
+
     private const int PhaseIdle = 0;
     private const int PhaseConnect = 1;
     private const int PhaseChunks = 2;
@@ -129,6 +153,7 @@ public class CombineQueries : UdonSharpBehaviour
     private const int PhaseCode = 5;
     private const int PhaseVerify = 6;
     private const int PhaseFragment = 7;
+    private const int PhaseJump = 8;
 
     private int phase;
     private bool connectOk;
@@ -149,13 +174,22 @@ public class CombineQueries : UdonSharpBehaviour
     private string signs = "";
     private int signPos;
 
-    // Хайпер: цепочки запросов, зеркало серверного. Дерево тут не нужно - цепочек немного, и
-    // словарь «цепочка -> url» и проще, и быстрее: поиск по ключу вместо обхода узлов.
-    // Ключ собирается по ходу отправки, значение кладётся, когда url собрался. Персиста пока нет.
-    private DataDictionary chains = new DataDictionary();
-
-    // Ключ текущей сборки: чем шлём, тем и растим.
-    private string chain = "";
+    // ХАЙПЕР = кеш «где лежит уже использованная цепочка COMBINE-запросов».
+    //
+    // Цепочка - это ровно последовательность /c/: чанки и фрагменты, в порядке отправки. Хвост в
+    // неё не входит, он лишь закрывает сборку; поэтому прыжок восстанавливает combine-часть, а
+    // хвост потом идёт как обычно.
+    //
+    // Дерево живёт на СЕРВЕРЕ, клиент держит от него только плоский словарь «адрес -> номер узла».
+    // Так дешевле: у фронта тут нет ни спуска по шагам, ни трёх массивов с линейным поиском
+    // ребёнка, а поиск прыжка становится одним TryGetValue.
+    //
+    // Платим за это прыжками с ОБЩЕГО НАЧАЛА: похожий адрес (products/12/reviews после
+    // products/12/comments) снова соберётся целиком. Целые повторы - основной случай - экономятся.
+    //
+    // Номер называет сервер (leaf в ответе хвоста) и он переживает рестарт: дерево лежит в БД, а
+    // словарь приезжает сидом в connect.
+    private DataDictionary jumps = new DataDictionary();
 
     // Словарь динамических фрагментов, зеркало серверного: адрес -> подстрока.
     // Заполняется сидом из connect и пиггибэком из /t/.
@@ -175,9 +209,14 @@ public class CombineQueries : UdonSharpBehaviour
         roots = new string[0];
         cachedFragments = new string[0];
         cachedFragIds = new int[0];
+        jumps = new DataDictionary();
 
-        Begin();
+        Begin(true);
     }
+
+    // Забыть СВОИ прыжки, не трогая серверные. Нужно, чтобы увидеть персист как его видит новый
+    // игрок: клиент про адрес не знает ничего, а сервер отдаёт его прыжок сидом в connect.
+    public void ForgetJumps() => jumps = new DataDictionary();
 
     // Повторное подключение ДЕЛЬТОЙ: всё, что уже знаем, оставляем при себе - сервер дошлёт
     // недостающее тем же сидом. Нужно после гашения хоста или реконнекта.
@@ -190,17 +229,22 @@ public class CombineQueries : UdonSharpBehaviour
 
         LastError = "";
 
-        Begin();
+        Begin(false);
     }
 
     // Оба пути ведут в connect: без кодового слова напрямую, с ним - после набора.
     // Первое это подключение или повторное, решает сервер: у него виден уже стоящий контекст.
-    private void Begin()
+    private void Begin(bool reset)
     {
-        if (!RequireCode) { busy = true; Load(PhaseConnect, ConnectQuery); return; }
+        connectReset = reset;
+
+        if (!RequireCode) { busy = true; Load(PhaseConnect, reset ? ConnectQuery : RememberQuery); return; }
 
         StartCode(true);
     }
+
+    // Каким connect закрывать набор кода: полным (со сбросом) или Remember.
+    private bool connectReset;
 
     private void StartCode(bool chain)
     {
@@ -263,11 +307,6 @@ public class CombineQueries : UdonSharpBehaviour
         LastQueries = 0;
         busy = true;
 
-        chain = "";
-
-        // Хайпер с фронта временно снят: его работу делают динамические фрагменты - собранный url
-        // целиком уже лежит в словаре и уходит одним VF-запросом, без отдельного /h/.
-        // Вернётся, когда станет хранилищем цепочек запросов, а не просто handle -> url.
         if (withFragments) SendCombine(payload); else SendDirect(payload);
     }
 
@@ -353,8 +392,6 @@ public class CombineQueries : UdonSharpBehaviour
                     {
                         q[count] = anchor; k[count] = 1; count++;
 
-                        PushStep("f" + fid);
-
                         if (hop > 0) { q[count] = hop; k[count] = 3; count++; }
 
                         pos += flen;
@@ -378,8 +415,6 @@ public class CombineQueries : UdonSharpBehaviour
 
                 q[count] = acc; k[count] = 0; count++;
 
-                PushStep("c" + acc);
-
                 acc = 0; accLen = 0;
             }
         }
@@ -390,11 +425,29 @@ public class CombineQueries : UdonSharpBehaviour
 
         q[count] = tail; k[count] = 2; count++;
 
-        queueLen = count;
+        // Уже собранный адрес заменяем ОДНИМ прыжком: сервер поднимает всю combine-часть сам, а мы
+        // досылаем только хвост. Столько запросов и экономится - все, кроме двух.
+        int jump = JumpOf(payload);
+
+        int skip = 0;
+
+        // Прыжок покрывает combine целиком, хвост в цепочку не входит и идёт всегда.
+        if (jump >= 0 && jump < MaxJumps) skip = count - 1;
+
+        queueLen = count - skip + (skip > 0 ? 1 : 0);
         queue = new int[queueLen];
         queueKind = new int[queueLen];
 
-        for (int i = 0; i < queueLen; i++) { queue[i] = q[i]; queueKind[i] = k[i]; }
+        int at = 0;
+
+        if (skip > 0)
+        {
+            queue[0] = jump; queueKind[0] = 4; at = 1;
+
+            Debug.Log("[CombineQueries] hyper: jump " + jump + " covers all " + skip + " combine steps, tail still goes");
+        }
+
+        for (int i = skip; i < count; i++) { queue[at] = q[i]; queueKind[at] = k[i]; at++; }
 
         queuePos = 0;
 
@@ -483,6 +536,9 @@ public class CombineQueries : UdonSharpBehaviour
         // Развязка-3: старший разряд бесконечного адреса, сдвиг делает сервер.
         if (kind == 3) { Load(PhaseFragment, HopPool[queue[queuePos]]); return; }
 
+        // Прыжок в известную точку combine-цепочки.
+        if (kind == 4) { Load(PhaseJump, JumpPool[queue[queuePos]]); return; }
+
         // Direct подписи не несёт: сервер сверяет её только на fragmentate-хвосте.
         if (!fragments) { Load(PhaseTail, DirectTailPool[queue[queuePos]]); return; }
 
@@ -499,7 +555,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (phase == PhaseVerify)
         {
-            if (chainInit) { Load(PhaseConnect, ConnectQuery); return; }
+            if (chainInit) { Load(PhaseConnect, connectReset ? ConnectQuery : RememberQuery); return; }
 
             Done();
             return;
@@ -515,17 +571,17 @@ public class CombineQueries : UdonSharpBehaviour
 
             SeedFromConnect(response.Result);
 
-            Debug.Log("[CombineQueries] connect: ready, roots " + roots.Length + ", fragments " + cachedFragments.Length);
+            Debug.Log("[CombineQueries] connect: ready, roots " + roots.Length + ", fragments " + cachedFragments.Length + ", jumps " + jumps.Count);
 
             Done();
             return;
         }
 
-        if (phase == PhaseChunks || phase == PhaseFragment) { queuePos++; SendNext(); return; }
+        if (phase == PhaseChunks || phase == PhaseFragment || phase == PhaseJump) { queuePos++; SendNext(); return; }
 
         if (phase == PhaseTail)
         {
-            RememberChain(pendingUrl);
+            RememberChain(IntField(response.Result, "leaf"));
 
             LastChunks = IntField(response.Result, "chunks");
             LastL2 = IntField(response.Result, "l2");
@@ -584,20 +640,20 @@ public class CombineQueries : UdonSharpBehaviour
         Fail("no answer in " + Timeout + "s on phase " + phase + " - url blocked by the SDK or server unreachable");
     }
 
-    // Запоминает цепочку целиком. Ключ - последовательность шагов, значение - собранный url.
-    private void RememberChain(string url)
+    // Номер узла, который назвал сервер: сюда можно прыгнуть в следующий раз за этим же адресом.
+    private void RememberChain(int leaf)
     {
-        if (chain == "") return;
+        if (leaf < 0 || pendingUrl == "") return;
 
-        chains.SetValue(chain, url);
+        jumps.SetValue(pendingUrl, leaf);
     }
 
-    // Шаг цепочки: у фрагмента это адрес, у чанка - значение руны. Буква впереди разводит их,
-    // чтобы фрагмент с адресом 5 не столкнулся с чанком 5.
-    private void PushStep(string step) => chain = chain + step + "|";
+    private int JumpOf(string url)
+    {
+        if (!jumps.TryGetValue(url, out DataToken value)) return -1;
 
-    // Знаем ли уже такую цепочку. Пригодится, когда научимся не досылать известный хвост.
-    public int KnownChains => chains.Count;
+        return value.TokenType == TokenType.Int ? value.Int : -1;
+    }
 
     private void Done()
     {
@@ -630,6 +686,8 @@ public class CombineQueries : UdonSharpBehaviour
 
         DataDictionary dict = root.DataDictionary;
 
+        SeedJumps = 0;
+
         // Корни L1 с сервера: индекс = символ (59 + f) в рун-пространстве. Принимаем только если
         // распарсились все строки (иначе выравнивание индексов сломается — оставляем пусто).
         if (dict.TryGetValue("roots", out DataToken rootsTok) && rootsTok.TokenType == TokenType.DataList)
@@ -649,7 +707,27 @@ public class CombineQueries : UdonSharpBehaviour
         signs = DictString(dict, "signs");
         signPos = 0;
 
+        SeedJumpList(dict);
         LearnFragmentList(dict);
+    }
+
+    // Хайперы из персиста: адрес -> номер прыжка. Дерево осталось на сервере, сюда приезжают
+    // только его листы, поэтому уже собранный кем-то адрес идёт двумя запросами с первого раза.
+    private void SeedJumpList(DataDictionary dict)
+    {
+        if (!dict.TryGetValue("jumps", out DataToken seed) || seed.TokenType != TokenType.DataList) return;
+
+        DataList list = seed.DataList;
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (!list.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+
+            string url = DictString(item.DataDictionary, "url");
+            int jump = DictInt(item.DataDictionary, "jump");
+
+            if (url != "" && jump >= 0) { jumps.SetValue(url, jump); SeedJumps++; }
+        }
     }
 
     // Новые фрагменты из ответа /t/ (пиггибэк): та же таблица, что и в сиде.

@@ -49,27 +49,29 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
 
         int handle = speech.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
 
-        // Учим DF из собранного payload'а (assembled.Text - без схемы, ровно то, что токенизирует клиент).
         var learned = speech.LearnFrom(assembled.Text);
 
-        logger.LogInformation("tail: tree now {Chains} chains in {Nodes} nodes, deepest {Deep}", speech.TreeChains, speech.TreeNodes, speech.TreeDeepest);
+        logger.LogInformation("tail: tree now {Chains} chains in {Nodes} nodes, deepest {Deep} | leaf {Leaf}, prefix {Prefix} (shared {Shared})",
+            speech.TreeChains, speech.TreeNodes, speech.TreeDeepest, speech.LastLeaf, speech.LastPrefix, speech.LastShared);
 
         logger.LogInformation("tail: first send took {TotalMs} ms total ({Requests} requests), handle {Handle}, +{Learned} fragments",
             assembled.ElapsedMs + forwarded.ElapsedMs, assembled.Runes + 1, handle, learned.Addressable.Count);
 
-        // Финитные адреса (L2+L3) кончились: строки сохраняются с Level=Infinite, но клиенту не едут,
-        // поэтому этот query уйдёт по ним буквами (direct-фоллбэк).
         if (learned.Overflowed.Count > 0)
             logger.LogWarning("tail: (not enough addresses) +{Overflowed} fragments stored as Infinite, direct for this query", learned.Overflowed.Count);
 
         await Persist(url, handle, learned, cancellationToken);
 
+        //много инфы для логов в дев
         return new TailResponse
         {
             Runes = assembled.Runes,
             ForwardedUrl = url,
             Response = forwarded.Body,
             Handle = handle,
+            Leaf = speech.LastLeaf,
+            Prefix = speech.LastPrefix,
+            Shared = speech.LastShared,
             Chains = speech.TreeChains,
             Nodes = speech.TreeNodes,
             Chunks = assembled.Chunks,
@@ -91,15 +93,17 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
         {
             var translator = await translatorRepo.GetByAlphabetAsync(speech.Alphabet!);
 
-            // Транслятора нет - значит connect шёл конфиг-фолбэком, без БД. Сохранять некуда.
             if (translator is null) return;
 
             translator.Remember(handle, url);
 
-            // Уровень Learn считает сам по адресу, так что обе группы кладутся одинаково: те, чей
+            if (speech.Hypers) foreach (var (id, parentId, step, chainUrl) in speech.TakeChains()) translator.Grow(id, parentId, step, chainUrl);
+            else speech.TakeChains();
+
             // адрес перевалил за потолок, получат Level=Infinite.
             foreach (var seed in learned.Addressable) translator.Learn(seed.Id, seed.Text, speech.DfaSize, speech.PageCount);
-
+            
+            //хм зачем второй раз, мб нужно разделение адресные, или бесконечные, кажется это связано с механизмом Займа
             foreach (var seed in learned.Overflowed) translator.Learn(seed.Id, seed.Text, speech.DfaSize, speech.PageCount);
 
             // Цепь Infinite пересшиваем, только если в неё реально что-то добавилось.
@@ -107,8 +111,6 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
 
             await translatorRepo.UnitOfWork.SaveEntitiesAsync(cancellationToken);
         }
-        // Только отказ БД, как и в connect: клиент уже получил URL и тело, ронять ответ нельзя.
-        // Ошибки кода при этом обязаны падать, а не маскироваться под «база недоступна».
         catch (Exception ex) when (ex is DbException or DbUpdateException)
         {
             logger.LogWarning("tail: persistence unavailable, memory only ({Kind}: {Message})", ex.GetType().Name, ex.Message);

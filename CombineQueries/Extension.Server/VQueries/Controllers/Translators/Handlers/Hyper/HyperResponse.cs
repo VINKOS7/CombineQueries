@@ -4,11 +4,15 @@ namespace CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
 
 public record HyperResponse
 {
+    [JsonProperty("resumed")] public int Resumed { get; set; }
+
     [JsonProperty("known")] public bool Known { get; set; }
 
     [JsonProperty("forwardedUrl")] public string? ForwardedUrl { get; set; }
+
     [JsonProperty("response")] public string? Response { get; set; }
 
     [JsonProperty("elapsedMs")] public long ElapsedMs { get; set; }
+
     [JsonProperty("firstSendMs")] public long FirstSendMs { get; set; }
 }

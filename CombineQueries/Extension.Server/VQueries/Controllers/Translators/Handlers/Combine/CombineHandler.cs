@@ -21,28 +21,17 @@ public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech) : IR
 
         if (request.Q == 0)
         {
-            // кеш директов на всякий
             speech.PushDirectRunes(request.Runes);
 
             received = speech.Accept(request.Runes);
         }
-        else if (request.Hop > 0)
-        {
-            // Развязка-3: старший разряд бесконечного адреса. Якорь (id % capacity) уже приехал
-            // предыдущим VF, здесь сдвигаем его на hop ёмкостей. id/page в таком запросе не значат ничего.
-            received = speech.Hop(request.Hop);
-        }
+        else if (request.Hop > 0) received = speech.Hop(request.Hop);
         else
         {
-            // Глобальный адрес VF = page*DfaSize + id (page=0 -> L2, page>0 -> L3).
             int gid = request.Page * speech.DfaSize + request.Id;
 
             if (speech.ResolveVirtualFragment(gid) is null)
             {
-                // VF неизвестен: руна здесь сентинел, Accept-фолбэка нет -> фрагмент пропадёт, клиент
-                // увидит битый URL на /t/ и переинициализируется.
-                // Неизвестный адрес - запрос не из нашего потока либо поток разъехался.
-                // Молча выбрасывать нельзя: URL соберётся без куска и уедет наружу чужим.
                 speech.Fault($"unknown VF page={request.Page} off={request.Id}");
 
                 logger.LogWarning("combine: VF page={Page} off={Id} unknown, stream dropped until connect", request.Page, request.Id);

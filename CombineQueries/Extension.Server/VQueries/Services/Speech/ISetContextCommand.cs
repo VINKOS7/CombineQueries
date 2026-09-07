@@ -12,6 +12,9 @@ public interface ISetContextCommand<TRunes>
 
     // Развязка-3: сколько ёмкостей клиент умеет перепрыгнуть. 1 = развязки нет, только L2+L3.
     int HopCount { get; init; }
+
+    // Класть ли НОВЫЕ цепочки в персист. false - дерево читается, но не растёт в БД.
+    bool Hypers { get; init; }
 }
 
 public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
@@ -22,4 +25,5 @@ public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
     public int DfaSize { get; init; }
     public int PageCount { get; init; } = 1;
     public int HopCount { get; init; } = 1;
+    public bool Hypers { get; init; } = true;
 }

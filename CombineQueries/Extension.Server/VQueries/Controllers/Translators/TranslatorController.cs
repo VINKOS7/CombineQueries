@@ -19,13 +19,11 @@ public class TranslatorController : Controller
 
     public TranslatorController(IMediator mediator) => _mediator = mediator;
 
-    // Хвост несёт ПОДПИСЬ - очередную из выданной на connect последовательности. Живёт здесь, а не
-    // в /c/, потому что у хвоста свой маленький пул: подпись множит 8931, а не 830 584.
     [AllowAnonymous] [HttpGet("/t/{runes}/{sign:int}")] public Task<TailResponse> Tail(string runes, int sign) => _mediator.Send(new TailRequest { Runes = runes, Sign = sign, Type = TypeQuery.Fragmentate });
 
     [AllowAnonymous] [HttpGet("/d/{runes}")] public Task<TailResponse> Direct(string runes) => _mediator.Send(new TailRequest { Runes = runes, Type = TypeQuery.Direct });
 
-    [AllowAnonymous] [HttpGet("/h/{hyper:int}")] public Task<HyperResponse> Hyper(int hyper) => _mediator.Send(new HyperRequest { Value = hyper });
+    [AllowAnonymous] [HttpGet("/h/{jump:int}")] public Task<HyperResponse> Hyper(int jump) => _mediator.Send(new HyperRequest { Value = jump });
 
     [AllowAnonymous] [HttpGet("/c/{runes}/{id:int}/{page:int}/{hop:int}/{q:int}")] public Task<CombineResponse> Combine(string runes, int id, int page, int hop, int q) => _mediator.Send(new CombineRequest { Runes = runes, Id = id, Page = page, Hop = hop, Q = q });
 

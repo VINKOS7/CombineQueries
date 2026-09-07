@@ -17,6 +17,12 @@ public record TailResponse
     [JsonProperty("l3")] public int L3 { get; set; }
     [JsonProperty("infinite")] public int Infinite { get; set; }
 
+    // На что прыгать в следующий раз: leaf - весь этот адрес, prefix - его общее начало с уже
+    // известными (shared - длина этого начала в кусках). -1 значит «прыгать некуда».
+    [JsonProperty("leaf")] public int Leaf { get; set; } = -1;
+    [JsonProperty("prefix")] public int Prefix { get; set; } = -1;
+    [JsonProperty("shared")] public int Shared { get; set; }
+
     // Хайпер-дерево: сколько цепочек знает сервер и во сколько узлов они уложились.
     [JsonProperty("chains")] public int Chains { get; set; }
     [JsonProperty("nodes")] public int Nodes { get; set; }

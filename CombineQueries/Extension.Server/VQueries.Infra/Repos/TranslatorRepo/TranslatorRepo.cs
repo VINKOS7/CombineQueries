@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Dotseed.Domain;
 
 using CombineQueries.Domain.Aggregates.Translator;
@@ -28,5 +28,6 @@ public class TranslatorRepo : ITranslatorRepo
         await _db.Translators
             .Include(t => t.VirtualFragments)
             .Include(t => t.Hypers)
+            .Include(t => t.Chains)
             .FirstOrDefaultAsync(t => t.Alphabet == alphabet);
 }

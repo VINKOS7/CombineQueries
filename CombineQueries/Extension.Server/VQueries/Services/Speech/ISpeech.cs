@@ -12,6 +12,9 @@ public record HyperSeed(int Handle, string Url);
 
 public record FragmentSeed(int Id, string Text);
 
+// Сид хайпера: собранный адрес и номер узла, которым он прыгается.
+public record JumpSeed(string Url, int Jump);
+
 // Итог обучения. Addressable - строки, которым хватило финитных адресов (L2/L3): они и едут клиенту
 // пиггибэком. Overflowed - те, кому адресов не хватило: в БД лягут с Level=Infinite, а клиенту НЕ
 // уходят, поэтому он их не адресует и шлёт буквами (тот самый direct-фоллбэк из спеки).
@@ -33,6 +36,9 @@ public interface ISpeech
 
     // Развязка-3: сколько ёмкостей клиент умеет перепрыгнуть. 1 = за L3 ничего не адресуется.
     int HopCount { get; }
+
+    // Класть ли НОВЫЕ цепочки в персист: с hypers=off накопленное читается, но не пополняется.
+    bool Hypers { get; }
 
     string DirectRunes { get; }
 
@@ -88,6 +94,24 @@ public interface ISpeech
     int TreeDeepest { get; }
 
     int Ahead();
+
+    IReadOnlyList<(int Id, int? ParentId, string Step, string? Url)> TakeChains();
+
+    void RestoreChains(IEnumerable<(int Id, int? ParentId, string Step, string? Url)> nodes);
+
+    IEnumerable<(string Url, int Jump)> ChainLeaves();
+
+    // Номера последней цепочки: лист и последний общий с известными узел.
+    int LastLeaf { get; }
+
+    int LastPrefix { get; }
+
+    int LastShared { get; }
+
+    // Встать в точку цепочки по её номеру. Возвращает, сколько кусков восстановлено, -1 - неизвестен.
+    int Resume(int handle);
+
+    string? UrlOf(int handle);
 
     // Сброс хайперов: нужен, чтобы прогон теста был повторяемым.
     void ForgetHypers();

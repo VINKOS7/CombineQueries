@@ -21,6 +21,30 @@ public class Translator : Entity, IAggregateRoot
     // Свои хайперы, связь 1 ко многим: handle -> собранный URL.
     public ICollection<Hyper> Hypers { get; set; } = [];
 
+    // Дерево цепочек combine-запросов: узлы ссылаются на родителя внутри этой же коллекции.
+    public ICollection<Chain> Chains { get; set; } = [];
+
+    // Кладёт узел дерева. Дубль по номеру отбиваем - номера назначает дерево в рантайме.
+    public Chain? Grow(int id, int? parentId, string step, string? url)
+    {
+        if (id < 0 || string.IsNullOrEmpty(step)) return null;
+
+        foreach (var known in Chains)
+            if (known.Id == id)
+            {
+                // Узел уже есть: у листа мог появиться адрес, это единственное, что меняется.
+                if (url is not null) known.Url = url;
+
+                return known;
+            }
+
+        var chain = new Chain { Id = id, TranslatorId = Id, ParentId = parentId, Step = step, Url = url };
+
+        Chains.Add(chain);
+
+        return chain;
+    }
+
 //    private int BaseRune { get; set; }
 
     public static Translator From(IAddTranslator<char> command) => new()

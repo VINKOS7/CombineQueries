@@ -12,20 +12,20 @@ namespace CombineQueries.Api.Controllers.Accounts.Handlers.Connect;
 public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 {
     private readonly ILogger<ConnectHandler> _logger;
+    private readonly ISpeech _speech;
     private readonly IAccountRepo _accountRepo;
-    private readonly ITranslatorRepo _translatorRepo;
     private readonly IConfiguration _configuration;
-    private readonly ISpeech _aFST;
+    private readonly ITranslatorRepo _translatorRepo;
     private readonly IWebHostEnvironment _environment;
 
-    public ConnectHandler(IAccountRepo accountRepo, ITranslatorRepo translatorRepo, IConfiguration configuration, ILogger<ConnectHandler> logger, ISpeech aFST, IWebHostEnvironment environment)
+    public ConnectHandler(IAccountRepo accountRepo, ITranslatorRepo translatorRepo, IConfiguration configuration, ILogger<ConnectHandler> logger, ISpeech speech, IWebHostEnvironment environment)
     {
         _logger = logger;
+        _speech = speech;
         _accountRepo = accountRepo;
-        _translatorRepo = translatorRepo;
-        _configuration = configuration;
-        _aFST = aFST;
         _environment = environment;
+        _configuration = configuration;
+        _translatorRepo = translatorRepo;
     }
 
     public async Task<ConnectResponse> Handle(ConnectRequest request, CancellationToken cancellationToken)
@@ -40,18 +40,19 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
             if (request.Scheme != "http" && request.Scheme != "https") throw new Exception($"domain error: scheme={request.Scheme}, must be http or https");
 
-            bool again = _aFST.Alphabet is not null;
+            bool again = _speech.Alphabet is not null;
 
             var (dfaSize, pageCount) = SizesOf(request);
 
-            _aFST.SetContext(new SetContextCommand<char>
+            _speech.SetContext(new SetContextCommand<char>
             {
                 Alphabet = request.Alphabet,
                 RuneSize = runeSize,
                 Scheme = request.Scheme,
                 DfaSize = dfaSize,
                 PageCount = pageCount,
-                HopCount = request.HopCount
+                HopCount = request.HopCount,
+                Hypers = request.Persist
             });
 
             _logger.LogInformation($"connect: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}, scheme={request.Scheme}, dfaSize={dfaSize}, pageCount={pageCount}");
@@ -76,11 +77,12 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
                 ShortDomain = "http://v.ro",
                 RuneSize = runeSize,
                 Scheme = request.Scheme,
-                DfaSize = _aFST.DfaSize,
-                Signs = _aFST.Signs,
+                DfaSize = _speech.DfaSize,
+                Signs = _speech.Signs,
+                Jumps = JumpsOf(),
                 Roots = Translator.Fragments,
-                Hypers = Seed(_aFST.HyperUrls, (i, u) => new HyperSeed(i, u), SeedLimit),
-                Fragments = Seed(_aFST.FragmentTexts, (i, t) => new FragmentSeed(i, t), Math.Min(SeedLimit, Reach(request)))
+                Hypers = Seed(_speech.HyperUrls, (i, u) => new HyperSeed(i, u), SeedLimit),
+                Fragments = Seed(_speech.FragmentTexts, (i, t) => new FragmentSeed(i, t), Math.Min(SeedLimit, Reach(request)))
             };
         }
         catch (Exception ex)
@@ -101,7 +103,7 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
             translator = Translator.From(new InitCommand<char>
             {
-                Runes = Domain.Aggregates.Translator.Translator.ATRFrom(request.Alphabet),
+                Runes = Translator.ATRFrom(request.Alphabet),
                 BaseForwardUrl = request.baseForwardUrl,
                 Alphabet = request.Alphabet
             });
@@ -124,14 +126,17 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
     // Забывает хайперы и в рантайме, и в персисте - иначе они вернулись бы на ближайшем connect.
     // Только Development: на релизе это стирало бы то, что накопил живой мир.
-    private async Task ForgetHypers(ConnectRequest request, Domain.Aggregates.Translator.Translator? translator, CancellationToken cancellationToken)
+    private async Task ForgetHypers(ConnectRequest request, Translator? translator, CancellationToken cancellationToken)
     {
         if (!request.ResetHypers || !_environment.IsDevelopment()) return;
 
-        int forgotten = _aFST.HyperUrls.Count + (translator?.Hypers.Count ?? 0);
+        int forgotten = _speech.HyperUrls.Count + (translator?.Hypers.Count ?? 0);
 
-        _aFST.ForgetHypers();
+        _speech.ForgetHypers();
 
+        // Цепочки НЕ трогаем: в dev в БД лежит ровно одна, посеянная миграцией, и она должна
+        // пережить сброс - иначе прыгать станет не по чему. Накопленное этим прогоном живёт в
+        // памяти, его ForgetHypers уже стёр.
         if (translator is not null && translator.Hypers.Count > 0)
         {
             translator.Hypers.Clear();
@@ -144,7 +149,7 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
     // Тёплый словарь из персиста в рантайм. Адрес и handle - это индексы, поэтому строго по
     // возрастанию, дырки Restore добьёт сам.
-    private void Warm(Domain.Aggregates.Translator.Translator? translator)
+    private void Warm(Translator? translator)
     {
         if (translator is null) return;
 
@@ -160,9 +165,17 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
         hypers.Sort((a, b) => a.Handle.CompareTo(b.Handle));
 
-        _aFST.Restore(fragments, hypers);
+        // Дерево цепочек из персиста: номера узлов сохраняются, иначе выданные прыжки протухнут.
+        // Поднимаем ВСЕГДА - hypers=off гасит появление новых цепочек, а не чтение накопленных.
+        var chains = new List<(int, int?, string, string?)>(translator.Chains.Count);
 
-        _logger.LogInformation("connect: restored {Fragments} fragments, {Hypers} hypers", fragments.Count, hypers.Count);
+        foreach (var chain in translator.Chains) chains.Add((chain.Id, chain.ParentId, chain.Step, chain.Url));
+
+        _speech.RestoreChains(chains);
+
+        _speech.Restore(fragments, hypers);
+
+        _logger.LogInformation("connect: restored {Fragments} fragments, {Hypers} hypers, {Chains} chain nodes", fragments.Count, hypers.Count, chains.Count);
     }
 
     private (int DfaSize, int PageCount) SizesOf(ConnectRequest request)
@@ -191,10 +204,20 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
         }
     }
 
+    // Хайперы для клиента: только листы, плоским списком.
+    private List<JumpSeed> JumpsOf()
+    {
+        var jumps = new List<JumpSeed>();
+
+        foreach (var (url, jump) in _speech.ChainLeaves()) jumps.Add(new JumpSeed(url, jump));
+
+        return jumps;
+    }
+
     // Докуда клиенту вообще есть смысл слать словарь. Адрес это индекс, поэтому «не слать Infinite»
     // = не слать дальше потолка L3. С флагом - без ограничения, пусть сам решает, что удержит.
     private int Reach(ConnectRequest request) =>
-        request.RememberInfinite ? int.MaxValue : _aFST.DfaSize * _aFST.PageCount;
+        request.RememberInfinite ? int.MaxValue : _speech.DfaSize * _speech.PageCount;
 
     // Индекс списка = id/handle элемента, поэтому режем только с конца.
     private static List<TSeed> Seed<TSeed>(IReadOnlyList<string> source, Func<int, string, TSeed> make, int limit)
@@ -224,8 +247,7 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
         {
             bool configured = token == _configuration["Auth:Token"];
 
-            _logger.LogWarning("connect: accounts unavailable, configured token {Verdict} ({Kind}: {Message})",
-                configured ? "accepted" : "rejected", ex.GetType().Name, ex.Message);
+            _logger.LogWarning("connect: accounts unavailable, configured token {Verdict} ({Kind}: {Message})", configured ? "accepted" : "rejected", ex.GetType().Name, ex.Message);
 
             if (configured) return null;
 

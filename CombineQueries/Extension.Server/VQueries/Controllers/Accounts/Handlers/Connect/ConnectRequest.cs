@@ -38,6 +38,16 @@ public record ConnectRequest : IRequest<ConnectResponse>
     // подтянуть её пиггибэком по факту, чем возить весь хвост.
     [JsonProperty("rememberInfinite")] public bool RememberInfinite { get; set; }
 
+    // Рост хайперов: "off" - новые цепочки в персист не попадают, любое другое значение - копим.
+    //
+    // Накопленное при этом читается как обычно: дерево поднимается из БД, сид едет клиенту,
+    // прыжки работают. Флаг замораживает рост, а не отключает работу с базой.
+    //
+    // Это и не сброс: resetHypers стирает уже накопленное, а этот решает, добавлять ли новое.
+    [JsonProperty("hypers")] public string Hypers { get; set; } = "on";
+
+    public bool Persist => Hypers != "off";
+
     // Развязка-3 (Infinite): сколько ёмкостей клиент умеет перепрыгнуть одним доп. запросом.
     // Адресуемо всего dfaSize*pageCount*hopCount. 1 = развязки нет, за L3 ничего не адресуется.
     [JsonProperty("hopCount")] public int HopCount { get; set; } = 1;
