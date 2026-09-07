@@ -23,6 +23,26 @@ public class Speech : ISpeech
     // последовательны, порядок прихода = порядок в URL.
     private readonly List<Piece> _pieces = [];
 
+    // Хайпер-дерево: цепочки запросов по слоям. Пока без персиста - копим и меряем.
+    private readonly HyperTree _tree = new();
+
+    public int TreeChains => _tree.Chains;
+    public int TreeNodes => _tree.Nodes;
+    public int TreeDeepest => _tree.Deepest;
+
+    // Сколько адресов ещё возможно после уже принятого префикса. 1 значит, что продолжение
+    // однозначно - на этом строится будущий досрочный форвард.
+    public int Ahead() => _tree.Ahead(StepsOf());
+
+    private List<string> StepsOf()
+    {
+        var steps = new List<string>(_pieces.Count);
+
+        foreach (var piece in _pieces) steps.Add(HyperTree.StepOf(piece.IsFragment, piece.Rune, piece.FragmentId));
+
+        return steps;
+    }
+
     private readonly List<string> _handles = [];
     private readonly List<long> _firstSendMs = [];
     private readonly Dictionary<string, int> _byUrl = [];
@@ -278,9 +298,25 @@ public class Speech : ISpeech
 
         int runes = _pieces.Count;
 
+        // Разбивка покрытия: чем меньше chunks, тем плотнее словарь лёг на этот url.
+        int capacity = DfaSize * PageCount;
+        int chunks = 0, l2 = 0, l3 = 0, infinite = 0;
+
+        foreach (var piece in _pieces)
+        {
+            if (!piece.IsFragment) { chunks++; continue; }
+
+            if (piece.FragmentId < DfaSize) l2++;
+            else if (piece.FragmentId < capacity) l3++;
+            else infinite++;
+        }
+
+        // Цепочку кладём в дерево до очистки: путь от корня и есть поток запросов этого url.
+        _tree.Remember(StepsOf(), sb.ToString());
+
         _pieces.Clear();
 
-        return new AssembledResult(sb.ToString(), runes, _assembly.ElapsedMilliseconds);
+        return new AssembledResult(sb.ToString(), runes, _assembly.ElapsedMilliseconds, chunks, l2, l3, infinite);
     }
 
     public int Intern(string url, long firstSendMs)
@@ -299,6 +335,8 @@ public class Speech : ISpeech
     // Сброс хайперов (dev): собранный url перестаёт отдаваться одним /h/ и снова идёт сборкой.
     public void ForgetHypers()
     {
+        _tree.Forget();
+
         _handles.Clear();
         _byUrl.Clear();
         _firstSendMs.Clear();

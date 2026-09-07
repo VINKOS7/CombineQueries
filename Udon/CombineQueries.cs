@@ -41,7 +41,6 @@ public class CombineQueries : UdonSharpBehaviour
     private const int NumSize = 4;
 
     private const int MaxChunks = 256;
-    private const int MaxHandles = 4096;
 
     // Размер Развязки-1: сколько слотов печём и сообщаем серверу в connect. Меняешь размер - правишь обе константы (число и строку).
     private const int dfaSize = 1024;
@@ -67,8 +66,8 @@ public class CombineQueries : UdonSharpBehaviour
     // умеем (якорь + hop), просто не возим весь хвост: строка уходит туда именно потому, что
     // встречается реже всех, и дешевле подтянуть её пиггибэком по факту.
     // true - сервер шлёт словарь целиком, до 4 млн строк. Это сотни мегабайт, Udon столько не держит.
-    private const bool rememberInfinite = false;
-    private const string RememberInfiniteStr = "false";
+    private const bool rememberInfinite = true;
+    private const string RememberInfiniteStr = "true";
 
     // Подпись хвоста: сколько у неё значений. Каждый /t/ несёт очередную из выданной на connect
     // последовательности, сервер сверяет - не совпало, приём валится до повторного connect.
@@ -93,7 +92,6 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", "/0/0/0/0", Symbols, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth, SignValues);
     private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
-    private readonly VRCUrl[] HandlePool = NumPoolOf(baseUrl + "/h/", MaxHandles);
     private readonly VRCUrl[] VfPool = VfPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, dfaSize, pageCount);
 
     // Развязка-3 (Infinite): сдвиг адреса на hop ёмкостей. Печём hopCount ссылок - не пул на каждый
@@ -117,11 +115,17 @@ public class CombineQueries : UdonSharpBehaviour
     public int LastSymbols;
     public int LastQueries;
 
+    // Покрытие последнего url: сколько кусков ушло рунами и сколько фрагментами по уровням.
+    // Partial это LastChunks > 0 - словаря не хватило, часть поехала по буквам.
+    public int LastChunks;
+    public int LastL2;
+    public int LastL3;
+    public int LastInfinite;
+
     private const int PhaseIdle = 0;
     private const int PhaseConnect = 1;
     private const int PhaseChunks = 2;
     private const int PhaseTail = 3;
-    private const int PhaseHandle = 4;
     private const int PhaseCode = 5;
     private const int PhaseVerify = 6;
     private const int PhaseFragment = 7;
@@ -140,13 +144,18 @@ public class CombineQueries : UdonSharpBehaviour
     private string pendingUrl = "";
     private string forwarded = "";
 
-    private string[] cachedUrls = new string[0];
-    private int[] cachedHandles = new int[0];
-
     // Последовательность подписей с connect. Позиции обязаны идти в ногу с серверными: разъедутся -
     // сервер посчитает хвост чужим и свалит приём.
     private string signs = "";
     private int signPos;
+
+    // Хайпер: цепочки запросов, зеркало серверного. Дерево тут не нужно - цепочек немного, и
+    // словарь «цепочка -> url» и проще, и быстрее: поиск по ключу вместо обхода узлов.
+    // Ключ собирается по ходу отправки, значение кладётся, когда url собрался. Персиста пока нет.
+    private DataDictionary chains = new DataDictionary();
+
+    // Ключ текущей сборки: чем шлём, тем и растим.
+    private string chain = "";
 
     // Словарь динамических фрагментов, зеркало серверного: адрес -> подстрока.
     // Заполняется сидом из connect и пиггибэком из /t/.
@@ -254,13 +263,12 @@ public class CombineQueries : UdonSharpBehaviour
         LastQueries = 0;
         busy = true;
 
-        if (!withFragments) { SendDirect(payload); return; }
+        chain = "";
 
-        int handle = HandleOf(payload);
-
-        if (handle < 0) { SendCombine(payload); return; }
-
-        Load(PhaseHandle, HandlePool[handle]);
+        // Хайпер с фронта временно снят: его работу делают динамические фрагменты - собранный url
+        // целиком уже лежит в словаре и уходит одним VF-запросом, без отдельного /h/.
+        // Вернётся, когда станет хранилищем цепочек запросов, а не просто handle -> url.
+        if (withFragments) SendCombine(payload); else SendDirect(payload);
     }
 
     public string TakeForwardedBody() => StringField(forwarded, "response");
@@ -345,6 +353,8 @@ public class CombineQueries : UdonSharpBehaviour
                     {
                         q[count] = anchor; k[count] = 1; count++;
 
+                        PushStep("f" + fid);
+
                         if (hop > 0) { q[count] = hop; k[count] = 3; count++; }
 
                         pos += flen;
@@ -367,6 +377,9 @@ public class CombineQueries : UdonSharpBehaviour
                 if (count >= MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
 
                 q[count] = acc; k[count] = 0; count++;
+
+                PushStep("c" + acc);
+
                 acc = 0; accLen = 0;
             }
         }
@@ -512,9 +525,12 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (phase == PhaseTail)
         {
-            int handle = IntField(response.Result, "handle");
+            RememberChain(pendingUrl);
 
-            if (handle >= 0 && handle < MaxHandles) Cache(pendingUrl, handle);
+            LastChunks = IntField(response.Result, "chunks");
+            LastL2 = IntField(response.Result, "l2");
+            LastL3 = IntField(response.Result, "l3");
+            LastInfinite = IntField(response.Result, "infinite");
 
             LearnFragments(response.Result);
 
@@ -523,17 +539,6 @@ public class CombineQueries : UdonSharpBehaviour
             Done();
             return;
         }
-
-        if (!BoolField(response.Result, "known"))
-        {
-            Forget(pendingUrl);
-
-            if (fragments) SendCombine(pendingUrl); else SendDirect(pendingUrl);
-
-            return;
-        }
-
-        forwarded = response.Result;
 
         Done();
     }
@@ -579,6 +584,21 @@ public class CombineQueries : UdonSharpBehaviour
         Fail("no answer in " + Timeout + "s on phase " + phase + " - url blocked by the SDK or server unreachable");
     }
 
+    // Запоминает цепочку целиком. Ключ - последовательность шагов, значение - собранный url.
+    private void RememberChain(string url)
+    {
+        if (chain == "") return;
+
+        chains.SetValue(chain, url);
+    }
+
+    // Шаг цепочки: у фрагмента это адрес, у чанка - значение руны. Буква впереди разводит их,
+    // чтобы фрагмент с адресом 5 не столкнулся с чанком 5.
+    private void PushStep(string step) => chain = chain + step + "|";
+
+    // Знаем ли уже такую цепочку. Пригодится, когда научимся не досылать известный хвост.
+    public int KnownChains => chains.Count;
+
     private void Done()
     {
         busy = false;
@@ -603,73 +623,12 @@ public class CombineQueries : UdonSharpBehaviour
         Done();
     }
 
-    private int HandleOf(string url)
-    {
-        for (int i = 0; i < cachedUrls.Length; i++) if (cachedUrls[i] == url) return cachedHandles[i];
-
-        return -1;
-    }
-
-    private void Cache(string url, int handle)
-    {
-        if (HandleOf(url) >= 0) return;
-
-        string[] urls = new string[cachedUrls.Length + 1];
-        int[] handles = new int[cachedHandles.Length + 1];
-
-        for (int i = 0; i < cachedUrls.Length; i++) { urls[i] = cachedUrls[i]; handles[i] = cachedHandles[i]; }
-
-        urls[cachedUrls.Length] = url;
-        handles[cachedHandles.Length] = handle;
-
-        cachedUrls = urls;
-        cachedHandles = handles;
-    }
-
-    private void Forget(string url)
-    {
-        string[] urls = new string[cachedUrls.Length];
-        int[] handles = new int[cachedHandles.Length];
-        int kept = 0;
-
-        for (int i = 0; i < cachedUrls.Length; i++)
-        {
-            if (cachedUrls[i] == url) continue;
-
-            urls[kept] = cachedUrls[i];
-            handles[kept] = cachedHandles[i];
-            kept++;
-        }
-
-        cachedUrls = new string[kept];
-        cachedHandles = new int[kept];
-
-        for (int i = 0; i < kept; i++) { cachedUrls[i] = urls[i]; cachedHandles[i] = handles[i]; }
-    }
-
-    // connect-сид: тёплый словарь мастера из тела /init. Хайперы кладём в кэш ссылок (Cache сам
-    // отсеет дубли), фрагменты - в словарь фрагментов. Пустые массивы = холодный сервер, это норма.
     private void SeedFromConnect(string json)
     {
         if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
         if (root.TokenType != TokenType.DataDictionary) return;
 
         DataDictionary dict = root.DataDictionary;
-
-        if (dict.TryGetValue("hypers", out DataToken hypers) && hypers.TokenType == TokenType.DataList)
-        {
-            DataList list = hypers.DataList;
-
-            for (int i = 0; i < list.Count; i++)
-            {
-                if (!list.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
-
-                int handle = DictInt(item.DataDictionary, "handle");
-                string url = DictString(item.DataDictionary, "url");
-
-                if (handle >= 0 && handle < MaxHandles && url != "") Cache(url, handle);
-            }
-        }
 
         // Корни L1 с сервера: индекс = символ (59 + f) в рун-пространстве. Принимаем только если
         // распарсились все строки (иначе выравнивание индексов сломается — оставляем пусто).

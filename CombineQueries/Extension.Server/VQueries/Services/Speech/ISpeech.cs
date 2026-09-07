@@ -2,7 +2,9 @@ using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Services.Speech;
 
-public record AssembledResult(string Text, int Runes, long ElapsedMs);
+// Runes - сколько кусков всего. Дальше разбивка: сколько ушло рунами (не нашлось фрагмента) и
+// сколько фрагментами по уровням. Это и отличает partial от полного покрытия.
+public record AssembledResult(string Text, int Runes, long ElapsedMs, int Chunks, int L2, int L3, int Infinite);
 
 // Сид для connect и пиггибэк новых фрагментов в ответе /t/. Сериализуются camelCase:
 // HyperSeed -> {handle,url}, FragmentSeed -> {id,text}.
@@ -77,6 +79,15 @@ public interface ISpeech
     int Intern(string url, long firstSendMs);
 
     string? Resolve(int handle);
+
+    // Хайпер-дерево цепочек: растёт на каждой сборке, живёт в памяти.
+    int TreeChains { get; }
+
+    int TreeNodes { get; }
+
+    int TreeDeepest { get; }
+
+    int Ahead();
 
     // Сброс хайперов: нужен, чтобы прогон теста был повторяемым.
     void ForgetHypers();

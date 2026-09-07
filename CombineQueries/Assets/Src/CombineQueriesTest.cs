@@ -14,13 +14,18 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     // code-only, not serialized - a scene value cannot override these and desync the labels
     //
-    // Порядок демонстрации: сперва уровни словаря, потом хайпер, потом бесконечность двумя
-    // заходами, и только в конце частичное покрытие с прямой отправкой - они самые дорогие.
+    // Порядок: сперва уровни словаря, потом обучение двумя заходами, и только в конце частичное
+    // покрытие с прямой отправкой - они самые дорогие.
     private string testUrlFull = "https://dummyjson.com/comments/1";
 
-    // Бесконечность показываем ДВУМЯ РАЗНЫМИ url с общей длинной частью. Повтор одного и того же
-    // дал бы хайпер (клиент помнит url -> handle) и ничего про Infinite не сказал бы: на первом
-    // заходе сервер учит общую подстроку, на втором она уже адресуется.
+    // Два РАЗНЫХ url с общей длинной частью: на первом заходе сервер учит подстроку, на втором она
+    // должна адресоваться фрагментом. Строка, которой не хватило трёхмерного пространства
+    // (dfaSize x pageCount), берётся заёмом - якорь плюс сдвиг, всё те же два запроса.
+    // Partial с большим покрытием: два куска легли фрагментами (адреса 16 и 115, оба L3), а один
+    // не нашёлся и ушёл руной. Ровно тот случай, ради которого partial и отличают от полного:
+    // словарь сработал почти везде, но «почти» стоит лишнего запроса.
+    private string testUrlPartialBig = "https://dummyjson.com/products/12/comments";
+
     private string testUrlLearn = "https://dummyjson.com/products?limit=10&skip=20";
     private string testUrlLearned = "https://dummyjson.com/products?limit=10&skip=50";
 
@@ -29,12 +34,16 @@ public class CombineQueriesTest : UdonSharpBehaviour
     [Tooltip("Optional: status is written here")]
     public Text output;
 
+    // Хайпер снят вместе с клиентской частью: его работу делают динамические фрагменты.
+    //
+    // Шаг «combine, partial» (comments/post/1) убран из цепочки: он показывал частичное покрытие,
+    // но по сути то же самое показывают шаги ниже - строка, которой не хватило трёхмерного
+    // пространства, адресуется якорем и сдвигом. Url и заголовок оставлены на будущее.
     private const int StepLevels = 0;
-    private const int StepHyper = 1;
+    private const int StepPartialBig = 1;
     private const int StepLearn = 2;
     private const int StepLearned = 3;
-    private const int StepCombinePartial = 4;
-    private const int StepDirect = 5;
+    private const int StepDirect = 4;
 
     private bool ready;
     private bool awaiting;
@@ -101,7 +110,11 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (!running) return;
 
         string line = TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   "
-                    + NumberOf(client.LastQueries) + " queries";
+                    + NumberOf(client.LastQueries) + " queries   "
+                    + "runes " + NumberOf(client.LastChunks)
+                    + "  L2 " + NumberOf(client.LastL2)
+                    + "  L3 " + NumberOf(client.LastL3)
+                    + "  inf " + NumberOf(client.LastInfinite);
 
         board += line + "\n";
         step++;
@@ -119,10 +132,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private void SendStep()
     {
         if (step == StepLevels) client.Request(testUrlFull);
-        else if (step == StepHyper) client.Request(testUrlFull);
+        else if (step == StepPartialBig) client.Request(testUrlPartialBig);
         else if (step == StepLearn) client.Request(testUrlLearn);
         else if (step == StepLearned) client.Request(testUrlLearned);
-        else if (step == StepCombinePartial) client.Request(testUrl);
         else client.RequestDirect(testUrl);
 
         awaiting = true;
@@ -135,12 +147,10 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private string TitleOf(int at)
     {
         if (at == StepLevels) return "1  L1-L3 fragments        (comments/1)       ";
-        if (at == StepHyper) return "2  hyper (cached handle)  (comments/1)       ";
-        if (at == StepLearn) return "3  infinite, learning     (limit=10&skip=20) ";
-        if (at == StepLearned) return "4  infinite, learned      (limit=10&skip=50) ";
-        if (at == StepCombinePartial) return "5  combine, partial       (comments/post/1)";
-
-        return "6  direct                 (comments/post/1)";
+        if (at == StepPartialBig) return "2  partial big             (products/12/comments)";
+        if (at == StepLearn) return "3  partial, learning       (limit=10&skip=20) ";
+        if (at == StepLearned) return "4  partial, learned        (limit=10&skip=50) ";
+        return "5  direct                  (comments/post/1)";
     }
 
     private string NumberOf(int value)

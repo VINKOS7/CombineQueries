@@ -42,7 +42,8 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
 
         string url = speech.Scheme + "://" + assembled.Text;
 
-        logger.LogInformation("tail: assembled {Runes} runes + {Chars} chars in {ElapsedMs} ms -> {Url}", assembled.Runes, tail.Length, assembled.ElapsedMs, url);
+        logger.LogInformation("tail: assembled {Runes} pieces ({Chunks} runes, L2 {L2}, L3 {L3}, inf {Inf}) + {Chars} chars in {ElapsedMs} ms -> {Url}",
+            assembled.Runes, assembled.Chunks, assembled.L2, assembled.L3, assembled.Infinite, tail.Length, assembled.ElapsedMs, url);
 
         var forwarded = await forwarder.GetAsync(url, cancellationToken);
 
@@ -50,6 +51,8 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
 
         // Учим DF из собранного payload'а (assembled.Text - без схемы, ровно то, что токенизирует клиент).
         var learned = speech.LearnFrom(assembled.Text);
+
+        logger.LogInformation("tail: tree now {Chains} chains in {Nodes} nodes, deepest {Deep}", speech.TreeChains, speech.TreeNodes, speech.TreeDeepest);
 
         logger.LogInformation("tail: first send took {TotalMs} ms total ({Requests} requests), handle {Handle}, +{Learned} fragments",
             assembled.ElapsedMs + forwarded.ElapsedMs, assembled.Runes + 1, handle, learned.Addressable.Count);
@@ -67,6 +70,12 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
             ForwardedUrl = url,
             Response = forwarded.Body,
             Handle = handle,
+            Chains = speech.TreeChains,
+            Nodes = speech.TreeNodes,
+            Chunks = assembled.Chunks,
+            L2 = assembled.L2,
+            L3 = assembled.L3,
+            Infinite = assembled.Infinite,
             AssemblyMs = assembled.ElapsedMs,
             ForwardMs = forwarded.ElapsedMs,
             Fragments = learned.Addressable

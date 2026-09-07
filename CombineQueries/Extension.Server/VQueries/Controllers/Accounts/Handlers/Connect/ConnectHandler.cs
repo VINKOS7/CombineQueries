@@ -185,7 +185,7 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
     {
         get
         {
-            int limit = _configuration.GetValue("Init:SeedLimit", 8);
+            int limit = _configuration.GetValue("Init:SeedLimit", 512);
 
             return limit > 0 ? limit : int.MaxValue;
         }
