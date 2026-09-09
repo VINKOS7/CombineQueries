@@ -118,11 +118,19 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
     }
 
     // Хайперы для клиента: только листы, плоским списком.
+    //
+    // Режем тем же лимитом, что и словарь: прогрев заводит цепочки сотнями, а в проде их станут
+    // десятки тысяч - весь сид клиент бы просто не распарсил. Берём ПОСЛЕДНИЕ: номера растут, то
+    // есть в хвосте списка лежит самое свежее, а вытесненное клиент соберёт обычной дорогой.
     private List<JumpSeed> JumpsOf()
     {
         var jumps = new List<JumpSeed>();
 
         foreach (var (url, jump) in _speech.ChainLeaves()) jumps.Add(new JumpSeed(url, jump));
+
+        int extra = jumps.Count - SeedLimit;
+
+        if (extra > 0) jumps.RemoveRange(0, extra);
 
         return jumps;
     }

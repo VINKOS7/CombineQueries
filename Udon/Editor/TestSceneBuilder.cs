@@ -34,9 +34,11 @@ public static class TestSceneBuilder
         canvasGo.GetComponent<Canvas>().renderMode = RenderMode.WorldSpace;
 
         var canvasRt = canvasGo.GetComponent<RectTransform>();
-        canvasRt.sizeDelta = new Vector2(900, 700);
+        // Размеры берём у DevRig: он же подгоняет доску в уже собранных сценах, и держать два
+        // набора чисел значит однажды получить новую сцену уже, чем старую.
+        canvasRt.sizeDelta = DevRig.BoardSize;
         canvasRt.localPosition = new Vector3(0f, 2f, 0.2f);
-        canvasRt.localScale = Vector3.one * 0.002f;
+        canvasRt.localScale = Vector3.one * DevRig.BoardScale;
         canvasRt.localRotation = Quaternion.Euler(0f, 180f, 0f);
 
         var textGo = new GameObject("StatusText", typeof(Text));
@@ -60,8 +62,8 @@ public static class TestSceneBuilder
 
         Debug.Log("[TestSceneBuilder] geometry created: cubes + canvas. Udon components next.");
 
-        EnsureProgramAsset("Assets/CombineQueries/CombineQueries.cs");
-        EnsureProgramAsset("Assets/CombineQueries/CombineQueriesTest.cs");
+        EnsureProgramAsset("Assets/Src/CombineQueries.cs");
+        EnsureProgramAsset("Assets/Src/CombineQueriesTest.cs");
 
         try
         {
@@ -99,15 +101,26 @@ public static class TestSceneBuilder
         EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
     }
 
+    // Заводит program asset для скрипта, если его ещё НЕТ НИГДЕ в проекте.
+    //
+    // Искать надо по всему проекту, а не рядом со скриптом: U# требует ровно один program asset на
+    // скрипт, а ассет остаётся на месте, когда скрипт переезжает в другую папку (ссылка держится
+    // за GUID). Проверка «лежит ли рядом» на этом и погорела - завела второй и сломала компиляцию.
     private static void EnsureProgramAsset(string scriptPath)
     {
-        string assetPath = scriptPath.Substring(0, scriptPath.Length - 3) + ".asset";
-
-        if (AssetDatabase.LoadAssetAtPath<UdonSharp.UdonSharpProgramAsset>(assetPath) != null) return;
-
         var script = AssetDatabase.LoadAssetAtPath<MonoScript>(scriptPath);
 
         if (script == null) { Debug.LogError("[TestSceneBuilder] script not found: " + scriptPath); return; }
+
+        foreach (string guid in AssetDatabase.FindAssets("t:UdonSharpProgramAsset"))
+        {
+            string known = AssetDatabase.GUIDToAssetPath(guid);
+            var asset = AssetDatabase.LoadAssetAtPath<UdonSharp.UdonSharpProgramAsset>(known);
+
+            if (asset != null && asset.sourceCsScript == script) return;
+        }
+
+        string assetPath = scriptPath.Substring(0, scriptPath.Length - 3) + ".asset";
 
         var programAsset = ScriptableObject.CreateInstance<UdonSharp.UdonSharpProgramAsset>();
         programAsset.sourceCsScript = script;

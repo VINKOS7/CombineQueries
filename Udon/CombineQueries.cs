@@ -81,12 +81,32 @@ public class CombineQueries : UdonSharpBehaviour
     // ВЫКЛЮЧАТЕЛЬ: 1 - подпись единственная, пул не растёт, сверка тривиальна. Вырезать код не надо.
     private const int SignValues = 8;
 
+    // Голова потока: две развязки в одном запросе.
+    //
+    // Первая - кусок combine: то, чем искомый адрес ОТЛИЧАЕТСЯ от похожего. Вторая - обрезок номера
+    // самого похожего (база): целиком номер не влезает, да и не нужен - вторую половину работы
+    // делает кусок. В этом и экономия: гипер едет не весь.
+    //
+    // Сервер складывает одно с другим и получает ТОЧНЫЙ адрес, поэтому отвечает готовым телом.
+    private const int HeadLimit = 1024;
+    private const int HeadBases = 16;
+
     // Подпись прыжка - та же и полная, что у хвоста: прыжок САМ отдаёт собранный адрес наружу,
     // значит по правам он равен хвосту, а не куску. Кольцо общее - /h/ и /t/ съедают по позиции.
     //
     // Цена: пул прыжков множится на SignValues (4096 -> 32768 ссылок, ~3 МБ). Это плата за то,
     // что хайпер укладывается в ОДИН запрос вместо двух.
     private const int JumpSignValues = SignValues;
+
+    // Пачка ДИАПАЗОНОМ: сколько адресов забираем одним запросом.
+    //
+    // Перечислить номера в адресе нельзя - печётся каждое сочетание, два произвольных дают 4096^2
+    // ссылок. Диапазон растёт линейно: 4096 * RangeMax * подписи. Работает потому, что номера
+    // выдаются ПО ПОРЯДКУ - адреса, собранные подряд, лежат рядом.
+    //
+    // Четыре, а не восемь: серии длиннее четырёх бывают только когда адреса собрали подряд в одну
+    // сессию, а 4 стоят ровно столько же, сколько стоила пара - 131 072 ссылки.
+    private const int RangeMax = 4;
 
     // Сбрасывать ли хайперы при инициализации карты. Собранный однажды url дальше уходит одним
     // запросом /h/, и повторный прогон теста меряет уже не сборку - без сброса второй заход
@@ -123,8 +143,10 @@ public class CombineQueries : UdonSharpBehaviour
     // адрес, а один разряд поверх VF-пула, поэтому адресуемое пространство растёт в hopCount раз
     // ценой всего hopCount ссылок.
     private readonly VRCUrl[] HopPool = HopPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, hopCount);
-    // Прыжок в точку ранее пройденной combine-цепочки: /h/<узел>.
-    private readonly VRCUrl[] JumpPool = NumPoolOf(baseUrl + "/h/", MaxJumps, JumpSignValues);
+    // Голова: /hd/<адрес фрагмента>/<подпись>. Спрашиваем по СОДЕРЖИМОМУ - номера мы не знаем.
+    private readonly VRCUrl[] HeadPool = HeadPoolOf(baseUrl + "/hd/", HeadLimit, HeadBases, JumpSignValues);
+    // Пачка прыжков одним запросом: /h/<первый>/<сколько>/<подпись>.
+    private readonly VRCUrl[] RangePool = RangePoolOf(baseUrl + "/h/", MaxJumps, RangeMax, JumpSignValues);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
 
@@ -156,6 +178,11 @@ public class CombineQueries : UdonSharpBehaviour
     public int LastL3;
     public int LastInfinite;
 
+    // Сколько адресов затребовал последний запрос. У сборки это всегда 1, у прыжка - столько,
+    // сколько он покрыл диапазоном, у головы - сколько она нашла. Тела при этом приезжают долгом,
+    // так что число говорит «за сколькими пошли», а не «сколько уже на руках».
+    public int LastUrls;
+
     // Номер прыжка, которым ушёл последний адрес, или -1 - собирали с нуля. Нужен снаружи:
     // у короткой цепочки прыжок не меняет ЧИСЛО запросов, и по счётчику его не видно.
     public int LastJump = -1;
@@ -172,6 +199,7 @@ public class CombineQueries : UdonSharpBehaviour
     private const int PhaseVerify = 6;
     private const int PhaseFragment = 7;
     private const int PhaseJump = 8;
+    private const int PhaseHead = 9;
 
     private int phase;
     private bool connectOk;
@@ -209,6 +237,20 @@ public class CombineQueries : UdonSharpBehaviour
     // словарь приезжает сидом в connect.
     private DataDictionary jumps = new DataDictionary();
 
+    // Ёмкость словаря прыжков. Дальше он не растёт: новый адрес вытесняет самый старый - кольцо,
+    // перезапись с начала. Сервер греет сотни адресов и копит их дальше, а держать их все на
+    // клиенте незачем - вытесненный просто соберётся обычной дорогой и вернётся в словарь.
+    //
+    // Ёмкость ОБЯЗАНА быть не меньше сида, иначе он съедает сам себя: сид приезжает одной пачкой,
+    // и хвост пачки вытесняет её же начало - на 263 при сиде 265 первым выпадал посев carts/5,
+    // и шаг «hyper from db» шёл сборкой. Держим с запасом над серверным SeedLimit (512).
+    private const int MaxRemembered = 1024;
+
+    // Порядок вселения: индекс кольца -> адрес, который его занимает. Нужен, чтобы знать, кого
+    // выселять: у DataDictionary своего порядка нет.
+    private string[] jumpRing = new string[MaxRemembered];
+    private int jumpRingAt;
+
     // Словарь динамических фрагментов, зеркало серверного: адрес -> подстрока.
     // Заполняется сидом из connect и пиггибэком из /t/.
     private string[] cachedFragments = new string[0];
@@ -227,14 +269,46 @@ public class CombineQueries : UdonSharpBehaviour
         roots = new string[0];
         cachedFragments = new string[0];
         cachedFragIds = new int[0];
-        jumps = new DataDictionary();
+        ForgetJumps();
 
         Begin(true);
     }
 
+    // Два адреса за раз - частный случай пачки, так их называет разработчик, потребитель тулзы.
+    //
+    // Соседние номера уйдут одним запросом диапазоном, разные - по очереди. Решает это Run,
+    // отдельной логики тут больше нет.
+    public void RequestPair(string first, string second)
+    {
+        Queue(first);
+        Queue(second);
+
+        Run();
+    }
+
     // Забыть СВОИ прыжки, не трогая серверные. Нужно, чтобы увидеть персист как его видит новый
     // игрок: клиент про адрес не знает ничего, а сервер отдаёт его прыжок сидом в connect.
-    public void ForgetJumps() => jumps = new DataDictionary();
+    public void ForgetJumps()
+    {
+        jumps = new DataDictionary();
+        jumpRing = new string[MaxRemembered];
+        jumpRingAt = 0;
+    }
+
+    // Кладёт прыжок, вытесняя самый старый, если кольцо заполнено.
+    private void KeepJump(string url, int jump)
+    {
+        if (jumps.ContainsKey(url)) { jumps.SetValue(url, jump); return; }
+
+        string evicted = jumpRing[jumpRingAt];
+
+        if (evicted != null && evicted != "") jumps.Remove(evicted);
+
+        jumpRing[jumpRingAt] = url;
+        jumpRingAt = (jumpRingAt + 1) % MaxRemembered;
+
+        jumps.SetValue(url, jump);
+    }
 
     // Повторное подключение ДЕЛЬТОЙ: всё, что уже знаем, оставляем при себе - сервер дошлёт
     // недостающее тем же сидом. Нужно после гашения хоста или реконнекта.
@@ -295,6 +369,185 @@ public class CombineQueries : UdonSharpBehaviour
 
     public void Request(string url) => Send(url, true);
 
+    // ПАЧКА: адреса копятся, пока их не попросят все разом.
+    //
+    // Зачем: пока запросы идут по одному, клиент не знает, что будет дальше, и каждый адрес
+    // проходит свой путь. Собранная пачка позволяет разложить её ОДИН раз - кого сервер знает по
+    // номеру (тем прыжок), кого нет (тем голова), - и не гонять поиск там, где номер уже на руках.
+    public void Queue(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return;
+
+        string[] grown = new string[queued.Length + 1];
+
+        for (int i = 0; i < queued.Length; i++) grown[i] = queued[i];
+
+        grown[queued.Length] = url;
+
+        queued = grown;
+    }
+
+    // Выполняет накопленное. Тела складываются по адресам, забрать их - BodyOf(url).
+    public void Run()
+    {
+        if (busy || queued.Length == 0) return;
+
+        bodies = new DataDictionary();
+
+        batch = queued;
+        BatchQueries = 0;
+
+        queued = new string[0];
+        done = new bool[batch.Length];
+
+        NextInBatch();
+    }
+
+    // Выбирает следующий шаг пачки: сперва ищет ДИАПАЗОН - адреса, чьи номера идут подряд, - и
+    // забирает их одним запросом. Не нашлось серии - берёт первый несделанный поодиночке.
+    private void NextInBatch()
+    {
+        int start = -1, length = 0;
+
+        for (int i = 0; i < batch.Length; i++)
+        {
+            if (done[i]) continue;
+
+            int first = JumpOf(PayloadOf(batch[i]));
+
+            if (first < 0) continue;
+
+            // Сколько адресов пачки продолжают этот номер подряд.
+            int run = 1;
+
+            while (run < RangeMax && Holds(first + run)) run++;
+
+            if (run > length) { start = first; length = run; }
+
+            if (length == RangeMax) break;
+        }
+
+        if (length > 1) { SendRange(start, length); return; }
+
+        for (int i = 0; i < batch.Length; i++)
+            if (!done[i]) { Send(batch[i], true); return; }
+
+        batch = new string[0];
+
+        Finish();
+    }
+
+    // Есть ли в пачке несделанный адрес с таким номером.
+    private bool Holds(int jump)
+    {
+        for (int i = 0; i < batch.Length; i++)
+            if (!done[i] && JumpOf(PayloadOf(batch[i])) == jump) return true;
+
+        return false;
+    }
+
+    // Забирает диапазон одним запросом: /h/<первый>/<сколько>/<подпись>.
+    private void SendRange(int first, int length)
+    {
+        LastError = "";
+        forwarded = "";
+        forwardedBody = "";
+        pendingUrl = "";
+        LastQueries = 0;
+        LastJump = first;
+        busy = true;
+
+        queueLen = 1;
+        queue = new int[1];
+        queueKind = new int[1];
+        queue[0] = (first * RangeMax + length - 1) * JumpSignValues + NextSign();
+        queueKind[0] = 5;
+        queuePos = 0;
+
+#if !CQ_RELEASE
+        Debug.Log("[CombineQueries] hyper: range " + first + "+" + length + " - " + length + " urls in one query");
+#endif
+
+        SendNext();
+    }
+
+    private bool[] done = new bool[0];
+
+    // Разбирает долг: складывает пришедшие тела по адресам и отмечает их выполненными.
+    private void TakeDebt(string json)
+    {
+        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
+        if (root.TokenType != TokenType.DataDictionary) return;
+
+        DataDictionary answer = root.DataDictionary;
+
+        LastPending = DictInt(answer, "pending");
+
+        if (LastPending < 0) LastPending = 0;
+
+        if (!answer.TryGetValue("ready", out DataToken list) || list.TokenType != TokenType.DataList) return;
+
+        DataList ready = list.DataList;
+
+        for (int i = 0; i < ready.Count; i++)
+        {
+            if (!ready.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+
+            string url = PayloadOf(DictString(item.DataDictionary, "url"));
+
+            if (url == "") continue;
+
+            bodies.SetValue(url, DictString(item.DataDictionary, "response"));
+
+            Mark(url);
+
+            // Своё тело кладём и туда, откуда его берёт одиночный запрос.
+            if (url == pendingUrl) forwardedBody = DictString(item.DataDictionary, "response");
+        }
+    }
+
+    // Сколько адресов сервер ещё не донёс. Больше нуля - значит будет следующий долг.
+    public int LastPending;
+
+    // Просит сервер отдать долг, ничего нового не запрашивая: /h/<любой>/0/<подпись>.
+    // Нужно тому, кому тело нужно немедленно, - иначе оно приедет с ближайшим обычным запросом.
+    public void Settle()
+    {
+        if (busy) return;
+
+        LastError = "";
+        forwarded = "";
+        forwardedBody = "";
+        pendingUrl = "";
+        LastQueries = 0;
+        busy = true;
+
+        queueLen = 1;
+        queue = new int[1];
+        queueKind = new int[1];
+        queue[0] = NextSign();
+        queueKind[0] = 5;
+        queuePos = 0;
+
+        SendNext();
+    }
+
+    // Тело ответа по адресу из пачки. Пусто - адрес не запрашивали либо он не дошёл.
+    public string BodyOf(string url)
+    {
+        if (!bodies.TryGetValue(PayloadOf(url), out DataToken body)) return "";
+
+        return body.TokenType == TokenType.String ? body.String : "";
+    }
+
+    // Сколько запросов ушло на всю пачку. LastQueries считает только последний адрес.
+    public int BatchQueries;
+
+    private string[] queued = new string[0];
+    private string[] batch = new string[0];
+    private DataDictionary bodies = new DataDictionary();
+
+
     public void RequestDirect(string url) => Send(url, false);
 
     private void Send(string url, bool withFragments)
@@ -325,10 +578,16 @@ public class CombineQueries : UdonSharpBehaviour
         LastQueries = 0;
         busy = true;
 
+        headTried = false;
+
         if (withFragments) SendCombine(payload); else SendDirect(payload);
     }
 
-    public string TakeForwardedBody() => StringField(forwarded, "response");
+    // Тело последнего адреса. Канал доставки один - долг: сервер не ждёт чужой сервер, поэтому
+    // тело приезжает либо в том же ответе (успел), либо в следующем. Здесь лежит уже разобранное.
+    public string TakeForwardedBody() => forwardedBody != "" ? forwardedBody : StringField(forwarded, "response");
+
+    private string forwardedBody = "";
 
     private string PayloadOf(string url)
     {
@@ -442,6 +701,10 @@ public class CombineQueries : UdonSharpBehaviour
         if (count >= MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
 
         q[count] = tail; k[count] = 2; count++;
+
+        // Прыжка нет, но сервер мог собрать этот адрес для кого-то другого - спросим голову.
+        // Она стоит один запрос и отвечает готовым телом, если адрес ей знаком.
+        if (JumpOf(payload) < 0 && !headTried && SendHead(payload)) return;
 
         // Уже собранный адрес заменяем ОДНИМ прыжком: сервер поднимает всю combine-часть сам, а мы
         // досылаем только хвост. Столько запросов и экономится - все, кроме двух.
@@ -564,9 +827,15 @@ public class CombineQueries : UdonSharpBehaviour
         // Развязка-3: старший разряд бесконечного адреса, сдвиг делает сервер.
         if (kind == 3) { Load(PhaseFragment, HopPool[queue[queuePos]]); return; }
 
-        // Прыжок в известную точку combine-цепочки. Подпись берём из общего кольца - её позицию
-        // сервер сдвинет тем же движением, что и на хвосте.
-        if (kind == 4) { Load(PhaseJump, JumpPool[queue[queuePos] * JumpSignValues + NextSign() % JumpSignValues]); return; }
+        // Прыжок - частный случай диапазона: один адрес это count=1. Отдельного пула ему не нужно,
+        // это экономит 32 768 печёных ссылок (~4 МБ).
+        if (kind == 4) { Load(PhaseJump, RangePool[(queue[queuePos] * RangeMax) * JumpSignValues + NextSign()]); return; }
+
+        // Пачка: индекс уже посчитан вместе с подписью, здесь только шлём.
+        if (kind == 5) { Load(PhaseJump, RangePool[queue[queuePos]]); return; }
+
+        // Голова: индекс тоже посчитан заранее.
+        if (kind == 6) { Load(PhaseHead, HeadPool[queue[queuePos]]); return; }
 
         // Direct подписи не несёт: сервер сверяет её только на fragmentate-хвосте.
         if (!fragments) { Load(PhaseTail, DirectTailPool[queue[queuePos]]); return; }
@@ -588,6 +857,11 @@ public class CombineQueries : UdonSharpBehaviour
 
     public override void OnStringLoadSuccess(IVRCStringDownload response)
     {
+        // Сервер не ждёт чужие сервера: он отвечает сразу, а тела приезжают ДОЛГОМ - с этим же
+        // ответом, если успели, иначе со следующим запросом, каким бы он ни был. Поэтому долг
+        // разбираем до всего остального: там может лежать и то, чего мы ждём прямо сейчас.
+        TakeDebt(response.Result);
+
         if (phase == PhaseCode) { queuePos++; SendCode(); return; }
 
         if (phase == PhaseVerify)
@@ -622,6 +896,38 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (phase == PhaseChunks || phase == PhaseFragment) { queuePos++; SendNext(); return; }
 
+        // Голова: сервер вернул всё, что знает про этот кусок. Свой адрес забираем из словаря,
+        // чужие кладём в кольцо - они пригодятся дальше и достались бесплатно.
+        if (phase == PhaseHead)
+        {
+            int taken = TakeHead(response.Result);
+
+            // Голова только назвала адреса - забирать их идёт прыжок, номер теперь в кольце.
+            if (taken >= 0 && JumpOf(pendingUrl) >= 0)
+            {
+                SendCombine(pendingUrl);
+                return;
+            }
+
+            if (taken >= 0)
+            {
+                LastChunks = 0;
+                LastL2 = 0;
+                LastL3 = 0;
+                LastInfinite = 0;
+                LastUrls = taken;
+
+                forwarded = response.Result;
+
+                Done();
+                return;
+            }
+
+            // Своего адреса среди найденных нет - собираем его сами, как будто головы не было.
+            SendCombine(pendingUrl);
+            return;
+        }
+
         // Прыжок отдаёт адрес и тело сразу - это и есть весь запрос.
         if (phase == PhaseJump)
         {
@@ -645,6 +951,7 @@ public class CombineQueries : UdonSharpBehaviour
             LastL3 = 0;
             LastInfinite = 0;
 
+            LastUrls = IntField(response.Result, "urls");
             forwarded = response.Result;
 
             Done();
@@ -662,6 +969,8 @@ public class CombineQueries : UdonSharpBehaviour
 
             LearnFragments(response.Result);
 
+            LastUrls = 1;
+            forwardedBody = "";
             forwarded = response.Result;
 
             Done();
@@ -722,7 +1031,101 @@ public class CombineQueries : UdonSharpBehaviour
     {
         if (leaf < 0 || pendingUrl == "") return;
 
-        jumps.SetValue(pendingUrl, leaf);
+        KeepJump(pendingUrl, leaf);
+    }
+
+    // Спрашивает сервер об адресе ОДНИМ запросом: кусок расхождения плюс обрезок номера похожего.
+    //
+    // Зовётся только когда база НАЙДЕНА: без неё сервер не достроит адрес, ответит списком похожих,
+    // и запрос уйдёт впустую - дешевле сразу диктовать combine'ами. Возвращает false, если спросить
+    // нечем.
+    private bool SendHead(string payload)
+    {
+        int cut = payload.LastIndexOf("/");
+
+        if (cut < 0 || cut + 1 >= payload.Length) return false;
+
+        // Расхождение - последний сегмент адреса. Именно им похожие адреса и отличаются.
+        string differs = payload.Substring(cut + 1);
+        string common = payload.Substring(0, cut + 1);
+
+        int piece = -1;
+
+        for (int i = 0; i < cachedFragments.Length; i++)
+            if (cachedFragments[i] == differs && cachedFragIds[i] < HeadLimit) { piece = cachedFragIds[i]; break; }
+
+        if (piece < 0) return false;
+
+        // База - любой известный адрес с тем же началом: сервер подставит наш кусок вместо его
+        // последнего сегмента и получит искомое.
+        int found = -1;
+
+        DataList keys = jumps.GetKeys();
+
+        for (int i = 0; i < keys.Count; i++)
+        {
+            if (!keys.TryGetValue(i, out DataToken key) || key.TokenType != TokenType.String) continue;
+            if (key.String.Length <= cut || key.String.Substring(0, cut + 1) != common) continue;
+
+            found = JumpOf(key.String);
+
+            if (found >= 0) break;
+        }
+
+        if (found < 0) return false;
+
+        headTried = true;
+
+        queueLen = 1;
+        queue = new int[1];
+        queueKind = new int[1];
+        queue[0] = (piece * HeadBases + (found % HeadBases)) * JumpSignValues + NextSign();
+        queueKind[0] = 6;
+        queuePos = 0;
+
+#if !CQ_RELEASE
+        Debug.Log("[CombineQueries] head: f" + piece + " + base " + found + " -> " + payload);
+#endif
+
+        SendNext();
+
+        return true;
+    }
+
+    // Голову спрашиваем не больше раза на адрес: не нашла - собираем, второй заход только сожрёт
+    // запрос.
+    private bool headTried;
+
+    // Разбирает ответ головы: кладёт названные адреса в кольцо. Тел здесь нет - голова наружу не
+    // ходит, забирает их прыжок, а приезжают они долгом.
+    //
+    // Возвращает, сколько адресов нашлось, либо -1 - нашего среди них нет и надо собирать самим.
+    private int TakeHead(string json)
+    {
+        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return -1;
+        if (root.TokenType != TokenType.DataDictionary) return -1;
+        if (!root.DataDictionary.TryGetValue("found", out DataToken list) || list.TokenType != TokenType.DataList) return -1;
+
+        DataList found = list.DataList;
+
+        string mine = Scheme + "://" + pendingUrl;
+        int ours = -1;
+
+        for (int i = 0; i < found.Count; i++)
+        {
+            if (!found.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+
+            string url = DictString(item.DataDictionary, "url");
+            int jump = DictInt(item.DataDictionary, "jump");
+
+            if (url == "" || jump < 0) continue;
+
+            KeepJump(PayloadOf(url), jump);
+
+            if (url == mine) ours = found.Count;
+        }
+
+        return ours;
     }
 
     private int JumpOf(string url)
@@ -743,6 +1146,42 @@ public class CombineQueries : UdonSharpBehaviour
         busy = false;
         phase = PhaseIdle;
 
+        BatchQueries += LastQueries;
+
+        // Пачка: раскладываем пришедшее и берёмся за следующий кусок очереди. Наружу сообщаем один
+        // раз, когда она кончится - иначе потребитель получит событие на каждый адрес.
+        if (batch.Length > 0)
+        {
+            TakeBatch();
+
+            if (LastError == "") { NextInBatch(); return; }
+
+            batch = new string[0];
+        }
+
+        Finish();
+    }
+
+    // Отмечает адрес пачки отработанным. Тело могло уже приехать долгом, а могло ещё лететь -
+    // в обоих случаях запрашивать его снова не нужно.
+    private void TakeBatch()
+    {
+        if (pendingUrl == "") return;
+
+        if (!bodies.ContainsKey(pendingUrl)) bodies.SetValue(pendingUrl, TakeForwardedBody());
+
+        Mark(pendingUrl);
+    }
+
+    // Отмечает адрес пачки выполненным - больше его не запрашиваем.
+    private void Mark(string payload)
+    {
+        for (int i = 0; i < batch.Length; i++)
+            if (!done[i] && PayloadOf(batch[i]) == payload) { done[i] = true; return; }
+    }
+
+    private void Finish()
+    {
         // Без target клиент отработает молча, и снаружи это неотличимо от зависания - логируем сами.
         if (target == null || onDoneEvent == "")
         {
@@ -811,7 +1250,7 @@ public class CombineQueries : UdonSharpBehaviour
 
             if (url == "" || jump < 0) continue;
 
-            jumps.SetValue(url, jump);
+            KeepJump(url, jump);
             SeedJumps++;
 
             // Ключ словаря - адрес БЕЗ схемы, ровно в том виде, в каком его собирает сервер.
@@ -1019,6 +1458,50 @@ public class CombineQueries : UdonSharpBehaviour
             string num = RunesOf(v, Digits, NumSize);
 
             for (int sign = 0; sign < signs; sign++) pool[v * signs + sign] = new VRCUrl(baseUri + num + "/" + sign);
+        }
+
+        return pool;
+    }
+
+    // Индекс = (первый * max + сколько-1) * signs + подпись. Во втором сегменте едет ИМЕННО
+    // «сколько» (1..max), а не индекс: сервер читает его как длину диапазона.
+    private static VRCUrl[] RangePoolOf(string baseUri, int jumps, int max, int signs)
+    {
+        VRCUrl[] pool = new VRCUrl[jumps * max * signs];
+
+        for (int jump = 0; jump < jumps; jump++)
+        {
+            string first = RunesOf(jump, Digits, NumSize);
+
+            for (int count = 1; count <= max; count++)
+            {
+                string length = RunesOf(count, Digits, NumSize);
+
+                for (int sign = 0; sign < signs; sign++)
+                    pool[(jump * max + count - 1) * signs + sign] = new VRCUrl(baseUri + first + "/" + length + "/" + sign);
+            }
+        }
+
+        return pool;
+    }
+
+    // Индекс = (кусок * bases + база) * signs + подпись. Прямоугольник, а не квадрат: кусков много
+    // (весь L2), а баз мало - от гипера едет только обрезок номера, в этом и экономия.
+    private static VRCUrl[] HeadPoolOf(string baseUri, int pieces, int bases, int signs)
+    {
+        VRCUrl[] pool = new VRCUrl[pieces * bases * signs];
+
+        for (int piece = 0; piece < pieces; piece++)
+        {
+            string first = RunesOf(piece, Digits, NumSize);
+
+            for (int b = 0; b < bases; b++)
+            {
+                string second = RunesOf(b, Digits, NumSize);
+
+                for (int sign = 0; sign < signs; sign++)
+                    pool[(piece * bases + b) * signs + sign] = new VRCUrl(baseUri + first + "/" + second + "/" + sign);
+            }
         }
 
         return pool;

@@ -1,5 +1,6 @@
 using MediatR;
 
+using CombineQueries.Api.Services.Outbox;
 using CombineQueries.Api.Services.Speech;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
@@ -9,7 +10,7 @@ namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 // (AcceptVirtualFragment сам решает L2/L3). Паковка (q>1: n рун + k фрагментов) - второй коммит.
 //
 // hop - отдельная Развязка-3, а НЕ значение q: q считает фрагменты, занимать его признаком нельзя.
-public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech) : IRequestHandler<CombineRequest, CombineResponse>
+public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech, IOutbox outbox) : IRequestHandler<CombineRequest, CombineResponse>
 {
     public Task<CombineResponse> Handle(CombineRequest request, CancellationToken cancellationToken)
     {
@@ -48,29 +49,26 @@ public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech) : IR
 
         switch (received)
         {
-            case Speech.VFL2:
-                logger.LogInformation("combine: VF {Id} accepted from L2", request.Id);
+            case Speech.VFL2: logger.LogInformation("combine: VF {Id} accepted from L2", request.Id);
                 break;
-            case Speech.VFL3:
-                logger.LogInformation("combine: VF {Id} accepted from L3", request.Id);
+            case Speech.VFL3: logger.LogInformation("combine: VF {Id} accepted from L3", request.Id);
                 break;
-            case Speech.VFInfinite:
-                logger.LogInformation("combine: VF hopped to Infinite link");
+            case Speech.VFInfinite: logger.LogInformation("combine: VF hopped to Infinite link");
                 break;
-            case Speech.VFBroken:
-                // Прыжок в пустоту или без якоря перед ним. Свой клиент так не делает: он шлёт hop
-                // только для адреса, который знает, и только следом за VF. Значит запрос чужой.
+            case Speech.VFBroken: 
                 speech.Fault($"hop {request.Hop} broke the chain");
-
                 logger.LogWarning("combine: hop {Hop} broke the chain, stream dropped until connect", request.Hop);
                 break;
-            case -1:
+            case -1: logger.LogWarning("combine: VF page={Page} off={Id} unknown, stream dropped until connect", request.Page, request.Id);
                 break;
-            default:
-                logger.LogInformation("combine: rune {Received} accepted", received);
+            default: logger.LogInformation("combine: rune {Received} accepted", received);
                 break;
         }
 
-        return Task.FromResult(new CombineResponse { Received = received });
+        // Долг цепляем и сюда: он копится между запросами, а комбайнов в сборке больше всего -
+        // значит через них он и доедет раньше всего.
+        var ready = outbox.Take();
+
+        return Task.FromResult(new CombineResponse { Received = received, Ready = ready, Pending = outbox.Pending });
     }
 }

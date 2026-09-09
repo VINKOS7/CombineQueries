@@ -3,15 +3,16 @@ using System.Data.Common;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
+using CombineQueries.Api.Services.Persist;
 using CombineQueries.Api.Services.Speech;
-using CombineQueries.Api.Services.Forwarder;
+using CombineQueries.Api.Services.Outbox;
 using CombineQueries.Domain.Aggregates.Translator;
 using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 
 // Единственный репозиторий — ITranslatorRepo: словарь и хайперы это части агрегата Translator.
-public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeech speech, ITranslatorRepo translatorRepo)
+public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech speech, ITranslatorRepo translatorRepo)
     : IRequestHandler<TailRequest, TailResponse>
 {
     public async Task<TailResponse> Handle(TailRequest request, CancellationToken cancellationToken)
@@ -45,17 +46,21 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
         logger.LogInformation("tail: assembled {Runes} pieces ({Chunks} runes, L2 {L2}, L3 {L3}, inf {Inf}) + {Chars} chars in {ElapsedMs} ms -> {Url}",
             assembled.Runes, assembled.Chunks, assembled.L2, assembled.L3, assembled.Infinite, tail.Length, assembled.ElapsedMs, url);
 
-        var forwarded = await forwarder.GetAsync(url, cancellationToken);
+        // Наружу идём в фон: сборка закончена, а ждать чужой сервер клиенту незачем. Тело приедет
+        // ДОЛГОМ - с этим же ответом, если успело, иначе со следующим запросом.
+        outbox.Fetch(url);
 
-        int handle = speech.Intern(url, assembled.ElapsedMs + forwarded.ElapsedMs);
+        var ready = outbox.Take();
+
+        int handle = speech.Intern(url, assembled.ElapsedMs);
 
         var learned = speech.LearnFrom(assembled.Text);
 
         logger.LogInformation("tail: tree now {Chains} chains in {Nodes} nodes, deepest {Deep} | leaf {Leaf}, prefix {Prefix} (shared {Shared})",
             speech.TreeChains, speech.TreeNodes, speech.TreeDeepest, speech.LastLeaf, speech.LastPrefix, speech.LastShared);
 
-        logger.LogInformation("tail: first send took {TotalMs} ms total ({Requests} requests), handle {Handle}, +{Learned} fragments",
-            assembled.ElapsedMs + forwarded.ElapsedMs, assembled.Runes + 1, handle, learned.Addressable.Count);
+        logger.LogInformation("tail: assembled in {TotalMs} ms ({Requests} requests), handle {Handle}, +{Learned} fragments, {Ready} ready now, {Pending} in flight",
+            assembled.ElapsedMs, assembled.Runes + 1, handle, learned.Addressable.Count, ready.Count, outbox.Pending);
 
         if (learned.Overflowed.Count > 0)
             logger.LogWarning("tail: (not enough addresses) +{Overflowed} fragments stored as Infinite, direct for this query", learned.Overflowed.Count);
@@ -67,7 +72,8 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
         {
             Runes = assembled.Runes,
             ForwardedUrl = url,
-            Response = forwarded.Body,
+            Ready = ready,
+            Pending = outbox.Pending,
             Handle = handle,
             Leaf = speech.LastLeaf,
             Prefix = speech.LastPrefix,
@@ -79,7 +85,6 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
             L3 = assembled.L3,
             Infinite = assembled.Infinite,
             AssemblyMs = assembled.ElapsedMs,
-            ForwardMs = forwarded.ElapsedMs,
             Fragments = learned.Addressable
         };
     }
@@ -117,7 +122,7 @@ public class TailHandler(ILogger<TailHandler> logger, IForward forwarder, ISpeec
 
             await translatorRepo.UnitOfWork.SaveEntitiesAsync(cancellationToken);
         }
-        catch (Exception ex) when (ex is DbException or DbUpdateException)
+        catch (Exception ex) when (PersistFailure.Unavailable(ex))
         {
             logger.LogWarning("tail: persistence unavailable, memory only ({Kind}: {Message})", ex.GetType().Name, ex.Message);
         }

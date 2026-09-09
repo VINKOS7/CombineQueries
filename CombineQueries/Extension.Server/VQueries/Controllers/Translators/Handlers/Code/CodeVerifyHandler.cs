@@ -15,6 +15,8 @@ public class CodeVerifyHandler(IConfiguration configuration, ILogger<CodeVerifyH
 
         bool ok = codeword.Length == 0 || offered == codeword;
 
+        // Прогрев хайперов делает connect, который идёт следом: здесь дерево ещё не поднято из
+        // персиста, и нагретое было бы тут же затёрто. Authorize лишь помечает, что мастер новый.
         if (ok) speech.Authorize();
 
         logger.LogInformation("code: {Verdict}", ok ? "accepted, server authorized" : "rejected");

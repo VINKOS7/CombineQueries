@@ -45,11 +45,70 @@ public class Speech : ISpeech
     // Персист дерева: что появилось с прошлого раза и как поднять сохранённое.
     public IReadOnlyList<(int Id, int? ParentId, string Step, string? Url)> TakeChains() => _tree.TakePending();
 
-    public void RestoreChains(IEnumerable<(int Id, int? ParentId, string Step, string? Url)> nodes) => _tree.Restore(nodes);
+    // Дерево поднимается через Forget, то есть прогрев после него стёрт - снимаем отметку, чтобы
+    // connect нагрел заново. Иначе прогретое жило бы ровно до следующего подключения.
+    public void RestoreChains(IEnumerable<(int Id, int? ParentId, string Step, string? Url)> nodes)
+    {
+        _tree.Restore(nodes);
+
+        _preheated = false;
+    }
 
     // Сид хайпера для клиента: адрес -> номер прыжка. Только листы, промежуточные узлы фронту
     // не нужны - он держит плоский словарь, а не дерево.
     public IEnumerable<(string Url, int Jump)> ChainLeaves() => _tree.Leaves();
+
+    // Сложение базы и куска: гипер даёт начало адреса, кусок - расхождение.
+    //
+    // Клиент знает похожий адрес, но не знает номера нужного. Он присылает кусок и ОБРЕЗОК номера
+    // похожей цепочки; сервер достраивает адрес и отвечает точно, а не списком похожих.
+    //
+    // Порядок важен: сперва смотрим, знаком ли вообще кусок. Не знаком - базы не трогаем вовсе,
+    // складывать не с чем.
+    public IEnumerable<(string Url, int Jump)> ChainsFrom(int shortened, string text, int limit)
+    {
+        var known = new Dictionary<string, int>();
+
+        foreach (var (url, jump) in _tree.Leaves()) known[url] = jump;
+
+        bool anywhere = false;
+
+        foreach (string url in known.Keys)
+            if (url.Contains(text, StringComparison.Ordinal)) { anywhere = true; break; }
+
+        if (!anywhere) yield break;
+
+        int found = 0;
+
+        // Разные базы достраивают один и тот же адрес - отдавать его дважды значит форвардить
+        // дважды, то есть платить чужим API за собственную арифметику.
+        var given = new HashSet<string>();
+
+        foreach (var (url, jump) in known)
+        {
+            if (found >= limit) yield break;
+
+            // Обрезок сужает круг баз: полный номер в адрес запроса не влезает, а младших битов
+            // хватает - дальше отсеивает сам кусок.
+            if ((jump & HeadBaseMask) != shortened) continue;
+
+            int cut = url.LastIndexOf('/');
+
+            if (cut < 0) continue;
+
+            string guess = url[..(cut + 1)] + text;
+
+            if (!known.TryGetValue(guess, out int number)) continue;
+            if (!given.Add(guess)) continue;
+
+            found++;
+
+            yield return (guess, number);
+        }
+    }
+
+    // Сколько младших битов номера едет в голове. Столько же берёт клиент.
+    public const int HeadBaseMask = 15;
 
     // Номера последней собранной цепочки: лист (весь url) и последний общий узел с известными.
     public int LastLeaf { get; private set; } = -1;
@@ -74,12 +133,12 @@ public class Speech : ISpeech
         {
             if (step.Length == 0) continue;
 
-            // Шаг закодирован как "f<адрес>" либо "r<руны>" - разбираем обратно в кусок сборки.
-            // Хвост ("t<текст>") куском не был: он закрывает сборку, а не участвует в ней.
-            if (step[0] == 't') continue;
-
+            // Шаг закодирован как "f<адрес>" либо "r<текст>" - разбираем обратно в кусок сборки.
+            // Рунный шаг хранится разжатым, поэтому кладём его готовым текстом, а не декодируем.
+            // "t<текст>" - формат старых записей, до канонизации; читаем как текст, чтобы поднятое
+            // из персиста дерево не рассыпалось.
             if (step[0] == 'f' && int.TryParse(step[1..], out int id)) _pieces.Add(new Piece(true, "", id));
-            else _pieces.Add(new Piece(false, step[1..], 0));
+            else _pieces.Add(new Piece(false, "", 0, step[1..]));
         }
 
         return _pieces.Count;
@@ -130,7 +189,9 @@ public class Speech : ISpeech
 
     private const int AuthMax = 128;
 
-    private readonly record struct Piece(bool IsFragment, string Rune, int FragmentId);
+    // Text - готовая строка: так приходят куски, восстановленные из дерева, где шаг руны хранится
+    // разжатым. У живых кусков от клиента его нет, они декодируются из Rune как раньше.
+    private readonly record struct Piece(bool IsFragment, string Rune, int FragmentId, string? Text = null);
 
     public bool Broken { get; private set; }
 
@@ -185,13 +246,101 @@ public class Speech : ISpeech
         return new string(signs);
     }
 
-    public void Authorize() => Authorized = true;
+    // Новый мастер - новый прогрев: снимаем отметку, чтобы ближайший connect нагрел заново.
+    public void Authorize()
+    {
+        Authorized = true;
+        _preheated = false;
+    }
 
-    // Неверный запрос в потоке валит приём целиком: собранное выбрасываем, дальше не принимаем.
+    private bool _preheated;
+
+    // Прогрев хайперов по текущему словарю: каждая строка, которая сама по себе адрес, получает
+    // готовую цепочку, и клиент берёт её одним /h/ ещё до того, как хоть раз её собирал.
     //
-    // Иначе битое звено просто выпадало бы из сборки, и наружу уехал бы URL, который никто не
-    // запрашивал - а это уже не сбой, а переход по чужому адресу. Чинится только повторным connect:
-    // поток последовательный, доверять его середине после сбоя нельзя.
+    // Зовётся на connect, ПОСЛЕ восстановления дерева из персиста: тот поднимается через Forget и
+    // затёр бы прогрев, сделай мы его раньше (а авторизация мастера идёт как раз до connect).
+    // Отметку снимает Authorize, поэтому греем один раз на мастера. Пустой словарь греть нечем.
+    //
+    // Берём НЕ все строки: словарь состоит из подстрок, а греть можно только те, что сами по себе
+    // складываются в цельный запрос по url - urlRequests. Префикс вроде "site.com/carts/" таким не
+    // является, и прыжок по нему увёл бы наружу заведомо кривой адрес.
+    public int Preheat()
+    {
+        if (_preheated || _fragments.Count == 0) return 0;
+
+        _preheated = true;
+
+        int warmed = 0;
+
+        for (int id = 0; id < _fragments.Count; id++)
+        {
+            string text = _fragments[id];
+
+            if (!IsUrlRequest(text)) continue;
+
+            // Путь считаем тем же разбором, что и на записи: прогретая цепочка обязана совпасть
+            // с той, которую построит живой проход, иначе адрес заведётся дважды.
+            _tree.Remember(Canonical(text), text);
+
+            warmed++;
+        }
+
+        return warmed;
+    }
+
+    // urlRequest - строка словаря, которая сама по себе цельный запрос, а не обрубок.
+    //
+    // Отбор строгий намеренно: прогретый адрес попадает в дерево, а оттуда его начинает отдавать
+    // голова - и каждый обрубок стоит холостого похода наружу за чужой счёт. Раньше сюда пролезали
+    // ".com/comments" (хост начинается с точки) и "…/search?q" (параметр без значения).
+    private static bool IsUrlRequest(string text)
+    {
+        if (text.Length < 5) return false;
+
+        int slash = text.IndexOf('/');
+        string host = slash < 0 ? text : text[..slash];
+        string rest = slash < 0 ? "" : text[slash..];
+
+        if (!Host(host)) return false;
+
+        // Пустой сегмент пути - обрубок склейки, наружу с таким идти незачем.
+        if (rest.Contains("//", StringComparison.Ordinal)) return false;
+
+        int query = rest.IndexOf('?');
+
+        // Есть вопрос - значит должен быть и параметр со значением: "?limit" сам по себе обрубок.
+        if (query >= 0)
+        {
+            string parameters = rest[(query + 1)..];
+
+            int equals = parameters.IndexOf('=');
+
+            if (equals <= 0 || equals + 1 >= parameters.Length) return false;
+        }
+
+        char last = text[^1];
+
+        return last != '/' && last != '?' && last != '&' && last != '=' && last != '.' && last != '-';
+    }
+
+    // Хост: непустое имя, точка внутри (не с краю) и буквенная зона длиной от двух символов.
+    private static bool Host(string host)
+    {
+        int dot = host.LastIndexOf('.');
+
+        if (dot <= 0 || dot + 1 >= host.Length) return false;
+        if (host[0] == '.' || host[0] == '-') return false;
+
+        string zone = host[(dot + 1)..];
+
+        if (zone.Length < 2) return false;
+
+        foreach (char c in zone) if (!char.IsAsciiLetter(c)) return false;
+
+        return true;
+    }
+
     public void Fault(string reason)
     {
         Broken = true;
@@ -356,11 +505,13 @@ public class Speech : ISpeech
         sb.Clear();
 
         foreach (var piece in _pieces)
-            sb.Append(piece.IsFragment
-                ? (piece.FragmentId >= 0 && piece.FragmentId < _fragments.Count ? _fragments[piece.FragmentId] : "")
-                : (type == TypeQuery.Direct
-                    ? Translator.DirectUnrune(piece.Rune, RuneAlphabet, Alphabet, RuneSize)
-                    : Translator.FragmentateUnrune(piece.Rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type))));
+            sb.Append(piece.Text is not null
+                ? piece.Text
+                : piece.IsFragment
+                    ? (piece.FragmentId >= 0 && piece.FragmentId < _fragments.Count ? _fragments[piece.FragmentId] : "")
+                    : (type == TypeQuery.Direct
+                        ? Translator.DirectUnrune(piece.Rune, RuneAlphabet, Alphabet, RuneSize)
+                        : Translator.FragmentateUnrune(piece.Rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type))));
 
         sb.Append(tailText);
 
@@ -379,21 +530,81 @@ public class Speech : ISpeech
             else infinite++;
         }
 
-        // Цепочку кладём в дерево до очистки: путь от корня и есть поток запросов этого url.
-        // Leaf - прыжок на весь адрес, Prefix - докуда он совпал с уже известными.
+        // Цепочку кладём в дерево КАНОНИЧЕСКИ: путь считается по собранному адресу текущим
+        // словарём, а не по тому, чем его продиктовали. Клиент с отстающим словарём диктует то же
+        // самое рунами - и без канонизации завёл бы второй путь к тому же url, то есть дубль.
         //
-        // ХВОСТ ВХОДИТ ПОСЛЕДНИМ ШАГОМ, хотя запросом он и не был. Без него лист неоднозначен:
-        // comments/1 и comments/2 дают одну и ту же combine-часть и перетирали бы адрес друг друга,
-        // а значит прыжок не мог бы сразу форвардить - и стоил бы двух запросов вместо одного.
-        var steps = StepsOf();
+        // Разбор идёт по ВСЕМУ адресу, включая хвостовые символы: лист обязан быть целым адресом,
+        // иначе comments/1 и comments/2 сходятся в один узел и перетирают друг друга.
+        string assembled = sb.ToString();
 
-        steps.Add(HyperTree.TailStep(tailText));
-
-        (LastLeaf, LastPrefix, LastShared) = _tree.Remember(steps, sb.ToString());
+        (LastLeaf, LastPrefix, LastShared) = _tree.Remember(Canonical(assembled), assembled);
 
         _pieces.Clear();
 
         return new AssembledResult(sb.ToString(), runes, _assembly.ElapsedMilliseconds, chunks, l2, l3, infinite);
+    }
+
+    // Канонический разбор адреса текущим словарём: самый длинный фрагмент на каждой позиции,
+    // всё непокрытое копится в один рунный шаг.
+    //
+    // Руны склеиваются целиком, а не режутся по RuneSize: размер руны - свойство клиента, а путь
+    // в дереве обязан зависеть только от самого адреса. Иначе клиенты с разным RuneSize завели бы
+    // разные пути к одному url.
+    //
+    // Шаг руны хранится РАЗЖАТЫМ: сравнивать надо содержимое, а не форму передачи, и тогда
+    // неважно, чем кусок приехал - руной или фрагментом.
+    public List<string> Canonical(string url)
+    {
+        var steps = new List<string>();
+        var runes = new System.Text.StringBuilder();
+
+        int pos = 0;
+
+        while (pos < url.Length)
+        {
+            int id = LongestAt(url, pos);
+
+            if (id < 0)
+            {
+                runes.Append(url[pos]);
+                pos++;
+
+                continue;
+            }
+
+            if (runes.Length > 0) { steps.Add(HyperTree.StepOf(false, runes.ToString(), 0)); runes.Clear(); }
+
+            steps.Add(HyperTree.StepOf(true, "", id));
+
+            pos += _fragments[id].Length;
+        }
+
+        if (runes.Length > 0) steps.Add(HyperTree.StepOf(false, runes.ToString(), 0));
+
+        return steps;
+    }
+
+    // Самый длинный фрагмент словаря, стоящий на этой позиции. -1 - ни один не подходит.
+    private int LongestAt(string url, int pos)
+    {
+        int best = -1, length = 0;
+
+        for (int id = 0; id < _fragments.Count; id++)
+        {
+            string text = _fragments[id];
+
+            // Отсечка по первому символу до сравнения: словарь в десятки тысяч строк, и без неё
+            // разбор одного адреса стоил бы миллионы сравнений.
+            if (text.Length <= length || text.Length == 0 || text[0] != url[pos]) continue;
+            if (pos + text.Length > url.Length) continue;
+            if (string.CompareOrdinal(url, pos, text, 0, text.Length) != 0) continue;
+
+            best = id;
+            length = text.Length;
+        }
+
+        return best;
     }
 
     public int Intern(string url, long firstSendMs)

@@ -67,6 +67,10 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private const int StepCombine = 9;
     private const int StepDirect = 10;
 
+    // Пачка: три адреса копятся и уходят одним прогоном. Наружу приходит одно событие, а тела
+    // разбираются по адресам - так это и будет работать у потребителя тулзы.
+    private const int StepBatch = 11;
+
     private bool ready;
     private bool awaiting;
     private bool running;
@@ -141,13 +145,17 @@ public class CombineQueriesTest : UdonSharpBehaviour
         }
         if (!running) return;
 
-        string line = TitleOf(step) + "   " + NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms   "
-                    + NumberOf(client.LastQueries) + " queries   "
-                    + (client.LastJump < 0 ? "no jump   " : "jump " + NumberOf(client.LastJump) + "   ")
-                    + "runes " + NumberOf(client.LastChunks)
-                    + "  L2 " + NumberOf(client.LastL2)
-                    + "  L3 " + NumberOf(client.LastL3)
-                    + "  inf " + NumberOf(client.LastInfinite);
+        int queries = step == StepBatch ? client.BatchQueries : client.LastQueries;
+
+        string line = Pad(TitleOf(step), 52)
+                    + Pad(NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms", 10)
+                    + Pad(NumberOf(queries) + (queries == 1 ? " query" : " queries"), 11)
+                    + Pad(client.LastJump < 0 ? "no jump" : "jump " + NumberOf(client.LastJump), 10)
+                    + Pad("urls " + NumberOf(client.LastUrls), 8)
+                    + Pad("runes " + NumberOf(client.LastChunks), 9)
+                    + Pad("L2 " + NumberOf(client.LastL2), 6)
+                    + Pad("L3 " + NumberOf(client.LastL3), 6)
+                    + "inf " + NumberOf(client.LastInfinite);
 
         board += line + "\n";
         step++;
@@ -155,7 +163,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
         Note(line);
         Show("\n" + client.TakeForwardedBody());
 
-        if (step <= StepDirect) { SendStep(); return; }
+        if (step <= StepBatch) { SendStep(); return; }
 
         running = false;
 
@@ -185,6 +193,13 @@ public class CombineQueriesTest : UdonSharpBehaviour
         else if (step == StepLearned) client.Request(testUrlLearned);
         else if (step == StepHyperLearned) client.Request(testUrlLearned);
         else if (step == StepCombine) client.Request(testUrl);
+        else if (step == StepBatch)
+        {
+            client.Queue(testUrlSeeded);
+            client.Queue(testUrlFull);
+            client.Queue(testUrlPartialBig);
+            client.Run();
+        }
         else client.RequestDirect(testUrl);
 
         awaiting = true;
@@ -206,7 +221,18 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (at == StepLearned) return "8  partial, learned       (limit=10&skip=50) ";
         if (at == StepHyperLearned) return "9  hyper over learned     (limit=10&skip=50) ";
         if (at == StepCombine) return "10 combine, partial      (comments/post/1) ";
-        return "11 direct                 (comments/post/1)";
+        if (at == StepDirect) return "11 direct                 (comments/post/1)";
+        return "12 batch of 3            (carts/5 + comments/1 + products/12/comments)";
+    }
+
+    // Колонки держим пробелами: строка идёт в один Text, и без выравнивания числа расползаются.
+    private string Pad(string value, int width)
+    {
+        string padded = value;
+
+        while (padded.Length < width) padded = padded + " ";
+
+        return padded;
     }
 
     private string NumberOf(int value)

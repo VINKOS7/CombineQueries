@@ -3,6 +3,7 @@ using System.Data.Common;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
+using CombineQueries.Api.Services.Persist;
 using CombineQueries.Api.Services.Speech;
 using CombineQueries.Domain.Aggregates.Account.Events;
 using CombineQueries.Domain.Aggregates.Translator;
@@ -35,6 +36,12 @@ public class AccountConnectedHandler(IServiceProvider provider, ISpeech speech, 
         await ForgetHypers(repo, translator, cancellationToken);
 
         Warm(translator);
+
+        // Прогрев идёт последним: Warm поднимает дерево из БД через Forget, и нагретое до него
+        // просто исчезло бы. Греем один раз на мастера - отметку снимает его авторизация.
+        int warmed = speech.Preheat();
+
+        if (warmed > 0) logger.LogInformation("connect: preheated {Warmed} hypers from urlRequests", warmed);
     }
 
     private async Task<Translator?> TranslatorOf(ITranslatorRepo repo, CancellationToken cancellationToken)
@@ -55,7 +62,7 @@ public class AccountConnectedHandler(IServiceProvider provider, ISpeech speech, 
             return translator;
         }
         // Только отказ БД. Ошибки кода обязаны падать, а не притворяться «базы нет».
-        catch (Exception ex) when (ex is DbException or DbUpdateException)
+        catch (Exception ex) when (PersistFailure.Unavailable(ex))
         {
             logger.LogWarning("connect: persistence unavailable, memory only ({Kind}: {Message})", ex.GetType().Name, ex.Message);
 

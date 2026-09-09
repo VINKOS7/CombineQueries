@@ -1,5 +1,7 @@
 using Newtonsoft.Json;
 
+using CombineQueries.Api.Services.Outbox;
+
 using CombineQueries.Api.Services.Speech;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
@@ -8,7 +10,12 @@ public record TailResponse
 {
     [JsonProperty("runes")] public int Runes { get; set; }
     [JsonProperty("forwardedUrl")] public string? ForwardedUrl { get; set; }
-    [JsonProperty("response")] public string? Response { get; set; }
+    // Тело больше не едет здесь: наружу сервер ходит в фон, а результат приезжает ДОЛГОМ.
+    // Успел к этому ответу - лежит в ready, не успел - придёт со следующим запросом.
+    [JsonProperty("ready")] public IReadOnlyList<Delivery>? Ready { get; set; }
+
+    // Сколько адресов ещё в полёте: значит будет и следующий довесок.
+    [JsonProperty("pending")] public int Pending { get; set; }
     [JsonProperty("handle")] public int Handle { get; set; } = -1;
     // Покрытие: chunks - куски, ушедшие рунами (фрагмент не нашёлся), остальное - по уровням.
     // Partial это как раз chunks > 0.

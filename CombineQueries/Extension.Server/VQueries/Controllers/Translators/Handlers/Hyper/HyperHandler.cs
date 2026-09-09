@@ -1,15 +1,18 @@
 using MediatR;
 
-using CombineQueries.Api.Services.Forwarder;
+using CombineQueries.Api.Services.Outbox;
 using CombineQueries.Api.Services.Speech;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
 
 // Хайпер обязан укладываться в ОДИН запрос - ради этого он и существует. Не уложился (адрес
 // неизвестен) - клиент идёт обычной дорогой: combine + tail по динамической фрагментации.
-public class HyperHandler(ILogger<HyperHandler> logger, IForward forwarder, ISpeech speech) : IRequestHandler<HyperRequest, HyperResponse>
+public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech speech) : IRequestHandler<HyperRequest, HyperResponse>
 {
-    public async Task<HyperResponse> Handle(HyperRequest request, CancellationToken cancellationToken)
+    // Сколько адресов отдаём за один запрос диапазоном.
+    private const int Batch = 8;
+
+    public Task<HyperResponse> Handle(HyperRequest request, CancellationToken cancellationToken)
     {
         if (speech.Alphabet is null) throw new Exception("CRIT: /connect was not called");
 
@@ -24,29 +27,54 @@ public class HyperHandler(ILogger<HyperHandler> logger, IForward forwarder, ISpe
             throw new Exception("auth error: hyper sign rejected");
         }
 
-        // Лист несёт адрес целиком (хвост входит в путь) - значит отдаём результат прямо здесь.
-        string? url = speech.UrlOf(request.Value);
+        // Лист несёт адрес целиком (хвост входит в путь) - значит отдавать есть что.
+        //
+        // Наружу идём В ФОН: клиента держать нельзя, форвард занимает секунды. Отвечаем ДОЛГОМ -
+        // тем, что доспело к этому мгновению; не доспело ничего - долг пустой, приедет со
+        // следующим запросом, каким бы эндпоинтом он ни был.
+        // count = 0 значит «ничего не запрашивай, только отдай долг» - тем, кому результат нужен
+        // немедленно, приходится ждать, и вот чем ждут. Номер при этом не важен.
+        int count = Math.Clamp(request.Count, 0, Batch);
 
-        if (url is not null)
+        if (count == 0)
         {
-            // В дереве лежит адрес БЕЗ схемы - ровно так его собирает Close. Схему добавляет тот,
-            // кто идёт наружу, как это делает и хвост.
+            var settled = outbox.Take();
+
+            logger.LogInformation("hyper: debt asked, {Ready} ready now, {Pending} in flight", settled.Count, outbox.Pending);
+
+            return Task.FromResult(new HyperResponse { Known = true, Urls = 0, Ready = settled, Pending = outbox.Pending });
+        }
+
+        var urls = new List<string>();
+
+        for (int at = 0; at < count; at++)
+        {
+            string? url = speech.UrlOf(request.Value + at);
+
+            if (url is null) continue;
+
             string full = speech.Scheme + "://" + url;
 
-            var forwarded = await forwarder.GetAsync(full, cancellationToken);
+            urls.Add(full);
 
-            int handle = speech.Intern(full, forwarded.ElapsedMs);
+            outbox.Fetch(full);
+        }
 
-            logger.LogInformation("hyper: jump {Jump} -> {Url} in one query ({ElapsedMs} ms)", request.Value, full, forwarded.ElapsedMs);
+        if (urls.Count > 0)
+        {
+            var ready = outbox.Take();
 
-            return new HyperResponse
+            logger.LogInformation("hyper: jump {Jump}{Range} -> {Urls} urls sent, {Ready} ready now, {Pending} in flight",
+                request.Value, count > 1 ? "+" + count : "", urls.Count, ready.Count, outbox.Pending);
+
+            return Task.FromResult(new HyperResponse
             {
                 Known = true,
-                ForwardedUrl = full,
-                Response = forwarded.Body,
-                ElapsedMs = forwarded.ElapsedMs,
-                FirstSendMs = speech.FirstSendMsOf(handle)
-            };
+                Urls = urls.Count,
+                ForwardedUrl = urls[0],
+                Ready = ready,
+                Pending = outbox.Pending
+            });
         }
 
         // Промежуточный узел: адреса у него нет, отдать нечего. Поднимаем куски и ждём, что клиент
@@ -59,11 +87,12 @@ public class HyperHandler(ILogger<HyperHandler> logger, IForward forwarder, ISpe
             // Причина неважна - ответ один: собрать адрес фрагментами, а хвост его проиндексирует.
             logger.LogWarning("hyper: jump {Jump} is unknown - assemble instead, tail will index it", request.Value);
 
-            return new HyperResponse { Known = false, Note = "unsaved hyper, saved for next hyper" };
+            return Task.FromResult(new HyperResponse { Known = false, Note = "unsaved hyper, saved for next hyper" });
         }
 
         logger.LogInformation("hyper: jump {Jump} resumed {Restored} combine steps", request.Value, restored);
 
-        return new HyperResponse { Known = true, Resumed = restored };
+        return Task.FromResult(new HyperResponse { Known = true, Resumed = restored });
     }
+
 }

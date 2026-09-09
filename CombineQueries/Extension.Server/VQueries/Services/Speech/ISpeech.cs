@@ -61,6 +61,10 @@ public interface ISpeech
 
     void Authorize();
 
+    // Прогреть хайперы по текущему словарю. Зовётся на авторизации мастера, возвращает сколько
+    // цепочек завёл.
+    int Preheat();
+
     void Fault(string reason);
 
     bool CheckSign(int sign);
@@ -108,6 +112,9 @@ public interface ISpeech
     void RestoreChains(IEnumerable<(int Id, int? ParentId, string Step, string? Url)> nodes);
 
     IEnumerable<(string Url, int Jump)> ChainLeaves();
+
+    // Точный поиск: база (по обрезку номера) плюс кусок расхождения.
+    IEnumerable<(string Url, int Jump)> ChainsFrom(int shortened, string text, int limit);
 
     // Номера последней цепочки: лист и последний общий с известными узел.
     int LastLeaf { get; }

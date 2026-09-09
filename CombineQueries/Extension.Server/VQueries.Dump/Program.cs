@@ -55,8 +55,55 @@ await using (var reader = await cmd.ExecuteReaderAsync())
 if (what is "all" or "dict") await Dictionary();
 if (what is "all" or "chains") await Chains();
 if (what is "all" or "hypers") await Hypers();
+if (what == "candidates") await Candidates();
 
 return 0;
+
+// Сколько адресов найдётся по одному куску. Это и есть цена вопроса для /head: если кандидатов
+// единицы, обрезок базы не нужен вовсе; если десятки - без него не обойтись.
+async Task Candidates()
+{
+    var urls = new List<string>();
+
+    await using (var cmd = db.CreateCommand(@"select ""Url"" from ""Chains"" where ""Url"" is not null"))
+    await using (var reader = await cmd.ExecuteReaderAsync())
+        while (await reader.ReadAsync()) urls.Add(reader.GetString(0));
+
+    Console.WriteLine();
+    Console.WriteLine($"=== кандидаты по одному куску ({urls.Count} адресов в дереве) ===");
+
+    // Берём куски так же, как их берёт клиент: самый длинный фрагмент, стоящий в адресе.
+    var counts = new List<(string Text, int Hits)>();
+
+    foreach (var (id, fragment) in fragments)
+    {
+        if (fragment.Text.Length < 4) continue;
+
+        int hits = 0;
+
+        foreach (string url in urls) if (url.Contains(fragment.Text, StringComparison.Ordinal)) hits++;
+
+        if (hits > 0) counts.Add((fragment.Text, hits));
+    }
+
+    counts.Sort((a, b) => b.Hits.CompareTo(a.Hits));
+
+    Console.WriteLine($"  кусков, встречающихся хоть в одном адресе: {counts.Count}");
+    Console.WriteLine();
+    Console.WriteLine("  худшие (самые общие куски):");
+
+    foreach (var (text, hits) in counts.Take(5)) Console.WriteLine($"    {hits,5}  {text}");
+
+    Console.WriteLine();
+    Console.WriteLine("  лучшие (различающие куски):");
+
+    foreach (var (text, hits) in counts.TakeLast(5)) Console.WriteLine($"    {hits,5}  {text}");
+
+    int single = counts.Count(c => c.Hits == 1);
+
+    Console.WriteLine();
+    Console.WriteLine($"  кусков, дающих РОВНО один адрес: {single} из {counts.Count} ({100.0 * single / Math.Max(1, counts.Count):F0}%)");
+}
 
 async Task Dictionary()
 {

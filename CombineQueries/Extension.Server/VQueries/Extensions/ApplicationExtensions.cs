@@ -1,4 +1,5 @@
-﻿using CombineQueries.Api.Services.Speech;
+using CombineQueries.Api.Services.Outbox;
+using CombineQueries.Api.Services.Speech;
 using CombineQueries.Api.Services.Forwarder;
 
 namespace CombineQueries.Api.Extensions;
@@ -30,6 +31,9 @@ public static class ApplicationExtensions
         // а Scoped создаёт новый экземпляр на каждый HTTP-запрос - тогда /init ставит контекст и он
         // тут же теряется, и первый же /m/ падает с "CRIT: /init не вызван".
         services.AddSingleton<ISpeech, Speech>();
+
+        // Ящик отложенных ответов: общий для всех запросов, потому что довесок цепляется к любому.
+        services.AddSingleton<IOutbox, Outbox>();
 
         return services;
     }
