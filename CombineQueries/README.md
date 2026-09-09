@@ -6,65 +6,95 @@ There is deliberately **no compiled build here**. A VRChat world compiles to a `
 runs after being uploaded to VRChat — no console, no breakpoints. The thing you can actually debug
 is ClientSim, and ClientSim is editor-only. So the project *is* the deliverable.
 
-## Run it
+## Assemble the demo (debug)
 
-1. **Start the server** (from the repo root):
+Everything below is local. Hosting is out of scope here.
+
+1. **Point the server at a database.** `Extension.Server/VQueries/appsettings.Development.json`,
+   key `ConnectionStrings:Context` — any empty PostgreSQL database will do.
+
+2. **Apply the migrations.** They create the schema *and* lay down the demo data: the sample
+   dictionary and four seeded addresses the demo jumps to.
 
    ```bash
-   dotnet run --project VQueries/VQueries/CombineQueries.Api.csproj --urls http://localhost:5017
+   dotnet ef database update --project Extension.Server/VQueries
    ```
 
-2. **Add this folder as a project** in VRChat Creator Companion → *Add Existing Project* → pick
-   `Unity/`. VCC resolves the packages from `Packages/vpm-manifest.json`; they are not committed.
+3. **Start the server** in the `Development` environment — the demo data is dev-only:
 
-3. **Open it.** The first import takes a few minutes — UdonSharp recompiles the Udon programs,
+   ```bash
+   dotnet run --project Extension.Server/VQueries --urls http://localhost:5017
+   ```
+
+4. **Add this folder as a project** in VRChat Creator Companion → *Add Existing Project*. VCC
+   resolves the packages from `Packages/vpm-manifest.json`; they are not committed.
+
+5. **Open it.** The first import takes a few minutes — UdonSharp recompiles the Udon programs,
    which are not committed either (they are build output, ~107 MB of it).
 
-4. **Open** `Assets/Scenes/VRCDefaultWorldScene.unity` **and press Play.**
+6. **Open** `Assets/Scenes/VRCDefaultWorldScene.unity`, build the rig from
+   **Tools → CombineQueries → Dev rig visible**, and press Play.
 
-   If the rig is missing from the scene, or you changed the demo settings in code:
-   right click in the Hierarchy → **CombineQueries Test Rig**, then `Ctrl+S`. Unity stores
-   component values in the scene, so editing a default in code does nothing to a rig that
-   already exists — rebuilding it is what applies the change.
+   Rebuilding the rig is also how you apply a changed default: Unity stores component values in
+   the scene, so editing a default in code does nothing to a rig that already exists.
 
 ## What you should see
 
 Two cubes and a status board in front of the spawn point.
 
-- **Blue cube** — `Init`. Hands the server the alphabet and chunk width.
-- **Green cube** — starts the demo. Click again to stop it.
+- **Blue cube** — connect. Hands the server the alphabet and the sizes.
+- **Green cube** — runs the demo. Click again to stop it.
 
-The demo sends `https://dummyjson.com/todos/1`, `/2`, `/3` in a loop, and **the pace is the point**:
+The board prints one line per step: how long it took, how many requests it cost, which road it
+took, and the coverage. Two things on that board are worth knowing up front:
 
-| | requests per url | wall clock |
-|---|---|---|
-| first lap | 9 | ~45 s |
-| every later lap | **1** | ~5 s |
+- **One request can claim up to four addresses.** Steps that ask for a batch spend a single
+  request on the whole group, so the request count stops tracking the number of addresses.
+- **Bodies arrive late, and that is by design.** The server never blocks on the site it forwards
+  to: it answers immediately and delivers each body with one of the *following* answers — you will
+  see them logged as they land, out of step with the request that asked. When the client has
+  nothing left to send, it collects the remainder by itself until nothing is owed.
 
-Nothing is throttled artificially — the next send fires as soon as the data arrives. The pace you
-see is VRChat's own ~5 s cooldown, paid once per request.
-
-The board explains each step while it happens. First lap: the url is spelled out a couple of
-characters per request, because VRChat can only load urls that were baked in at build time. The
-server reassembles it, forwards it, and returns a short handle. From then on that handle carries
-the whole url in a single request — which is why the second lap visibly flies.
+Timings therefore say more about the site than about this project, and the first steps of a run
+often show bodies that were fetched during the previous one.
 
 ## If nothing happens
 
 The status board reports errors, so read it first.
 
 - `NO CONNECTION TO SERVER (init)` — the server is not running, or `baseUrl` in
-  `Assets/CombineQueries/CombineQueries.cs` does not match where it listens.
+  `Assets/Src/CombineQueries.cs` does not match where it listens.
 - `Character outside the alphabet` — the url contains something `Alphabet` does not cover.
   Note it currently has **no uppercase letters**, so most real-world links are rejected.
-- Nothing at all in the console — the rig is not in the scene. Rebuild it from the Hierarchy menu.
+- Nothing at all in the console — the rig is not in the scene. Rebuild it from the Tools menu.
+- Steps that should jump report no jump — the seeded addresses are gone (a reset clears them, and
+  an applied migration will not re-apply). Put them back:
+
+  ```bash
+  dotnet run --project Extension.Server/VQueries.Dump -- seed
+  ```
+
+## Looking inside the database
+
+`VQueries.Dump` prints what is actually stored, which is the only way to tell "the server
+remembers" from "it is saved":
+
+```bash
+dotnet run --project Extension.Server/VQueries.Dump            # everything
+dotnet run --project Extension.Server/VQueries.Dump -- chains  # what the demo jumps to
+dotnet run --project Extension.Server/VQueries.Dump -- seed    # restore the demo data
+```
+
+It reads the same connection string as the server (via `ASPNETCORE_ENVIRONMENT`, or
+`ConnectionStrings__Context`) and never prints it.
 
 ## Layout
 
 ```
-Assets/CombineQueries/          the client, the test driver, the program assets
-Assets/CombineQueries/Editor/   the menu item that builds the rig
+Assets/Src/                     the client and the test driver
+Assets/Src/Editor/              the menu items that build the rig
 Assets/Scenes/                  the demo scene
+Extension.Server/               the server, its migrations and the dump tool
 ```
 
 The same client sources are mirrored at [`../Udon`](../Udon) as a drop-in folder for other

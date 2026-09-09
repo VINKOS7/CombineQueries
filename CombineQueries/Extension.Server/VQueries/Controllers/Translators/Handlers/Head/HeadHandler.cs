@@ -16,9 +16,13 @@ namespace CombineQueries.Api.Controllers.Translators.Handlers.Head;
 // головы в том, чтобы уложиться в один.
 public class HeadHandler(ILogger<HeadHandler> logger, IOutbox outbox, ISpeech speech) : IRequestHandler<HeadRequest, HeadResponse>
 {
-    // Сколько адресов готовы отдать за раз. Кусок вроде "?limit" встречается в сотнях адресов, и
-    // без потолка голова утащила бы наружу сотни запросов - за чужой счёт и впустую.
-    private const int Candidates = 4;
+    // Сколько адресов называем за раз. Потолок нужен потому, что кусок вроде "?limit" сидит в
+    // сотнях адресов, и без него ответ распух бы на ровном месте.
+    //
+    // Восемь, а не четыре: наружу голова не ходит, лишнее имя стоит строчки в ответе и дарит
+    // клиенту чужой номер. База стала на бит грубее - под маску попадает вдвое больше листов,
+    // и потолок обязан был подрасти следом, иначе половина найденного просто отсекалась бы.
+    private const int Candidates = 8;
 
     public Task<HeadResponse> Handle(HeadRequest request, CancellationToken cancellationToken)
     {
@@ -50,9 +54,14 @@ public class HeadHandler(ILogger<HeadHandler> logger, IOutbox outbox, ISpeech sp
 
         if (found.Count == 0)
         {
-            logger.LogInformation("head: '{Text}' is not in any known address - client assembles", text);
+            // Промах - НЕ потеря. Кусок к нам уже приехал, запрос за него оплачен, поэтому держим
+            // его до закрытия: клиенту останется досказать только начало адреса, а конец у сервера
+            // уже есть. Иначе за один и тот же кусок платили бы дважды.
+            speech.Keep(text);
 
-            return Task.FromResult(new HeadResponse { Known = false });
+            logger.LogInformation("head: '{Text}' is not in any known address - kept as the tail piece, client assembles the rest", text);
+
+            return Task.FromResult(new HeadResponse { Known = false, Kept = text });
         }
 
         // Голова НАРУЖУ НЕ ХОДИТ. Её дело - назвать: вот адреса и вот их номера. Забирает их

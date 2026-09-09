@@ -4,11 +4,10 @@ using CombineQueries.Api.Services.Outbox;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
 
-// Один отданный адрес: что запросили наружу, что оттуда пришло и сколько это заняло.
-public record HttpsRequest(
+// Один адрес, за которым пошёл прыжок, и его номер.
+public record SentUrl(
     [property: JsonProperty("url")] string Url,
-    [property: JsonProperty("response")] string Response,
-    [property: JsonProperty("elapsedMs")] long ElapsedMs);
+    [property: JsonProperty("jump")] int Jump);
 
 public record HyperResponse
 {
@@ -20,10 +19,11 @@ public record HyperResponse
     // на хвосте снова попадает в индекс.
     [JsonProperty("note")] public string? Note { get; set; }
 
-    // Что прыжок отдал наружу. МАССИВ, хотя сейчас в нём всегда один адрес: прыжок по смыслу
-    // возвращает столько запросов, сколько покрыл, и клиент должен уметь читать их пачкой -
-    // иначе переход на несколько адресов сломает фронт задним числом.
-    [JsonProperty("httpsRequests")] public IReadOnlyList<HttpsRequest>? HttpsRequests { get; set; }
+    // За какими адресами этот прыжок пошёл наружу и под какими номерами они лежат. Тел здесь нет
+    // и быть не может: форвард уехал в фон, ответы приедут долгом - этим же ответом, если успели,
+    // иначе следующим. Клиенту список нужен дважды: сказать в лог, за чем пошли, и запомнить
+    // номера соседей - диапазон тащит их даром, а знать их иначе неоткуда.
+    [JsonProperty("sent")] public IReadOnlyList<SentUrl>? Sent { get; set; }
 
     // Сколько адресов в массиве. Отдельным числом, чтобы клиенту не считать длину ради лога.
     [JsonProperty("urls")] public int Urls { get; set; }

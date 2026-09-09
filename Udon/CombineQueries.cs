@@ -88,8 +88,18 @@ public class CombineQueries : UdonSharpBehaviour
     // делает кусок. В этом и экономия: гипер едет не весь.
     //
     // Сервер складывает одно с другим и получает ТОЧНЫЙ адрес, поэтому отвечает готовым телом.
-    private const int HeadLimit = 1024;
-    private const int HeadBases = 16;
+    //
+    // Разрядность делим в пользу КУСКА, и вот почему. База - обрезок, а не адрес: любой номер
+    // кольца обрезается и уезжает, непокрытых нет. Её ширина решает лишь точность, а промах по
+    // точности стоит дёшево - сервер назовёт лишних соседей, и клиент положит их номера себе
+    // даром. Кусок же упирается насмерть: фрагмент с адресом за потолком голова назвать не может
+    // вообще, а в словаре такие есть (тот же comments/post/1 живёт за тысячей).
+    //
+    // Отсюда 2048 x 8, а не 1024 x 16: пул тот же (131 072 ссылки, ~13 МБ), кусок достаёт вдвое
+    // дальше, база грубеет на бит. Отдельная цифра страницы для этого не нужна - это та же
+    // разрядность, только записанная двумя числами; она понадобится, лишь если растить память.
+    private const int HeadLimit = 2048;
+    private const int HeadBases = 8;
 
     // Подпись прыжка - та же и полная, что у хвоста: прыжок САМ отдаёт собранный адрес наружу,
     // значит по правам он равен хвосту, а не куску. Кольцо общее - /h/ и /t/ съедают по позиции.
@@ -107,6 +117,10 @@ public class CombineQueries : UdonSharpBehaviour
     // Четыре, а не восемь: серии длиннее четырёх бывают только когда адреса собрали подряд в одну
     // сессию, а 4 стоят ровно столько же, сколько стоила пара - 131 072 ссылки.
     private const int RangeMax = 4;
+
+    // Докуда достаёт закрывающая форма /cf. Кусок с адресом ниже этого можно продиктовать и
+    // закрыть одним запросом; выше - обычной парой «кусок + хвост».
+    private const int CloseLimit = 1024;
 
     // Сбрасывать ли хайперы при инициализации карты. Собранный однажды url дальше уходит одним
     // запросом /h/, и повторный прогон теста меряет уже не сборку - без сброса второй заход
@@ -147,6 +161,16 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] HeadPool = HeadPoolOf(baseUrl + "/hd/", HeadLimit, HeadBases, JumpSignValues);
     // Пачка прыжков одним запросом: /h/<первый>/<сколько>/<подпись>.
     private readonly VRCUrl[] RangePool = RangePoolOf(baseUrl + "/h/", MaxJumps, RangeMax, JumpSignValues);
+    // Погашение долга: /tc/<подпись>. Отдельный эндпоинт, а не диапазон нулевой длины: у «забери
+    // долг» нет ни номера, ни количества, и притворяться прыжком ему незачем. Стоит 8 ссылок.
+    private readonly VRCUrl[] CreditPool = CreditPoolOf(baseUrl + "/tc/", JumpSignValues);
+
+    // Кусок и закрытие одним запросом: /cf/<адрес куска>/<подпись>. Адрес, целиком накрытый одним
+    // куском словаря, стоил два запроса - продиктовать и закрыть; теперь один.
+    //
+    // Только младшие CloseLimit кусков: на весь словарь (1024 * 64 * 8) это было бы полмиллиона
+    // ссылок, а так - 8192, меньше мегабайта. Частые короткие начала все лежат в младших адресах.
+    private readonly VRCUrl[] ClosePool = ClosePoolOf(baseUrl + "/cf/", CloseLimit, SignValues);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
 
@@ -187,6 +211,27 @@ public class CombineQueries : UdonSharpBehaviour
     // у короткой цепочки прыжок не меняет ЧИСЛО запросов, и по счётчику его не видно.
     public int LastJump = -1;
 
+    // Концы адресов, которые уехали ПОСЛЕДНИМ запросом, через запятую. Один запрос давно значит не
+    // один адрес: диапазон тащит четвёрку, голова называет до восьми, - и по строке «отправлено»
+    // это единственное место, где видно, за чем именно ходили.
+    public string LastSent = "";
+
+    // Дорога последнего адреса. Одного счётчика запросов мало: голова стоит запрос и НЕ говорит,
+    // чем кончилось - назвала адрес (дальше один прыжок) или не знала его (дальше вся сборка).
+    // Различаем именно это:
+    //   combine       - собрали с нуля, голову спросить было нечем: расхождение не легло на
+    //                   фрагмент, либо в кольце нет базы с тем же началом. Чем полнее кольцо, тем
+    //                   реже эта дорога встречается - в пределе её быть не должно вовсе
+    //   hyper         - прыжок из кольца, головы не понадобилось
+    //   head          - голова ответила сама, дальше ничего не пошло
+    //   head/hyper    - голова назвала адрес, забрал его прыжок (голова окупилась)
+    //   head/combine  - голова адреса не знала, собираем сами (запрос потрачен впустую)
+    //   direct        - RequestDirect, мимо словаря
+    //
+    // Наружу поле отдаём всегда, а печатают его только dev-выводы: по дороге читается «до и после
+    // персиста», и миру эта кухня не нужна.
+    public string LastRoad = "";
+
     // Сколько прыжков приехало сидом в connect: это ровно то, что сервер помнит из БД.
     // При resetHypers=true всегда 0 - dev-сброс стирает дерево вместе с хайперами.
     public int SeedJumps;
@@ -200,6 +245,7 @@ public class CombineQueries : UdonSharpBehaviour
     private const int PhaseFragment = 7;
     private const int PhaseJump = 8;
     private const int PhaseHead = 9;
+    private const int PhaseCredit = 10;
 
     private int phase;
     private bool connectOk;
@@ -295,6 +341,15 @@ public class CombineQueries : UdonSharpBehaviour
         jumpRingAt = 0;
     }
 
+    // Забыть ОДИН номер, оставив остальные. Так выглядит адрес, которого этот клиент не застал:
+    // сервер его помнит, а у нас его нет - ровно случай, ради которого и заведена голова. В мире
+    // это происходит само, когда адрес собрал другой игрок; в демке нужен способ вызвать это
+    // намеренно, иначе сид в connect выдаёт клиенту всё и голове нечего искать.
+    public void ForgetJump(string url)
+    {
+        jumps.Remove(PayloadOf(url));
+    }
+
     // Кладёт прыжок, вытесняя самый старый, если кольцо заполнено.
     private void KeepJump(string url, int jump)
     {
@@ -374,18 +429,49 @@ public class CombineQueries : UdonSharpBehaviour
     // Зачем: пока запросы идут по одному, клиент не знает, что будет дальше, и каждый адрес
     // проходит свой путь. Собранная пачка позволяет разложить её ОДИН раз - кого сервер знает по
     // номеру (тем прыжок), кого нет (тем голова), - и не гонять поиск там, где номер уже на руках.
-    public void Queue(string url)
+    // Порядок - живая очередь: кто встал раньше, тот раньше и уедет. Это важно там, где адрес
+    // приходится СОБИРАТЬ: поток сборки на сервере один, две сборки разом в него не влезут, и
+    // вторая ждёт, пока первая закроется хвостом.
+    //
+    // Мест 2048. Больше - отказ, а не молчаливая потеря: место освободится, когда пачка добежит,
+    // и адрес можно поставить снова.
+    public bool Queue(string url) => Enqueue(url, false);
+
+    // То же место в очереди, но адрес поедет НАПРЯМУЮ, мимо словаря. Нужно, когда заранее известно,
+    // что фрагменты его не возьмут: пачка тогда не обязана быть однородной.
+    public bool QueueDirect(string url) => Enqueue(url, true);
+
+    private bool Enqueue(string url, bool direct)
     {
-        if (string.IsNullOrEmpty(url)) return;
+        if (string.IsNullOrEmpty(url)) return false;
+
+        if (queued.Length >= MaxQueued)
+        {
+#if !CQ_RELEASE
+            Debug.Log("[CombineQueries] очередь полна (" + MaxQueued + "), ждём места: " + url);
+#endif
+            return false;
+        }
 
         string[] grown = new string[queued.Length + 1];
+        bool[] grownDirect = new bool[queued.Length + 1];
 
-        for (int i = 0; i < queued.Length; i++) grown[i] = queued[i];
+        for (int i = 0; i < queued.Length; i++) { grown[i] = queued[i]; grownDirect[i] = queuedDirect[i]; }
 
         grown[queued.Length] = url;
+        grownDirect[queued.Length] = direct;
 
         queued = grown;
+        queuedDirect = grownDirect;
+
+        return true;
     }
+
+    private bool[] queuedDirect = new bool[0];
+    private bool[] batchDirect = new bool[0];
+
+    // Сколько адресов помещается в очередь до Run.
+    private const int MaxQueued = 2048;
 
     // Выполняет накопленное. Тела складываются по адресам, забрать их - BodyOf(url).
     public void Run()
@@ -395,9 +481,12 @@ public class CombineQueries : UdonSharpBehaviour
         bodies = new DataDictionary();
 
         batch = queued;
+        batchDirect = queuedDirect;
         BatchQueries = 0;
+        LastSent = "";
 
         queued = new string[0];
+        queuedDirect = new bool[0];
         done = new bool[batch.Length];
 
         NextInBatch();
@@ -407,43 +496,31 @@ public class CombineQueries : UdonSharpBehaviour
     // забирает их одним запросом. Не нашлось серии - берёт первый несделанный поодиночке.
     private void NextInBatch()
     {
-        int start = -1, length = 0;
+        // Берём САМЫЙ МЛАДШИЙ номер из несделанных и просим от него диапазон. Сервер отдаёт семью
+        // - узел и соседей по родителю, - поэтому подряд идущие номера в самой пачке не нужны:
+        // остальные её адреса, скорее всего, приедут этим же запросом и отметятся сделанными.
+        int start = -1;
 
         for (int i = 0; i < batch.Length; i++)
         {
-            if (done[i]) continue;
+            if (done[i] || batchDirect[i]) continue;
 
             int first = JumpOf(PayloadOf(batch[i]));
 
             if (first < 0) continue;
 
-            // Сколько адресов пачки продолжают этот номер подряд.
-            int run = 1;
-
-            while (run < RangeMax && Holds(first + run)) run++;
-
-            if (run > length) { start = first; length = run; }
-
-            if (length == RangeMax) break;
+            if (start < 0 || first < start) start = first;
         }
 
-        if (length > 1) { SendRange(start, length); return; }
+        if (start >= 0) { SendRange(start, RangeMax); return; }
 
+        // Прямой адрес шлём как просили - мимо словаря; остальные обычной дорогой.
         for (int i = 0; i < batch.Length; i++)
-            if (!done[i]) { Send(batch[i], true); return; }
+            if (!done[i]) { Send(batch[i], !batchDirect[i]); return; }
 
         batch = new string[0];
 
         Finish();
-    }
-
-    // Есть ли в пачке несделанный адрес с таким номером.
-    private bool Holds(int jump)
-    {
-        for (int i = 0; i < batch.Length; i++)
-            if (!done[i] && JumpOf(PayloadOf(batch[i])) == jump) return true;
-
-        return false;
     }
 
     // Забирает диапазон одним запросом: /h/<первый>/<сколько>/<подпись>.
@@ -456,6 +533,10 @@ public class CombineQueries : UdonSharpBehaviour
         LastQueries = 0;
         LastJump = first;
         busy = true;
+
+        // Диапазон - это прыжок, и дорога у него прыжковая. Без этой строки в выводе оставалась
+        // прошлая: пачка из четырёх уезжала одним запросом, а числилась сборкой.
+        LastRoad = "hyper";
 
         queueLen = 1;
         queue = new int[1];
@@ -489,6 +570,8 @@ public class CombineQueries : UdonSharpBehaviour
 
         DataList ready = list.DataList;
 
+        string paid = "";
+
         for (int i = 0; i < ready.Count; i++)
         {
             if (!ready.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
@@ -497,17 +580,136 @@ public class CombineQueries : UdonSharpBehaviour
 
             if (url == "") continue;
 
-            bodies.SetValue(url, DictString(item.DataDictionary, "response"));
+            string body = DictString(item.DataDictionary, "response");
+
+            bodies.SetValue(url, body);
 
             Mark(url);
 
             // Своё тело кладём и туда, откуда его берёт одиночный запрос.
-            if (url == pendingUrl) forwardedBody = DictString(item.DataDictionary, "response");
+            if (url == pendingUrl) forwardedBody = body;
+
+            // Чей это ответ: номер запроса, который за этим адресом и пошёл. Почти всегда он НЕ
+            // тот, что привёз тело, - в этом весь смысл долга, и без номера пару не составить.
+            int from = -1;
+
+            if (asking.TryGetValue(url, out DataToken owner) && owner.TokenType == TokenType.Int) from = owner.Int;
+
+            // Тело приехало - это и есть получение, единственное место, где ставится vresponse.
+            // Номер в скобках ТОТ ЖЕ, что у vrequest: пара сходится по нему, а не по порядку строк.
+            Named(url, from < 0 ? "vresponse" : "vresponse[" + from + "]");
+
+            string named = TailOf(url) + (from < 0 ? "" : " => vrequest " + from)
+                + " " + body.Length + "b/" + DictInt(item.DataDictionary, "elapsedMs") + "ms";
+
+            paid = paid == "" ? named : paid + ", " + named;
         }
+
+#if !CQ_RELEASE
+        // Долг всегда отдаёт КОНКРЕТНЫЙ запрос, и почти никогда не тот, что за телами ходил.
+        // Поэтому в строке стоят его номер и вид - по ним видно, кто чей долг притащил.
+        if (paid != "" || LastPending > 0)
+            Debug.Log("[CombineQueries] vresponse: " + (paid == "" ? "ничего" : paid)
+                + " - привёз response " + TotalQueries + ", сервер ещё не донёс " + LastPending);
+#endif
     }
+
+    // Как назвать запрос, в ответе которого приехал долг.
+    private string KindOf(int at)
+    {
+        if (at == PhaseJump) return "hyper";
+        if (at == PhaseHead) return "head";
+        if (at == PhaseTail) return "tail";
+        if (at == PhaseCredit) return "credit";
+        if (at == PhaseConnect) return "connect";
+        if (at == PhaseCode || at == PhaseVerify) return "code";
+
+        // Остальное - куски сборки: и чанк рун, и фрагмент словаря. Для лога они одно и то же.
+        return "combine";
+    }
+
+    // Сколько запросов ушло с подключения. LastQueries считает один адрес и сбрасывается, а долгу
+    // нужен сквозной номер: только по нему видно, какой именно запрос его притащил.
+    public int TotalQueries;
 
     // Сколько адресов сервер ещё не донёс. Больше нуля - значит будет следующий долг.
     public int LastPending;
+
+    // Адрес -> номер запроса, который за ним пошёл. Нужен только логу: тело приезжает долгом, и
+    // сказать «чей это ответ» иначе нечем.
+    private DataDictionary asking = new DataDictionary();
+
+    // Разбирает, ЗА ЧЕМ ушёл прыжок. Диапазон тащит четыре РАЗНЫХ адреса за один запрос, и номера
+    // соседей узнать больше неоткуда - забираем их в кольцо здесь, даром.
+    //
+    // Тел в этом ответе нет: сервер не ждёт чужой сервер, он только называет. Результаты печатает
+    // долг - в том выводе, куда они реально доехали.
+    private void TakeSent(string json)
+    {
+        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
+        if (root.TokenType != TokenType.DataDictionary) return;
+        if (!root.DataDictionary.TryGetValue("sent", out DataToken list) || list.TokenType != TokenType.DataList) return;
+
+        DataList sent = list.DataList;
+
+        string asked = "";
+
+        for (int i = 0; i < sent.Count; i++)
+        {
+            if (!sent.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+
+            string url = DictString(item.DataDictionary, "url");
+            int jump = DictInt(item.DataDictionary, "jump");
+
+            if (url == "" || jump < 0) continue;
+
+            KeepJump(PayloadOf(url), jump);
+
+            // Адрес назван - значит за ним УЖЕ пошли, и просить его вторым запросом незачем. Тело
+            // приедет долгом. Без этой отметки пачка досылала прыжок за каждым, кого диапазон
+            // подобрал по дороге, и три гипера превращались в два-три запроса вместо одного.
+            Mark(PayloadOf(url));
+
+            Named(url, "vrequest[" + TotalQueries + "] hyper");
+
+            // Запоминаем, чей это адрес: тело за ним приедет позже, и по номеру видно, кто просил.
+            asking.SetValue(PayloadOf(url), TotalQueries);
+
+            asked = asked == "" ? TailOf(url) + " " + jump : asked + ", " + TailOf(url) + " " + jump;
+        }
+
+#if !CQ_RELEASE
+        // Запрос печатаем ОДНОЙ строкой и списком: /h - это всегда несколько адресов, и читать их
+        // по одному незачем. Ответ (тела) придёт отдельной строкой долга.
+        if (asked != "") Debug.Log("[CombineQueries] vrequest /h " + TotalQueries + " -> " + asked);
+#endif
+    }
+
+    // Дописывает адрес в строку «отправлено» вместе с его дорогой. Дорога у каждого своя: в одной
+    // пачке два адреса уезжают прыжком, один голова называет, а два оставшихся собираются - и без
+    // пометки у каждого не видно, кто чем уехал.
+    //
+    // Пометка говорит, ЧТО ИМЕННО произошло с адресом:
+    //   vrequest - ушёл наружу. Неважно, просили его или сервер прихватил заодно: запрос за ним
+    //              всё равно уехал, и стоит он столько же.
+    //   vresponse - приехало ТЕЛО. Только это и значит «получено», и приезжает оно долгом, часто
+    //              уже в другом шаге - поэтому пометка и нужна отдельная.
+    //   head     - ни то, ни другое: голова назвала адрес и дала номер, наружу за ним не ходили.
+    private void Named(string url, string mark)
+    {
+        string named = TailOf(url) + " " + mark;
+
+        LastSent = LastSent == "" ? named : LastSent + ", " + named;
+    }
+
+    // Конец адреса - всё после хоста. Именно им адреса и различаются, а хост у них общий.
+    private string TailOf(string url)
+    {
+        string payload = PayloadOf(url);
+        int cut = payload.IndexOf("/");
+
+        return cut < 0 || cut + 1 >= payload.Length ? payload : payload.Substring(cut + 1);
+    }
 
     // Просит сервер отдать долг, ничего нового не запрашивая: /h/<любой>/0/<подпись>.
     // Нужно тому, кому тело нужно немедленно, - иначе оно приедет с ближайшим обычным запросом.
@@ -517,7 +719,9 @@ public class CombineQueries : UdonSharpBehaviour
 
         LastError = "";
         forwarded = "";
-        forwardedBody = "";
+
+        // Тело прошлого адреса НЕ трогаем: за своим мы не идём, значит и затирать нечем. Чистит
+        // его следующий настоящий запрос - там оно и правда устаревает.
         pendingUrl = "";
         LastQueries = 0;
         busy = true;
@@ -526,7 +730,7 @@ public class CombineQueries : UdonSharpBehaviour
         queue = new int[1];
         queueKind = new int[1];
         queue[0] = NextSign();
-        queueKind[0] = 5;
+        queueKind[0] = 7;
         queuePos = 0;
 
         SendNext();
@@ -572,6 +776,15 @@ public class CombineQueries : UdonSharpBehaviour
 
         LastError = "";
         forwarded = "";
+
+        // Тело прошлого адреса чистим ЗДЕСЬ. Иначе, пока долг за новым ещё летит, наружу отдаётся
+        // предыдущее - и выглядит это ровно как кеш ответов, которого у клиента нет.
+        forwardedBody = "";
+
+        // В пачке строку «отправлено» не чистим: она копится по всем её адресам, чтобы в конце
+        // было видно, кто уехал прыжком, кого назвала голова, а кого пришлось собирать.
+        if (batch.Length == 0) LastSent = "";
+
         pendingUrl = payload;
         LastUrl = url;
         LastSymbols = symbols.Length;
@@ -579,6 +792,7 @@ public class CombineQueries : UdonSharpBehaviour
         busy = true;
 
         headTried = false;
+        LastRoad = "";
 
         if (withFragments) SendCombine(payload); else SendDirect(payload);
     }
@@ -700,15 +914,21 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (count >= MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
 
-        q[count] = tail; k[count] = 2; count++;
+        // ЗАКРЫВАЮЩИЙ КУСОК. Адрес кончается ровно на границе фрагмента - хвосту нести нечего, и
+        // диктовать кусок отдельным запросом незачем: /cf делает и то, и другое разом.
+        //
+        // Берём только младшие адреса словаря: пул закрытия это CloseLimit * подписи, и на весь
+        // словарь он стоил бы полсотни мегабайт вместо неполного.
+        if (tail == 0 && count > 0 && k[count - 1] == 1 && q[count - 1] < CloseLimit) k[count - 1] = 8;
+        else { q[count] = tail; k[count] = 2; count++; }
+
+        // Номер спрашиваем ОДИН раз: он нужен и голове (звать ли её), и прыжку, а два вызова
+        // подряд писали в лог «no jump» дважды на каждый адрес.
+        int jump = JumpOf(payload);
 
         // Прыжка нет, но сервер мог собрать этот адрес для кого-то другого - спросим голову.
-        // Она стоит один запрос и отвечает готовым телом, если адрес ей знаком.
-        if (JumpOf(payload) < 0 && !headTried && SendHead(payload)) return;
-
-        // Уже собранный адрес заменяем ОДНИМ прыжком: сервер поднимает всю combine-часть сам, а мы
-        // досылаем только хвост. Столько запросов и экономится - все, кроме двух.
-        int jump = JumpOf(payload);
+        // Она стоит один запрос и называет адрес, если он ей знаком.
+        if (jump < 0 && !headTried && SendHead(payload)) return;
 
         LastJump = -1;
 
@@ -718,6 +938,18 @@ public class CombineQueries : UdonSharpBehaviour
         // Правило простое: хайпер это один запрос. Не попали в словарь - идём обычной дорогой,
         // combine + tail по динамической фрагментации.
         if (jump >= 0 && jump < MaxJumps) skip = count;
+
+        // Голова уже отработала - значит дорога у нас составная, и стоит она на запрос дороже.
+#if CQ_RELEASE
+        // В релизе дорог всего две: hyper и head. Составные имена и «combine» - дев-подробность,
+        // по ней читается, докуда дошёл персист; сборка с нуля тут остаётся лишь как честный
+        // ответ на случай, если словаря всё-таки не хватило.
+        LastRoad = headTried ? "head" : (skip > 0 ? "hyper" : "combine");
+#else
+        LastRoad = headTried
+            ? (skip > 0 ? "head/hyper" : "head/combine")
+            : (skip > 0 ? "hyper" : "combine");
+#endif
 
         queueLen = count - skip + (skip > 0 ? 1 : 0);
         queue = new int[queueLen];
@@ -732,7 +964,7 @@ public class CombineQueries : UdonSharpBehaviour
             LastJump = jump;
 
 #if !CQ_RELEASE
-            Debug.Log("[CombineQueries] hyper: jump " + jump + " replaces all " + skip + " queries with one");
+            Debug.Log("[CombineQueries] " + LastRoad + ": jump " + jump + " replaces all " + skip + " queries with one");
 #endif
         }
 
@@ -768,6 +1000,7 @@ public class CombineQueries : UdonSharpBehaviour
     private void SendDirect(string payload)
     {
         LastJump = -1;
+        LastRoad = "direct";
 
         int[] buffer = new int[payload.Length];
         int count = 0, at = 0;
@@ -827,15 +1060,22 @@ public class CombineQueries : UdonSharpBehaviour
         // Развязка-3: старший разряд бесконечного адреса, сдвиг делает сервер.
         if (kind == 3) { Load(PhaseFragment, HopPool[queue[queuePos]]); return; }
 
-        // Прыжок - частный случай диапазона: один адрес это count=1. Отдельного пула ему не нужно,
-        // это экономит 32 768 печёных ссылок (~4 МБ).
-        if (kind == 4) { Load(PhaseJump, RangePool[(queue[queuePos] * RangeMax) * JumpSignValues + NextSign()]); return; }
+        // Одиночный прыжок берёт ДИАПАЗОН, а не один адрес: запрос стоит столько же, а соседи по
+        // номеру приезжают даром - телами в долг и номерами в кольцо. Отдельного пула ему не
+        // нужно, это экономит 32 768 печёных ссылок (~4 МБ).
+        if (kind == 4) { Load(PhaseJump, RangePool[(queue[queuePos] * RangeMax + RangeMax - 1) * JumpSignValues + NextSign()]); return; }
 
         // Пачка: индекс уже посчитан вместе с подписью, здесь только шлём.
         if (kind == 5) { Load(PhaseJump, RangePool[queue[queuePos]]); return; }
 
         // Голова: индекс тоже посчитан заранее.
         if (kind == 6) { Load(PhaseHead, HeadPool[queue[queuePos]]); return; }
+
+        // Только долг: ничего не запрашиваем, забираем доспевшее.
+        if (kind == 7) { Load(PhaseCredit, CreditPool[queue[queuePos]]); return; }
+
+        // Кусок И закрытие одним запросом. Ответ тот же, что у хвоста, поэтому и фаза его.
+        if (kind == 8) { Load(PhaseTail, ClosePool[queue[queuePos] * SignValues + NextSign()]); return; }
 
         // Direct подписи не несёт: сервер сверяет её только на fragmentate-хвосте.
         if (!fragments) { Load(PhaseTail, DirectTailPool[queue[queuePos]]); return; }
@@ -857,10 +1097,29 @@ public class CombineQueries : UdonSharpBehaviour
 
     public override void OnStringLoadSuccess(IVRCStringDownload response)
     {
+        // Прыжок и голова разбираются ПЕРВЫМИ: сколько адресов ушло, знает только их ответ - до
+        // него у клиента на руках один адрес, а уехало четыре. Поэтому список «что отправлено»
+        // печатается здесь, а не в момент отправки: раньше его взять неоткуда.
+        if (phase == PhaseJump) TakeSent(response.Result);
+        else if (phase == PhaseHead) headTaken = TakeHead(response.Result);
+
         // Сервер не ждёт чужие сервера: он отвечает сразу, а тела приезжают ДОЛГОМ - с этим же
         // ответом, если успели, иначе со следующим запросом, каким бы он ни был. Поэтому долг
         // разбираем до всего остального: там может лежать и то, чего мы ждём прямо сейчас.
+#if !CQ_RELEASE
+        // ОТВЕТ на физический запрос - просто response. Он приходит на каждый GET и означает лишь
+        // «сервер принял»; результата в нём может не быть вовсе.
+        //
+        // vresponse - другое: это готовый результат виртуального запроса, то есть тело адреса. Оно
+        // приезжает долгом и печатается отдельной строкой, привязанной к своему vrequest.
+        Debug.Log("[CombineQueries] response => vrequest." + KindOf(phase) + " " + TotalQueries + ": "
+            + response.Result.Length + " bytes");
+#endif
+
         TakeDebt(response.Result);
+
+        // Погашение долга: в ответе только он, разбирать больше нечего.
+        if (phase == PhaseCredit) { LastUrls = 0; Done(); return; }
 
         if (phase == PhaseCode) { queuePos++; SendCode(); return; }
 
@@ -900,9 +1159,27 @@ public class CombineQueries : UdonSharpBehaviour
         // чужие кладём в кольцо - они пригодятся дальше и достались бесплатно.
         if (phase == PhaseHead)
         {
-            int taken = TakeHead(response.Result);
+            // Разобрали выше, до строки ответа: список найденного печатается раньше, чем долг.
+            int taken = headTaken;
+
+            // Второй запрос нужен НЕ всегда: тело нашего адреса могло приехать долгом прямо с
+            // ответом головы - за ним ходили раньше, и оно доспело. Тогда брать уже нечего.
+            if (forwardedBody != "")
+            {
+                LastChunks = 0;
+                LastL2 = 0;
+                LastL3 = 0;
+                LastInfinite = 0;
+                LastUrls = taken > 0 ? taken : 1;
+
+                forwarded = response.Result;
+
+                Done();
+                return;
+            }
 
             // Голова только назвала адреса - забирать их идёт прыжок, номер теперь в кольце.
+            // Это дорога head/hyper: два запроса на адрес, которого клиент не собирал ни разу.
             if (taken >= 0 && JumpOf(pendingUrl) >= 0)
             {
                 SendCombine(pendingUrl);
@@ -923,8 +1200,17 @@ public class CombineQueries : UdonSharpBehaviour
                 return;
             }
 
-            // Своего адреса среди найденных нет - собираем его сами, как будто головы не было.
-            SendCombine(pendingUrl);
+            // Своего адреса среди найденных нет - собираем сами. Но кусок, который уехал с
+            // головой, сервер придержал: он приклеится концом при закрытии, и диктовать надо
+            // ТОЛЬКО НАЧАЛО. Запрос за голову тем самым не пропал - он оплатил последний кусок.
+            string kept = StringField(response.Result, "kept");
+
+#if !CQ_RELEASE
+            Debug.Log("[CombineQueries] head/combine: адрес не знаком, конец «" + kept
+                + "» сервер придержал, досылаем начало");
+#endif
+
+            SendCombine(kept == "" ? pendingUrl : pendingUrl.Substring(0, pendingUrl.Length - kept.Length));
             return;
         }
 
@@ -935,8 +1221,14 @@ public class CombineQueries : UdonSharpBehaviour
             // обычной дорогой - собираем адрес с нуля.
             if (!BoolField(response.Result, "known"))
             {
+                // В релизе не называем ни механизм, ни номер: по такой строке видно «до и после
+                // персиста», а миру это ни к чему. Сам факт отката оставляем - он объясняет время.
+#if CQ_RELEASE
+                Debug.Log("[CombineQueries] server does not know this address, assembling instead");
+#else
                 Debug.Log("[CombineQueries] hyper: jump " + LastJump + " unknown on server ("
                     + StringField(response.Result, "note") + "), assembling instead");
+#endif
 
                 jumps.Remove(pendingUrl);
 
@@ -973,6 +1265,12 @@ public class CombineQueries : UdonSharpBehaviour
             forwardedBody = "";
             forwarded = response.Result;
 
+            // Хвост уносит ровно один адрес - свой. Называем и его: строка «отправлено» обязана
+            // быть заполнена на любой дороге, иначе по ней не сравнить сборку с прыжком.
+            Named(pendingUrl, "vrequest[" + TotalQueries + "] " + LastRoad);
+
+            asking.SetValue(pendingUrl, TotalQueries);
+
             Done();
             return;
         }
@@ -1005,7 +1303,19 @@ public class CombineQueries : UdonSharpBehaviour
         phase = nextPhase;
 
         LastQueries++;
+        TotalQueries++;
         lastLoadAt = Time.time;
+
+#if !CQ_RELEASE
+        // Каждый уходящий запрос - vrequest, каждый пришедший ответ - vresponse. Без этого в логе
+        // не отличить «мы попросили» от «нам принесли», а между ними лежит вся асинхронность.
+        //
+        // Прыжок и голова здесь МОЛЧАТ: у них уходит несколько адресов, а на руках сейчас один -
+        // напечатать «1» значило бы соврать. Свой список они печатают, когда узнают его из ответа.
+        if (nextPhase != PhaseJump && nextPhase != PhaseHead)
+            Debug.Log("[CombineQueries] vrequest " + KindOf(nextPhase) + " " + TotalQueries
+                + (pendingUrl == "" ? "" : ": " + TailOf(pendingUrl)));
+#endif
 
         SendCustomEventDelayedSeconds(nameof(OnLoadTimeout), Timeout);
 
@@ -1075,6 +1385,7 @@ public class CombineQueries : UdonSharpBehaviour
         if (found < 0) return false;
 
         headTried = true;
+        LastRoad = "head";
 
         queueLen = 1;
         queue = new int[1];
@@ -1096,6 +1407,10 @@ public class CombineQueries : UdonSharpBehaviour
     // запрос.
     private bool headTried;
 
+    // Сколько адресов назвала голова в последнем ответе. Разбор идёт раньше остального, поэтому
+    // результат приходится донести до ветки полем.
+    private int headTaken;
+
     // Разбирает ответ головы: кладёт названные адреса в кольцо. Тел здесь нет - голова наружу не
     // ходит, забирает их прыжок, а приезжают они долгом.
     //
@@ -1110,6 +1425,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         string mine = Scheme + "://" + pendingUrl;
         int ours = -1;
+        string asked = "";
 
         for (int i = 0; i < found.Count; i++)
         {
@@ -1122,21 +1438,27 @@ public class CombineQueries : UdonSharpBehaviour
 
             KeepJump(PayloadOf(url), jump);
 
+            Named(url, "head[" + TotalQueries + "]");
+
+            asked = asked == "" ? TailOf(url) + " " + jump : asked + ", " + TailOf(url) + " " + jump;
+
             if (url == mine) ours = found.Count;
         }
+
+#if !CQ_RELEASE
+        // Голова тоже называет НЕСКОЛЬКО адресов - печатаем их одной строкой, как и прыжок.
+        if (asked != "") Debug.Log("[CombineQueries] vrequest /hd " + TotalQueries + " -> " + asked);
+#endif
 
         return ours;
     }
 
+    // Номер адреса или -1. В лог здесь не пишем: пачка спрашивает номер у каждого своего адреса на
+    // каждом проходе, и «нет номера» печаталось бы по четыре раза подряд, разрывая пары
+    // vrequest/vresponse. Что номера не было, и так видно по дороге - там стоит combine.
     private int JumpOf(string url)
     {
-        if (!jumps.TryGetValue(url, out DataToken value))
-        {
-#if !CQ_RELEASE
-            if (jumps.Count > 0) Debug.Log("[CombineQueries] no jump for '" + url + "' (known " + jumps.Count + ")");
-#endif
-            return -1;
-        }
+        if (!jumps.TryGetValue(url, out DataToken value)) return -1;
 
         return value.TokenType == TokenType.Int ? value.Int : -1;
     }
@@ -1160,7 +1482,14 @@ public class CombineQueries : UdonSharpBehaviour
         }
 
         Finish();
+
+        // Слать больше нечего, а за сервером ещё числятся тела - идём за ними сами, и так пока
+        // долг не погасится. Настоящий запрос отменяет это сам собой: Settle уступает занятому.
+        if (LastPending > 0) SendCustomEventDelayedSeconds(nameof(Settle), CreditDelay);
     }
+
+    // Пауза перед добором долга. Меньше - и мы дёргаем сервер вхолостую, пока форвард ещё летит.
+    private const float CreditDelay = 0.5f;
 
     // Отмечает адрес пачки отработанным. Тело могло уже приехать долгом, а могло ещё лететь -
     // в обоих случаях запрашивать его снова не нужно.
@@ -1481,6 +1810,29 @@ public class CombineQueries : UdonSharpBehaviour
                     pool[(jump * max + count - 1) * signs + sign] = new VRCUrl(baseUri + first + "/" + length + "/" + sign);
             }
         }
+
+        return pool;
+    }
+
+    private static VRCUrl[] ClosePoolOf(string baseUri, int pieces, int signs)
+    {
+        VRCUrl[] pool = new VRCUrl[pieces * signs];
+
+        for (int piece = 0; piece < pieces; piece++)
+        {
+            string id = RunesOf(piece, Digits, NumSize);
+
+            for (int sign = 0; sign < signs; sign++) pool[piece * signs + sign] = new VRCUrl(baseUri + id + "/" + sign);
+        }
+
+        return pool;
+    }
+
+    private static VRCUrl[] CreditPoolOf(string baseUri, int signs)
+    {
+        VRCUrl[] pool = new VRCUrl[signs];
+
+        for (int sign = 0; sign < signs; sign++) pool[sign] = new VRCUrl(baseUri + sign);
 
         return pool;
     }

@@ -12,6 +12,9 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
     // Сколько адресов отдаём за один запрос диапазоном.
     private const int Batch = 8;
 
+    // Докуда идём вперёд в поисках этих адресов. Потолок нужен: за концом дерева искать нечего.
+    private const int Window = 64;
+
     public Task<HyperResponse> Handle(HyperRequest request, CancellationToken cancellationToken)
     {
         if (speech.Alphabet is null) throw new Exception("CRIT: /connect was not called");
@@ -45,17 +48,30 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
             return Task.FromResult(new HyperResponse { Known = true, Urls = 0, Ready = settled, Pending = outbox.Pending });
         }
 
-        var urls = new List<string>();
+        // Просили count адресов - значит и отдать надо count РАЗНЫХ адресов, а не count номеров.
+        //
+        // Сперва СЕМЬЯ: сам узел и его соседи по родителю. У них общая вся дорога, кроме последнего
+        // куска, - то есть каждый из четвёрки это «один кусок combine плюс остальное по гиперу»,
+        // и потому они честно уезжают одним прыжком.
+        //
+        // Не хватило семьи - добираем номерами вперёд: между листами лежат промежуточные узлы, у
+        // них адреса нет, поэтому идём с пропусками, а не ровно count шагов. Иначе один запрос
+        // возвращал бы два адреса вместо четырёх.
+        var urls = new List<SentUrl>();
 
-        for (int at = 0; at < count; at++)
+        foreach (var (url, jump) in speech.Family(request.Value, count)) Keep(url, jump);
+
+        for (int at = 0; at < Window && urls.Count < count; at++) Keep(speech.UrlOf(request.Value + at), request.Value + at);
+
+        void Keep(string? url, int jump)
         {
-            string? url = speech.UrlOf(request.Value + at);
-
-            if (url is null) continue;
+            if (url is null || urls.Count >= count) return;
 
             string full = speech.Scheme + "://" + url;
 
-            urls.Add(full);
+            if (urls.Any(sent => sent.Url == full)) return;
+
+            urls.Add(new SentUrl(full, jump));
 
             outbox.Fetch(full);
         }
@@ -64,14 +80,15 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
         {
             var ready = outbox.Take();
 
-            logger.LogInformation("hyper: jump {Jump}{Range} -> {Urls} urls sent, {Ready} ready now, {Pending} in flight",
-                request.Value, count > 1 ? "+" + count : "", urls.Count, ready.Count, outbox.Pending);
+            logger.LogInformation("hyper: jump {Jump}{Range} -> {Urls} urls sent ({Sent}), {Ready} ready now, {Pending} in flight",
+                request.Value, count > 1 ? "+" + count : "", urls.Count, string.Join(", ", urls.Select(sent => sent.Url)), ready.Count, outbox.Pending);
 
             return Task.FromResult(new HyperResponse
             {
                 Known = true,
                 Urls = urls.Count,
-                ForwardedUrl = urls[0],
+                ForwardedUrl = urls[0].Url,
+                Sent = urls,
                 Ready = ready,
                 Pending = outbox.Pending
             });

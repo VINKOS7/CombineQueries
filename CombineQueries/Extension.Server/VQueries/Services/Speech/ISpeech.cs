@@ -128,6 +128,12 @@ public interface ISpeech
 
     string? UrlOf(int handle);
 
+    // Придержать кусок промахнувшейся головы: он приклеится концом адреса при закрытии.
+    void Keep(string text);
+
+    // Узел и его соседи по родителю: адреса, отличающиеся от него ровно последним куском.
+    IEnumerable<(string Url, int Jump)> Family(int handle, int limit);
+
     // Сброс хайперов: нужен, чтобы прогон теста был повторяемым.
     void ForgetHypers();
 

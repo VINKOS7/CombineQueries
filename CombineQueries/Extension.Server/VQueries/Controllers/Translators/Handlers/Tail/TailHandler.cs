@@ -33,9 +33,22 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech sp
 
         if (request.Type != TypeQuery.Fragmentate && request.Type != TypeQuery.Direct) throw new ArgumentOutOfRangeException(nameof(request), request.Type, "Unexpected TypeCombine value");
 
-        string tail = Translator.TrimPad(request.Type == TypeQuery.Direct
-            ? Translator.DirectUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize)
-            : Translator.FragmentateUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize, speech.SymbolsOf(request.Type)), speech.RuneSize);
+        // Закрывающий кусок: /cf диктует фрагмент и закрывает одним запросом. Кладём его в поток
+        // ровно так же, как это сделал бы отдельный /c, - разницы для сборки нет, экономится
+        // только сам запрос.
+        if (request.Fragment >= 0)
+        {
+            speech.SetFragmentPage(0);
+            speech.AcceptVirtualFragment(request.Fragment);
+        }
+
+        // У закрывающего куска хвостовых символов нет по определению: адрес кончается ровно на
+        // границе фрагмента, иначе клиент этой формой не воспользовался бы.
+        string tail = request.Fragment >= 0
+            ? ""
+            : Translator.TrimPad(request.Type == TypeQuery.Direct
+                ? Translator.DirectUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize)
+                : Translator.FragmentateUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize, speech.SymbolsOf(request.Type)), speech.RuneSize);
 
         var assembled = speech.Close(tail, request.Type);
 

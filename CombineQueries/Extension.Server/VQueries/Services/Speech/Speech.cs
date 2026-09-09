@@ -107,8 +107,12 @@ public class Speech : ISpeech
         }
     }
 
-    // Сколько младших битов номера едет в голове. Столько же берёт клиент.
-    public const int HeadBaseMask = 15;
+    // Сколько младших битов номера едет в голове. Столько же берёт клиент (HeadBases = 8).
+    //
+    // Три бита, а не четыре: разрядность в печёных ссылках делится между куском и базой, и куску
+    // она нужнее. База - обрезок, промах по ней стоит лишь пары названных соседей, а те клиенту
+    // достаются даром; кусок за потолком не называется вовсе.
+    public const int HeadBaseMask = 7;
 
     // Номера последней собранной цепочки: лист (весь url) и последний общий узел с известными.
     public int LastLeaf { get; private set; } = -1;
@@ -144,7 +148,15 @@ public class Speech : ISpeech
         return _pieces.Count;
     }
 
+    // Кусок промахнувшейся головы: она его уже получила, значит запрос за ним оплачен. Держим до
+    // закрытия и приклеиваем концом адреса - клиенту остаётся досказать только начало.
+    private string _trailing = "";
+
+    public void Keep(string text) => _trailing = text;
+
     public string? UrlOf(int handle) => _tree.UrlOf(handle);
+
+    public IEnumerable<(string Url, int Jump)> Family(int handle, int limit) => _tree.Family(handle, limit);
 
     private List<string> StepsOf()
     {
@@ -514,6 +526,16 @@ public class Speech : ISpeech
                         : Translator.FragmentateUnrune(piece.Rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type))));
 
         sb.Append(tailText);
+
+        // Кусок, оставшийся от промахнувшейся головы, приклеивается ПОСЛЕДНИМ - он и есть конец
+        // адреса. Запрос за ним уже был оплачен головой, и терять его только потому, что она не
+        // нашла адрес, значит брать за один кусок дважды.
+        if (_trailing.Length > 0)
+        {
+            sb.Append(_trailing);
+
+            _trailing = "";
+        }
 
         int runes = _pieces.Count;
 

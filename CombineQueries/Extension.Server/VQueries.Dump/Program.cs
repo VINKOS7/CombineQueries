@@ -5,8 +5,10 @@
 //   dotnet run --project VQueries.Dump              - всё сразу
 //   dotnet run --project VQueries.Dump -- chains    - только дерево цепочек
 //   dotnet run --project VQueries.Dump -- dict      - только словарь
+//   dotnet run --project VQueries.Dump -- seed      - вернуть посев демки после сброса
 //
-// Строку подключения берём из appsettings.Development.json сервера и НЕ печатаем.
+// Строку подключения берём из конфига сервера по ASPNETCORE_ENVIRONMENT (или из переменной среды
+// ConnectionStrings__Context) и НЕ печатаем.
 
 using System.Text.Json;
 using Npgsql;
@@ -14,30 +16,47 @@ using Npgsql;
 string root = AppContext.BaseDirectory;
 string? config = null;
 
+// Окружение то же, что у сервера: в dev конфиг лежит рядом с ним, на релизе строка приезжает
+// переменной среды и файла может не быть вовсе.
+string environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
+
+string[] names = [$"appsettings.{environment}.json", "appsettings.json"];
+
 // Ищем конфиг сервера вверх по дереву: dotnet run зовут и из корня решения, и из папки проекта.
 for (var dir = new DirectoryInfo(root); dir is not null && config is null; dir = dir.Parent)
-{
-    string candidate = Path.Combine(dir.FullName, "VQueries", "appsettings.Development.json");
+    foreach (string name in names)
+    {
+        string candidate = Path.Combine(dir.FullName, "VQueries", name);
 
-    if (File.Exists(candidate)) config = candidate;
-}
+        if (config is null && File.Exists(candidate)) config = candidate;
+    }
 
-if (config is null)
+// Переменная среды главнее файла: на релизе строка обычно только в ней и живёт.
+string? fromEnvironment = Environment.GetEnvironmentVariable("ConnectionStrings__Context");
+
+if (config is null && fromEnvironment is null)
 {
-    Console.WriteLine("не нашёл VQueries/appsettings.Development.json - запусти из папки решения");
+    Console.WriteLine($"не нашёл ни VQueries/appsettings.{environment}.json, ни ConnectionStrings__Context");
 
     return 1;
 }
 
-using var doc = JsonDocument.Parse(File.ReadAllText(config));
+string? connection = fromEnvironment;
 
-if (!doc.RootElement.TryGetProperty("ConnectionStrings", out var strings) ||
-    !strings.TryGetProperty("Context", out var context) ||
-    context.GetString() is not string connection)
+if (connection is null)
 {
-    Console.WriteLine("в конфиге нет ConnectionStrings:Context");
+    using var doc = JsonDocument.Parse(File.ReadAllText(config!));
 
-    return 1;
+    if (!doc.RootElement.TryGetProperty("ConnectionStrings", out var strings) ||
+        !strings.TryGetProperty("Context", out var context) ||
+        context.GetString() is not string fromFile)
+    {
+        Console.WriteLine("в конфиге нет ConnectionStrings:Context");
+
+        return 1;
+    }
+
+    connection = fromFile;
 }
 
 string what = args.Length > 0 ? args[0] : "all";
@@ -56,8 +75,86 @@ if (what is "all" or "dict") await Dictionary();
 if (what is "all" or "chains") await Chains();
 if (what is "all" or "hypers") await Hypers();
 if (what == "candidates") await Candidates();
+if (what == "seed") await Seed();
 
 return 0;
+
+// Возвращает посев демки на место. Нужен потому, что сброс (resetHypers=true) чистит цепочки
+// вместе с посевом, а миграция второй раз не отработает - она уже отмечена применённой.
+//
+// Запрос дословно тот же, что в миграции DemoChainSeed: владелец и шаг берутся из базы, поэтому
+// один и тот же текст верен и в dev, и на релизе.
+async Task Seed()
+{
+    string[] urls =
+    [
+        "dummyjson.com/comments",
+        "dummyjson.com/products",
+        "dummyjson.com/recipes",
+        "dummyjson.com/quotes"
+    ];
+
+    // Братья посеянного carts/5: родитель и форма шага берутся у него самого.
+    string[] siblings = ["dummyjson.com/carts/1", "dummyjson.com/carts/2", "dummyjson.com/carts/3"];
+
+    const int first = 900;
+
+    var stamp = new DateTime(2026, 9, 9, 0, 0, 0, DateTimeKind.Utc);
+
+    Console.WriteLine();
+    Console.WriteLine($"=== посев демки: {urls.Length + siblings.Length} адреса, номера с {first} ===");
+
+    for (int at = 0; at < urls.Length; at++)
+    {
+        string sql = $"""
+            insert into "Chains" ("TranslatorId", "Id", "ParentId", "Step", "Url", "CreatedAt", "UpdatedAt")
+            select t."Id",
+                   {first + at},
+                   null,
+                   coalesce((select 'f' || f."Id" from "VirtualFragments" f
+                             where f."TranslatorId" = t."Id" and f."Text" = '{urls[at]}' limit 1), 'r{urls[at]}'),
+                   '{urls[at]}',
+                   '{stamp:O}',
+                   '{stamp:O}'
+            from "Translators" t
+            order by t."CreatedAt"
+            limit 1
+            on conflict do nothing;
+            """;
+
+        await using var cmd = db.CreateCommand(sql);
+
+        int rows = await cmd.ExecuteNonQueryAsync();
+
+        Console.WriteLine($"  {first + at,5}  {urls[at]}  {(rows > 0 ? "посеян" : "уже был или не к кому класть")}");
+    }
+
+    for (int at = 0; at < siblings.Length; at++)
+    {
+        int id = first + urls.Length + at;
+
+        string sql = $"""
+            insert into "Chains" ("TranslatorId", "Id", "ParentId", "Step", "Url", "CreatedAt", "UpdatedAt")
+            select c."TranslatorId",
+                   {id},
+                   c."ParentId",
+                   left(c."Step", length(c."Step") - 1) || '{siblings[at][^1]}',
+                   '{siblings[at]}',
+                   '{stamp:O}',
+                   '{stamp:O}'
+            from "Chains" c
+            where c."Url" = 'dummyjson.com/carts/5'
+            limit 1
+            on conflict do nothing;
+            """;
+
+        await using var cmd = db.CreateCommand(sql);
+
+        int rows = await cmd.ExecuteNonQueryAsync();
+
+        Console.WriteLine($"  {id,5}  {siblings[at]}  {(rows > 0 ? "посеян" : "уже был или carts/5 нет")}");
+    }
+}
 
 // Сколько адресов найдётся по одному куску. Это и есть цена вопроса для /head: если кандидатов
 // единицы, обрезок базы не нужен вовсе; если десятки - без него не обойтись.

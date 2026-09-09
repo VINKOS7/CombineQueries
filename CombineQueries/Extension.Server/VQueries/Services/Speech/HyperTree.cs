@@ -102,6 +102,32 @@ public class HyperTree
 
     public string? UrlOf(int handle) => handle >= 0 && handle < _handles.Count ? _handles[handle].Url : null;
 
+    // Семья узла: он сам и его соседи по родителю. Соседи отличаются от него РОВНО последним
+    // шагом - вся дорога до него общая. Это и значит «один кусок combine, остальное по гиперу»:
+    // четыре таких адреса честно уезжают одним прыжком, потому что различаются в одном месте.
+    //
+    // Идём по возрастанию номера начиная с самого узла: номера выдаются по порядку вставки, так
+    // что ближайшие - это те, что заводились вместе с ним.
+    public IEnumerable<(string Url, int Jump)> Family(int handle, int limit)
+    {
+        if (handle < 0 || handle >= _handles.Count || limit <= 0) yield break;
+
+        var parent = _handles[handle].Parent;
+
+        if (parent is null) yield break;
+
+        int given = 0;
+
+        foreach (var child in parent.Next.Values.Where(c => c.Url is not null && c.Handle >= handle).OrderBy(c => c.Handle))
+        {
+            if (given >= limit) yield break;
+
+            yield return (child.Url!, child.Handle);
+
+            given++;
+        }
+    }
+
     // Сколько адресов ещё возможно после такого префикса. -1 - префикс не встречался.
     public int Ahead(IReadOnlyList<string> prefix)
     {
