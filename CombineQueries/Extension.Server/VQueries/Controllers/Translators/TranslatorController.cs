@@ -4,13 +4,11 @@ using Microsoft.AspNetCore.Authorization;
 using MediatR;
 
 using CombineQueries.Domain.Aggregates.Translator.types;
-using CombineQueries.Api.Controllers.Translators.Handlers.Combine;
-using CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 using CombineQueries.Api.Controllers.Translators.Handlers.Head;
 using CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
+using CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 using CombineQueries.Api.Controllers.Translators.Handlers.Credit;
-using CombineQueries.Api.Controllers.Translators.Handlers.Code;
-
+using CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 
 namespace CombineQueries.Api.Controllers.Translators;
 
@@ -39,18 +37,6 @@ public class TranslatorController : Controller
     [AllowAnonymous] [HttpGet("/t/{runes}/{sign:int}")] public Task<TailResponse> Tail(string runes, int sign)
         => _mediator.Send(new TailRequest { Runes = runes, Sign = sign, Type = TypeQuery.Fragmentate });
 
-    // Кусок и закрытие одним запросом: адрес, целиком накрытый одним куском словаря, стоит один
-    // запрос вместо двух. Хвостовых символов у такого адреса нет по определению.
     [AllowAnonymous] [HttpGet("/cf/{id:int}/{sign:int}")] public Task<TailResponse> CloseWith(int id, int sign)
         => _mediator.Send(new TailRequest { Runes = "", Sign = sign, Fragment = id, Type = TypeQuery.Fragmentate });
-
-    [AllowAnonymous] [HttpGet("/k/{seg}")] public Task<CodeAppendResponse> Code(string seg) => _mediator.Send(new CodeAppendRequest { Segment = seg });
-
-    [AllowAnonymous] [HttpGet("/kf")]
-    public async Task<IActionResult> CodeVerify()
-    {
-        var result = await _mediator.Send(new CodeVerifyRequest());
-
-        return result.Bound ? Ok(result) : StatusCode(StatusCodes.Status403Forbidden, result);
-    }
 }

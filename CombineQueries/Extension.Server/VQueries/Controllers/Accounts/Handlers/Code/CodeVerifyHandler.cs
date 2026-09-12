@@ -2,7 +2,7 @@ using MediatR;
 
 using CombineQueries.Api.Services.Speech;
 
-namespace CombineQueries.Api.Controllers.Translators.Handlers.Code;
+namespace CombineQueries.Api.Controllers.Accounts.Handlers.Code;
 
 public class CodeVerifyHandler(IConfiguration configuration, ILogger<CodeVerifyHandler> logger, ISpeech speech)
     : IRequestHandler<CodeVerifyRequest, CodeVerifyResponse>

@@ -5,10 +5,6 @@ using CombineQueries.Api.Services.Speech;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Credit;
 
-// Погашение долга. Ничего не запрашивает и ничего не собирает - только отдаёт доспевшее.
-//
-// Подпись сверяем как везде: долг это чужие тела, отдавать их кому попало нельзя, и позиция кольца
-// обязана двигаться в ногу с клиентом - иначе следующий хвост уедет с чужим номером.
 public class CreditHandler(ILogger<CreditHandler> logger, IOutbox outbox, ISpeech speech) : IRequestHandler<CreditRequest, CreditResponse>
 {
     public Task<CreditResponse> Handle(CreditRequest request, CancellationToken cancellationToken)

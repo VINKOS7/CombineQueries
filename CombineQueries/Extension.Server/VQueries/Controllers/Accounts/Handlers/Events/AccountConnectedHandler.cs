@@ -1,12 +1,13 @@
-using System.Data.Common;
-
-using MediatR;
-using Microsoft.EntityFrameworkCore;
-
+using CombineQueries.Api.Controllers.Accounts.Handlers.Code;
 using CombineQueries.Api.Services.Persist;
 using CombineQueries.Api.Services.Speech;
 using CombineQueries.Domain.Aggregates.Account.Events;
 using CombineQueries.Domain.Aggregates.Translator;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using System.Data.Common;
 
 namespace CombineQueries.Api.Controllers.Accounts.Handlers.Events;
 
