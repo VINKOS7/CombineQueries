@@ -18,7 +18,7 @@ public static class CombineQueriesEnvironment
 
     // Копить ли НОВЫЕ цепочки в БД. На проде - да: собранный однажды адрес переживает перезапуск
     // и приезжает клиенту сидом в connect, то есть со второго раза стоит один запрос.
-    public const string Hypers = "on";
+    public const string MemHypers = "on";
 
     // Кодовое слово мастера. Нужно только при RequireCode = true.
     public const string Codeword = "";
