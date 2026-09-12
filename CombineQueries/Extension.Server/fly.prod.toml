@@ -13,7 +13,7 @@
 # Без Auth__Codeword гейт мастера ВЫКЛЮЧАЕТСЯ сам (MasterGate смотрит, пуст ли ключ), а клиент в
 # prod.fly собран с RequireCode = true - то есть слово он пошлёт, а проверять будет некому.
 
-app = "cq"
+app = "vq"
 primary_region = "arn"
 
 [build]
