@@ -6,12 +6,27 @@ using VRC.SDKBase;
 
 public class CombineQueries : UdonSharpBehaviour
 {
-    private const bool rememberInfinite = true;
+    [Header("Codeword typed in-world before Init/Remember")]
+    public string codeword = "";
 
+    [Header("Where to report completion (optional)")]
+    public UdonSharpBehaviour target;
+
+    private const bool rememberInfinite = true;
     private const bool RequireCode = CombineQueriesEnvironment.RequireCode;
 
-    private const string baseUrl = CombineQueriesEnvironment.BaseUrl;
-    private const string GrowHypersStr = CombineQueriesEnvironment.MemHypers;
+    private const int PhaseIdle = 0;
+    private const int PhaseConnect = 1;
+    private const int PhaseChunks = 2;
+    private const int PhaseTail = 3;
+    private const int PhaseCode = 5;
+    private const int PhaseVerify = 6;
+    private const int PhaseFragment = 7;
+    private const int PhaseJump = 8;
+    private const int PhaseHead = 9;
+    private const int PhaseCredit = 10;
+    private const int MaxRemembered = 1024;
+
     private const string baseForwardUrl = "vink0s.com";
     private const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
     private const string RuneAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:@!$&'()*+,;=";
@@ -19,13 +34,15 @@ public class CombineQueries : UdonSharpBehaviour
     private const string Upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
     private const string Scheme = "https";
-    private const string Token = CombineQueriesEnvironment.Token;
     private const string AuthAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
     private const string RememberInfiniteStr = "true";
     private const string RuneSizeStr = "3";
     private const string DfaSizeStr = "1024";
     private const string PageCountStr = "64";
     private const string HopCountStr = "64";
+    private const string baseUrl = CombineQueriesEnvironment.BaseUrl;
+    private const string GrowHypersStr = CombineQueriesEnvironment.MemHypers;
+    private const string Token = CombineQueriesEnvironment.Token;
 
     private const int DirectPieces = 4;
     private const int FragmentCount = 35;
@@ -55,7 +72,6 @@ public class CombineQueries : UdonSharpBehaviour
     private const string ResetHypersStr = "true";
 #endif
 
-
     private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", "/0/0/0/0", Symbols, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth, SignValues);
     private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
@@ -67,18 +83,9 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] ClosePool = ClosePoolOf(baseUrl + "/cf/", CloseLimit, SignValues);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
-
     private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
     private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
 
-    [Header("Where to report completion (optional)")]
-    public UdonSharpBehaviour target;
-    public string onDoneEvent = "OnQueryDone";
-
-    [Header("Codeword typed in-world before Init/Remember")]
-    public string codeword = "";
-    public string LastError = "";
-    public string LastUrl = "";
     public int LastSymbols;
     public int LastQueries;
     public int Errors;
@@ -88,49 +95,42 @@ public class CombineQueries : UdonSharpBehaviour
     public int LastInfinite;
     public int LastUrls;
     public int LastJump = -1;
-    public string LastSent = "";
-    public string LastRoad = "";
     public int SeedJumps;
 
-    private const int PhaseIdle = 0;
-    private const int PhaseConnect = 1;
-    private const int PhaseChunks = 2;
-    private const int PhaseTail = 3;
-    private const int PhaseCode = 5;
-    private const int PhaseVerify = 6;
-    private const int PhaseFragment = 7;
-    private const int PhaseJump = 8;
-    private const int PhaseHead = 9;
-    private const int PhaseCredit = 10;
+    public string LastSent = "";
+    public string LastRoad = "";
+    public string onDoneEvent = "OnQueryDone";
+    public string LastError = "";
+    public string LastUrl = "";
 
-    private int phase;
     private bool connectOk;
     private bool busy;
     private bool chainInit;
+    private bool fragments = true;
 
-    private int[] queue;
-    private int[] queueKind;
+    private int phase;
     private int queueLen;
     private int queuePos;
-    private bool fragments = true;
+    private int signPos;
+    private int jumpRingAt;
 
     private string pendingUrl = "";
     private string forwarded = "";
+    private string signs = "";
 
-            private string signs = "";
-    private int signPos;
+    private bool[] queuedDirect = new bool[0];
+    private bool[] batchDirect = new bool[0];
 
-                                                                private DataDictionary jumps = new DataDictionary();
-
-                                private const int MaxRemembered = 1024;
-
-            private string[] jumpRing = new string[MaxRemembered];
-    private int jumpRingAt;
-
-            private string[] cachedFragments = new string[0];
+    private int[] queue;
+    private int[] queueKind;
     private int[] cachedFragIds = new int[0];
 
-            public void Connect()
+    private string[] jumpRing = new string[MaxRemembered];
+    private string[] cachedFragments = new string[0];
+
+    private DataDictionary jumps = new DataDictionary();
+
+    public void Connect()
     {
         if (busy) return;
 
@@ -146,22 +146,20 @@ public class CombineQueries : UdonSharpBehaviour
         Begin(true);
     }
 
-                    public void RequestPair(string first, string second)
+    public void RequestPair(string first, string second)
     {
-        Queue(first);
-        Queue(second);
-
-        Run();
+        Require(first);
+        Require(second);
     }
 
-            public void ForgetJumps()
+    public void ForgetJumps()
     {
         jumps = new DataDictionary();
         jumpRing = new string[MaxRemembered];
         jumpRingAt = 0;
     }
 
-                    public void ForgetJump(string url)
+    public void ForgetJump(string url)
     {
         jumps.Remove(PayloadOf(url));
     }
@@ -231,7 +229,8 @@ public class CombineQueries : UdonSharpBehaviour
 
     public void Request(string url) => Dispatch(url, true);
 
-                                                public bool Queue(string url) => Enqueue(url, false);
+    public bool Queue(string url) => Enqueue(url, false);
+
     public DataList Require(string url) => Ask(url, false);
 
         public DataList RequireDirect(string url) => Ask(url, true);
@@ -240,7 +239,7 @@ public class CombineQueries : UdonSharpBehaviour
     {
         string key = PayloadOf(url);
 
-                                DataList box = boxes.TryGetValue(key, out DataToken had) && had.TokenType == TokenType.DataList
+        DataList box = boxes.TryGetValue(key, out DataToken had) && had.TokenType == TokenType.DataList
             ? had.DataList
             : new DataList();
 
@@ -263,14 +262,14 @@ public class CombineQueries : UdonSharpBehaviour
 
         private DataDictionary boxes = new DataDictionary();
 
-        private void Fill(string payload, string body)
+    private void Fill(string payload, string body)
     {
         if (!boxes.TryGetValue(payload, out DataToken had) || had.TokenType != TokenType.DataList) return;
 
         had.DataList.SetValue(0, body);
     }
 
-        public string Result(DataList box)
+    public string Result(DataList box)
     {
         if (box == null || box.Count == 0) return "";
 
@@ -281,14 +280,14 @@ public class CombineQueries : UdonSharpBehaviour
 
         private bool pendingFlush;
 
-            private void Update()
+    private void Update()
     {
         if (!flush || busy || queued.Length == 0) return;
 
         Run();
     }
 
-            public void Flush()
+    public void Flush()
     {
         if (!flush || queued.Length == 0) { pendingFlush = false; return; }
 
@@ -299,7 +298,7 @@ public class CombineQueries : UdonSharpBehaviour
         Run();
     }
 
-            public bool QueueDirect(string url) => Enqueue(url, true);
+    public bool QueueDirect(string url) => Enqueue(url, true);
 
     private bool Enqueue(string url, bool direct)
     {
@@ -321,12 +320,11 @@ public class CombineQueries : UdonSharpBehaviour
         return true;
     }
 
-    private bool[] queuedDirect = new bool[0];
-    private bool[] batchDirect = new bool[0];
 
-        private const int MaxQueued = 2048;
 
-        public void Run()
+    private const int MaxQueued = 2048;
+
+    public void Run()
     {
         if (busy || queued.Length == 0) return;
 
@@ -369,7 +367,7 @@ public class CombineQueries : UdonSharpBehaviour
         Finish();
     }
 
-        private void SendRange(int first, int length)
+    private void SendRange(int first, int length)
     {
         LastError = "";
         forwarded = "";
@@ -393,7 +391,7 @@ public class CombineQueries : UdonSharpBehaviour
 
     private bool[] done = new bool[0];
 
-        private void TakeDebt(string json)
+    private void TakeDebt(string json)
     {
         if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
         if (root.TokenType != TokenType.DataDictionary) return;
@@ -591,7 +589,7 @@ public class CombineQueries : UdonSharpBehaviour
                         Debug.Log("[CombineQueries] " + line);
     }
 
-            private int OpenRequest(DataList urls)
+    private int OpenRequest(DataList urls)
     {
         if (urls.Count == 0) return -1;
 
@@ -624,7 +622,7 @@ public class CombineQueries : UdonSharpBehaviour
         return id;
     }
 
-                private void SettleUrl(string payload)
+    private void SettleUrl(string payload)
     {
         DataList ids = openRequests.GetKeys();
 
@@ -648,7 +646,7 @@ public class CombineQueries : UdonSharpBehaviour
     }
 
 
-        private string Joined(DataList urls)
+    private string Joined(DataList urls)
     {
         string all = "";
 
@@ -662,7 +660,7 @@ public class CombineQueries : UdonSharpBehaviour
         return all;
     }
 
-                        private void TakeSent(string json)
+    private void TakeSent(string json)
     {
         if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
         if (root.TokenType != TokenType.DataDictionary) return;
@@ -693,14 +691,14 @@ public class CombineQueries : UdonSharpBehaviour
         OpenRequest(asked);
     }
 
-                                            private void Named(string url, string mark)
+    private void Named(string url, string mark)
     {
         string named = TailOf(url) + " " + mark;
 
         LastSent = LastSent == "" ? named : LastSent + ", " + named;
     }
 
-        private string TailOf(string url)
+    private string TailOf(string url)
     {
         string payload = PayloadOf(url);
         int cut = payload.IndexOf("/");
@@ -708,7 +706,7 @@ public class CombineQueries : UdonSharpBehaviour
         return cut < 0 || cut + 1 >= payload.Length ? payload : payload.Substring(cut + 1);
     }
 
-            public void Settle()
+    public void Settle()
     {
         if (busy) return;
 
@@ -729,7 +727,7 @@ public class CombineQueries : UdonSharpBehaviour
         SendNext();
     }
 
-        public string BodyOf(string url)
+    public string BodyOf(string url)
     {
         if (!bodies.TryGetValue(PayloadOf(url), out DataToken body)) return "";
 
@@ -792,7 +790,9 @@ public class CombineQueries : UdonSharpBehaviour
 
     private string PayloadOf(string url)
     {
-        if (url.IndexOf(Scheme + ":        if (url.IndexOf("http:
+        if (url.IndexOf(Scheme + "://") == 0) return url.Substring(Scheme.Length + 3);
+        if (url.IndexOf("http://") == 0 || url.IndexOf("https://") == 0) return "";
+
         return url;
     }
 
@@ -1285,7 +1285,8 @@ public class CombineQueries : UdonSharpBehaviour
 
         DataList found = list.DataList;
 
-        string mine = Scheme + ":        int ours = -1;
+        string mine = Scheme + "://" + pendingUrl;
+        int ours = -1;
 
         DataList asked = new DataList();
 

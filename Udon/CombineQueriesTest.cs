@@ -390,18 +390,21 @@ public class CombineQueriesTest : UdonSharpBehaviour
         client.Request(url);
     }
 
+    // Стенд - такой же потребитель тулзы, как любой мир, поэтому просит ровно тем же, чем будут
+    // просить снаружи: Require. Коробку он не читает - тела ему приходят журналами, - но ходить в
+    // обход публичного входа стенду нельзя: то, что он показывает, должно быть воспроизводимо.
     private void Ask(string url)
     {
         Remember(url);
 
-        client.Queue(url);
+        client.Require(url);
     }
 
     private void AskDirect(string url)
     {
         Remember(url + " direct");
 
-        client.QueueDirect(url);
+        client.RequireDirect(url);
     }
 
     private void Remember(string url)
