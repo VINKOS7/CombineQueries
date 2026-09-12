@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -6,43 +9,81 @@ using UnityEngine.SceneManagement;
 // Дев-выводы (доска с числами запросов и кнопки прогона) живут в ОТДЕЛЬНОМ РИГЕ, а не в отдельной
 // сцене: две сцены пришлось бы править парой, и они разъехались бы на первой же правке клиента.
 //
-// Кнопка прячет риг целиком - этого хватает, чтобы в релизном мире не было видно ни доски, ни
-// кнопок. Числа, по которым читается «до и после персиста», в релизном моде и так не печатаются
-// (см. CQ_RELEASE в CombineQueries и CombineQueriesTest) - риг лишь убирает саму сцену показа.
-[InitializeOnLoad]
+// Галочка Dev mode переключает РОВНО ОДНО - персист хайперов, единственное, чем релиз сегодня
+// отличается от дева. Видимости рига она не касается: спрятать его можно его же галочкой в
+// иерархии, а завязывать на один пин две несвязанные вещи мы уже пробовали.
+//
+// Отдельного билдера релизного рига больше нет: он собирал второй набор объектов с нуля, каждый раз
+// снося расставленное руками, а показывал то же самое. Лежит в Udon/Archive, если понадобится.
 public static class DevRig
 {
     private const string RigName = "CombineQueriesRig";
 
-    // Сцена хранит риг таким, каким его сохранили: пересобрал через Tools, не нажал Ctrl+S - и при
-    // следующем открытии снова узкая доска. Поэтому подгоняем её на открытии сцены сами.
-    static DevRig() => EditorSceneManager.sceneOpened += (scene, mode) => FitBoard();
-    private const string Item = "Tools/CombineQueries/Dev rig visible";
+    // Дефайн полного персиста. Стоит - хайперы копятся в БД, как на релизе; снят - живут в ОЗУ
+    // сервера, а в базе остаётся один посев из миграции. Читает его CombineQueries.dev.cs.
+    private const string Define = "CQ_PERSIST";
+
+    private const string Item = "Tools/CombineQueries/Dev mode";
 
     [MenuItem(Item)]
     private static void Toggle()
     {
-        var rig = Rig();
+        bool dev = IsDev();
 
-        if (rig == null) return;
+        var defines = new List<string>(Defines);
 
-        Undo.RecordObject(rig, "Toggle dev rig");
+        // Dev mode включаем - персист снимаем, и наоборот. Галочка называет режим, а не дефайн.
+        if (dev) defines.Add(Define); else defines.Remove(Define);
 
-        rig.SetActive(!rig.activeSelf);
+        PlayerSettings.SetScriptingDefineSymbols(Target, defines.ToArray());
 
-        EditorSceneManager.MarkSceneDirty(rig.scene);
-
-        Debug.Log("[DevRig] " + RigName + (rig.activeSelf ? " показан" : " скрыт"));
+        Debug.Log("[DevRig] dev mode " + (dev ? "снят: hypers=on, полный персист как на релизе" : "включён: hypers=off, хайперы живут в ОЗУ сервера")
+                + ". U# перекомпилируется, пул ссылок перепечётся на следующем входе в мир - после этого нажми Connect.");
     }
 
     [MenuItem(Item, true)]
     private static bool Mark()
     {
+        Menu.SetChecked(Item, IsDev());
+
+        return true;
+    }
+
+    // Dev mode - это ОТСУТСТВИЕ персиста: пока дефайна нет, сервер держит хайперы в памяти и
+    // забывает их на перезапуске, что и нужно, чтобы мерить сборку с чистого листа.
+    private static bool IsDev() => Array.IndexOf(Defines, Define) < 0;
+
+    private static NamedBuildTarget Target =>
+        NamedBuildTarget.FromBuildTargetGroup(BuildPipeline.GetBuildTargetGroup(EditorUserBuildSettings.activeBuildTarget));
+
+    private static string[] Defines
+    {
+        get
+        {
+            PlayerSettings.GetScriptingDefineSymbols(Target, out string[] defines);
+
+            return defines;
+        }
+    }
+
+    // Вид сцены после возни с досками уезжает так, что рига не видно вовсе. Возвращаем камеру на
+    // него - как игрок при спавне, только чуть выше и дальше, чтобы все пять досок попали в кадр.
+    [MenuItem("Tools/CombineQueries/Reset scene view")]
+    private static void ResetView()
+    {
+        var view = SceneView.lastActiveSceneView;
+
+        if (view == null) { Debug.LogWarning("[DevRig] нет открытого окна сцены"); return; }
+
         var rig = Rig();
+        var at = rig == null ? new Vector3(0f, 1.5f, 0f) : rig.transform.position + new Vector3(0f, 1.3f, 0f);
 
-        Menu.SetChecked(Item, rig != null && rig.activeSelf);
+        view.orthographic = false;
 
-        return rig != null;
+        // Смотрим со стороны спавна: игрок стоит по -Z, доски развёрнуты к нему.
+        view.LookAt(at, Quaternion.Euler(10f, 0f, 0f), 5f);
+
+        view.Repaint();
     }
 
     // Ширина доски. Билдер уже создаёт широкую, но сцена, собранная раньше, про это не знает -

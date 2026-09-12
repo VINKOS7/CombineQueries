@@ -1,4 +1,4 @@
-using UnityEditor;
+﻿using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -6,17 +6,21 @@ using UnityEngine.SceneManagement;
 // Дев-выводы (доска с числами запросов и кнопки прогона) живут в ОТДЕЛЬНОМ РИГЕ, а не в отдельной
 // сцене: две сцены пришлось бы править парой, и они разъехались бы на первой же правке клиента.
 //
+// Эта галочка и есть ЕДИНСТВЕННОЕ переключение дев/релиз в сцене. Отдельного билдера релизного
+// рига больше нет: он собирал второй набор объектов с нуля, каждый раз снося расставленное руками,
+// а показывал то же самое. Лежит в Udon/Archive, если понадобится.
+//
 // Кнопка прячет риг целиком - этого хватает, чтобы в релизном мире не было видно ни доски, ни
 // кнопок. Числа, по которым читается «до и после персиста», в релизном моде и так не печатаются
-// (см. CQ_RELEASE в CombineQueries и CombineQueriesTest) - риг лишь убирает саму сцену показа.
-[InitializeOnLoad]
+// (см. CQ_PROD в CombineQueries и CombineQueriesTest) - риг лишь убирает саму сцену показа.
 public static class DevRig
 {
     private const string RigName = "CombineQueriesRig";
 
-    // Сцена хранит риг таким, каким его сохранили: пересобрал через Tools, не нажал Ctrl+S - и при
-    // следующем открытии снова узкая доска. Поэтому подгоняем её на открытии сцены сами.
-    static DevRig() => EditorSceneManager.sceneOpened += (scene, mode) => FitBoard();
+    // На открытии сцены НИЧЕГО не трогаем. Раньше здесь стояла автоподгонка доски, и она молча
+    // переписывала размер первому попавшемуся канвасу - то есть стирала расстановку, сделанную
+    // руками. Ширину теперь задаёт билдер при создании, а подогнать старую сцену можно пунктом
+    // меню, осознанно.
     private const string Item = "Tools/CombineQueries/Dev rig visible";
 
     [MenuItem(Item)]
@@ -43,6 +47,26 @@ public static class DevRig
         Menu.SetChecked(Item, rig != null && rig.activeSelf);
 
         return rig != null;
+    }
+
+    // Вид сцены после возни с досками уезжает так, что рига не видно вовсе. Возвращаем камеру на
+    // него - как игрок при спавне, только чуть выше и дальше, чтобы все пять досок попали в кадр.
+    [MenuItem("Tools/CombineQueries/Reset scene view")]
+    private static void ResetView()
+    {
+        var view = SceneView.lastActiveSceneView;
+
+        if (view == null) { Debug.LogWarning("[DevRig] нет открытого окна сцены"); return; }
+
+        var rig = Rig();
+        var at = rig == null ? new Vector3(0f, 1.5f, 0f) : rig.transform.position + new Vector3(0f, 1.3f, 0f);
+
+        view.orthographic = false;
+
+        // Смотрим со стороны спавна: игрок стоит по -Z, доски развёрнуты к нему.
+        view.LookAt(at, Quaternion.Euler(10f, 0f, 0f), 5f);
+
+        view.Repaint();
     }
 
     // Ширина доски. Билдер уже создаёт широкую, но сцена, собранная раньше, про это не знает -

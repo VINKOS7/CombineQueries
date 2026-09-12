@@ -1,0 +1,14 @@
+#if CQ_RELEASE
+public static class CombineQueriesEnvironment
+{
+    public const string BaseUrl = "https://cq.fly.dev";
+    public const string Token = "p1hfc9m8vzjgrstd";
+    public const bool RequireCode = true;
+
+    // Копить ли НОВЫЕ цепочки хайперов в БД. В релизе - да: собранный однажды адрес переживает
+    // перезапуск и приезжает клиенту сидом в connect.
+    public const string Hypers = "on";
+
+    public const string Codeword = "grach";
+}
+#endif

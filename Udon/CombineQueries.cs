@@ -1,4 +1,4 @@
-using UdonSharp;
+﻿using UdonSharp;
 using UnityEngine;
 using VRC.SDK3.Data;
 using VRC.SDK3.StringLoading;
@@ -131,9 +131,12 @@ public class CombineQueries : UdonSharpBehaviour
     //
     // Не путать с hypers=on|off: тот решает, попадают ли НОВЫЕ цепочки в БД (накопленное читается
     // в любом случае), а этот - стереть ли хайперы, накопленные в памяти сервера.
-#if CQ_RELEASE
+#if CQ_PROD || CQ_PERSIST
     // В релизе сброса не просим вовсе: сервер уважает флаг только в dev, а мир, куда зашли игроки,
     // забывать накопленное не должен ни при каких настройках сервера.
+    //
+    // CQ_PERSIST - та же галочка Dev mode, снятая на локальном сервере: просить полный персист и
+    // тут же стирать накопленное бессмысленно, это два взаимоисключающих требования.
     private const bool resetHypers = false;
     private const string ResetHypersStr = "false";
 #else
@@ -194,6 +197,11 @@ public class CombineQueries : UdonSharpBehaviour
     public string LastUrl = "";
     public int LastSymbols;
     public int LastQueries;
+
+    // Сколько отказов было всего. Нужен снаружи: по тексту ошибки повтор не отличить от старого -
+    // сервер лежит, и вторая попытка падает ДОСЛОВНО тем же сообщением. Риг, сравнивавший строки,
+    // такой отказ не замечал и оставался ждать тело, которое уже не приедет.
+    public int Errors;
 
     // Покрытие последнего url: сколько кусков ушло рунами и сколько фрагментами по уровням.
     // Partial это LastChunks > 0 - словаря не хватило, часть поехала по буквам.
@@ -422,7 +430,7 @@ public class CombineQueries : UdonSharpBehaviour
         Load(PhaseVerify, VerifyQuery);
     }
 
-    public void Request(string url) => Send(url, true);
+    public void Request(string url) => Dispatch(url, true);
 
     // ПАЧКА: адреса копятся, пока их не попросят все разом.
     //
@@ -437,6 +445,112 @@ public class CombineQueries : UdonSharpBehaviour
     // и адрес можно поставить снова.
     public bool Queue(string url) => Enqueue(url, false);
 
+    // ГЛАВНЫЙ вход для мира: попросить адрес и получить КЛЮЧ, по которому появится результат.
+    //
+    // Возврата данных здесь быть не может - Udon не ждёт, а строку по ссылке не передашь: она
+    // неизменяема и едет значением. Поэтому отдаём ключ, а тело кладём в словарь тулзы, и юзер
+    // спрашивает его когда захочет:
+    //
+    //     string key = client.Require("https://site.com/a/1");
+    //     ...
+    //     string body = client.Result(key);   // "" пока не приехало, непусто - пришло
+    //
+    // Очередь копится САМА: каждый Require добавляет адрес, и пачка уходит либо когда набралось
+    // четыре (потолок диапазона, больше в один запрос всё равно не влезет), либо когда кончился
+    // кадр. Кадр тут - аналог области видимости: всё, что мир попросил за один заход, и есть одна
+    // пачка. Занят клиент - копится дальше и уедет, как освободится.
+    public DataList Require(string url) => Ask(url, false);
+
+    // То же, но адрес поедет мимо словаря, напрямую.
+    public DataList RequireDirect(string url) => Ask(url, true);
+
+    private DataList Ask(string url, bool direct)
+    {
+        string key = PayloadOf(url);
+
+        // КОРОБКА - она же результат. Строку вернуть нельзя: она неизменяема и едет значением,
+        // дописать в неё задним числом невозможно. А список - ссылка: тулза положит тело в нулевой
+        // слот, и переменная у мира перестанет быть пустой сама.
+        DataList box = boxes.TryGetValue(key, out DataToken had) && had.TokenType == TokenType.DataList
+            ? had.DataList
+            : new DataList();
+
+        if (box.Count == 0) box.Add("");
+
+        boxes.SetValue(key, box);
+
+        if (!Enqueue(url, direct)) return box;
+
+        if (!bodies.ContainsKey(key)) bodies.SetValue(key, "");
+
+        // Флаг ставим ВСЕГДА, а отправку лишь пробуем. Клиент занят - пачка спокойно копится, и
+        // насос дошлёт её сам, как только поток освободится. Мир про паузы SDK не знает и знать не
+        // должен: его дело попросить, ждать - наше.
+        flush = true;
+
+        // Второй, НЕЗАВИСИМЫЙ насос. Один Update - это одна точка отказа: пока он по какой-то
+        // причине не отрабатывал, очередь стояла и уезжала только с чужим Run - то есть когда в
+        // клиент постучится другая кнопка. Снаружи это выглядит как «мой запрос ждёт соседнего
+        // рига», чего быть не должно вовсе. Отложенное событие идёт мимо кадрового цикла поведения
+        // и ведёт себя иначе, так что вдвоём они друг друга страхуют.
+        if (!pendingFlush) { pendingFlush = true; SendCustomEventDelayedFrames(nameof(Flush), 1); }
+
+        if (!busy && queued.Length >= RangeMax) Run();
+
+        return box;
+    }
+
+    // Коробки результатов: адрес -> список из одного слота, выданный наружу.
+    private DataDictionary boxes = new DataDictionary();
+
+    // Кладёт тело в коробку адреса, если её просили.
+    private void Fill(string payload, string body)
+    {
+        if (!boxes.TryGetValue(payload, out DataToken had) || had.TokenType != TokenType.DataList) return;
+
+        had.DataList.SetValue(0, body);
+    }
+
+    // Содержимое коробки одной строкой - для тех, кому удобнее так.
+    public string Result(DataList box)
+    {
+        if (box == null || box.Count == 0) return "";
+
+        return box.TryGetValue(0, out DataToken body) && body.TokenType == TokenType.String ? body.String : "";
+    }
+
+    // Конец кадра - конец «области видимости» пачки. Тут она и уходит, если не набралась раньше.
+    //
+    // Пока клиент занят, здесь ничего не происходит и флаг остаётся поднятым: следующий кадр
+    // попробует снова, и так до тех пор, пока поток не освободится. Это и есть автоматическая
+    // подача - мир зовёт Require когда хочет, а очередь уезжает так быстро, как позволяет SDK.
+    private bool flush;
+
+    // Насос уже в пути - второй заводить незачем, иначе на каждый Require копился бы свой.
+    private bool pendingFlush;
+
+    // Update, а не LateUpdate: Interact отрабатывает раньше кадрового Update, поэтому всё, что мир
+    // попросил за один заход, всё равно уедет одной пачкой - зато событие простое и заведомо живое.
+    private void Update()
+    {
+        if (!flush || busy || queued.Length == 0) return;
+
+        Run();
+    }
+
+    // Тот же насос, но по отложенному событию. Занят клиент - не бросаем очередь, а приходим ещё
+    // раз: без этого одна неудачная попытка оставляла бы пачку лежать до следующего Require.
+    public void Flush()
+    {
+        if (!flush || queued.Length == 0) { pendingFlush = false; return; }
+
+        if (busy) { SendCustomEventDelayedSeconds(nameof(Flush), 0.25f); return; }
+
+        pendingFlush = false;
+
+        Run();
+    }
+
     // То же место в очереди, но адрес поедет НАПРЯМУЮ, мимо словаря. Нужно, когда заранее известно,
     // что фрагменты его не возьмут: пачка тогда не обязана быть однородной.
     public bool QueueDirect(string url) => Enqueue(url, true);
@@ -445,13 +559,7 @@ public class CombineQueries : UdonSharpBehaviour
     {
         if (string.IsNullOrEmpty(url)) return false;
 
-        if (queued.Length >= MaxQueued)
-        {
-#if !CQ_RELEASE
-            Debug.Log("[CombineQueries] очередь полна (" + MaxQueued + "), ждём места: " + url);
-#endif
-            return false;
-        }
+        if (queued.Length >= MaxQueued) return false;
 
         string[] grown = new string[queued.Length + 1];
         bool[] grownDirect = new bool[queued.Length + 1];
@@ -478,7 +586,9 @@ public class CombineQueries : UdonSharpBehaviour
     {
         if (busy || queued.Length == 0) return;
 
-        bodies = new DataDictionary();
+        // Словарь тел НЕ пересоздаём: ключи из Require выданы наружу заранее, и новая пачка не
+        // имеет права обнулить результат предыдущей - юзер мог ещё не прочитать.
+        flush = false;
 
         batch = queued;
         batchDirect = queuedDirect;
@@ -516,7 +626,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         // Прямой адрес шлём как просили - мимо словаря; остальные обычной дорогой.
         for (int i = 0; i < batch.Length; i++)
-            if (!done[i]) { Send(batch[i], !batchDirect[i]); return; }
+            if (!done[i]) { Dispatch(batch[i], !batchDirect[i]); return; }
 
         batch = new string[0];
 
@@ -545,10 +655,6 @@ public class CombineQueries : UdonSharpBehaviour
         queueKind[0] = 5;
         queuePos = 0;
 
-#if !CQ_RELEASE
-        Debug.Log("[CombineQueries] hyper: range " + first + "+" + length + " - " + length + " urls in one query");
-#endif
-
         SendNext();
     }
 
@@ -570,7 +676,12 @@ public class CombineQueries : UdonSharpBehaviour
 
         DataList ready = list.DataList;
 
-        string paid = "";
+        // Набор -> что этим ответом ему погасили. Строка ответа принадлежит ОДНОМУ набору: тела в
+        // одном довеске часто из разных, и валить их в кучу значит потерять, чей это ответ.
+        DataDictionary touched = new DataDictionary();
+
+        // Он же, но с телами - для отдельной панели, где видно не размер, а само содержимое.
+        DataDictionary bodyLines = new DataDictionary();
 
         for (int i = 0; i < ready.Count; i++)
         {
@@ -583,6 +694,10 @@ public class CombineQueries : UdonSharpBehaviour
             string body = DictString(item.DataDictionary, "response");
 
             bodies.SetValue(url, body);
+
+            // И в коробку, если этот адрес просили через Require: она у мира на руках, и именно
+            // по ней он узнаёт, что тело приехало.
+            Fill(url, body);
 
             Mark(url);
 
@@ -599,33 +714,108 @@ public class CombineQueries : UdonSharpBehaviour
             // Номер в скобках ТОТ ЖЕ, что у vrequest: пара сходится по нему, а не по порядку строк.
             Named(url, from < 0 ? "vresponse" : "vresponse[" + from + "]");
 
-            string named = TailOf(url) + (from < 0 ? "" : " => vrequest " + from)
-                + " " + body.Length + "b/" + DictInt(item.DataDictionary, "elapsedMs") + "ms";
+            string named = TailOf(url) + " " + body.Length + "b/" + DictInt(item.DataDictionary, "elapsedMs") + "ms";
 
-            paid = paid == "" ? named : paid + ", " + named;
+            if (from >= 0)
+            {
+                string was = touched.TryGetValue(from, out DataToken had) && had.TokenType == TokenType.String ? had.String : "";
+
+                touched.SetValue(from, was == "" ? named : was + ", " + named);
+
+                // Тело копим отдельно: строку с ним допишет Report, когда узнает, закрылся набор
+                // этим ответом или нет - от этого зависит, response это или vresponse.
+                string kept = bodyLines.TryGetValue(from, out DataToken was2) && was2.TokenType == TokenType.String ? was2.String : "";
+                string shown = Cut(body);
+
+                bodyLines.SetValue(from, kept == "" ? shown : kept + " | " + shown);
+            }
+
+            SettleUrl(url);
         }
 
-#if !CQ_RELEASE
-        // Долг всегда отдаёт КОНКРЕТНЫЙ запрос, и почти никогда не тот, что за телами ходил.
-        // Поэтому в строке стоят его номер и вид - по ним видно, кто чей долг притащил.
-        if (paid != "" || LastPending > 0)
-            Debug.Log("[CombineQueries] vresponse: " + (paid == "" ? "ничего" : paid)
-                + " - привёз response " + TotalQueries + ", сервер ещё не донёс " + LastPending);
-#endif
+        // Отчитываемся ПО НАБОРАМ, которых этот ответ коснулся: закрылся - vresponse с полным
+        // временем, не закрылся - response с тем, сколько прошло от его отправки.
+        DataList ids = touched.GetKeys();
+
+        for (int k = 0; k < ids.Count; k++)
+        {
+            if (!ids.TryGetValue(k, out DataToken id) || !touched.TryGetValue(id, out DataToken paid)) continue;
+
+            string shown = bodyLines.TryGetValue(id, out DataToken kept) && kept.TokenType == TokenType.String ? kept.String : "";
+
+            Report(id, paid.String, shown);
+        }
     }
 
-    // Как назвать запрос, в ответе которого приехал долг.
-    private string KindOf(int at)
+    // Строка о наборе: что ему погасили этим ответом и сколько он уже длится. Тела уходят своей
+    // строкой на отдельную панель - там видно не размер, а само содержимое.
+    private void Report(DataToken id, string paid, string shown)
     {
-        if (at == PhaseJump) return "hyper";
-        if (at == PhaseHead) return "head";
-        if (at == PhaseTail) return "tail";
-        if (at == PhaseCredit) return "credit";
-        if (at == PhaseConnect) return "connect";
-        if (at == PhaseCode || at == PhaseVerify) return "code";
+        if (!openRequests.TryGetValue(id, out DataToken value) || value.TokenType != TokenType.DataList) return;
 
-        // Остальное - куски сборки: и чанк рун, и фрагмент словаря. Для лога они одно и то же.
-        return "combine";
+        DataList record = value.DataList;
+
+        if (!record.TryGetValue(0, out DataToken kind) || kind.TokenType != TokenType.String) return;
+        if (!record.TryGetValue(1, out DataToken list) || list.TokenType != TokenType.DataList) return;
+        if (!record.TryGetValue(2, out DataToken flags) || flags.TokenType != TokenType.DataList) return;
+        if (!record.TryGetValue(3, out DataToken at) || at.TokenType != TokenType.Float) return;
+
+        DataList urls = list.DataList;
+        DataList settled = flags.DataList;
+
+        // Копим по набору: строка обязана показывать все его ответы, а не только этот довесок.
+        if (record.TryGetValue(4, out DataToken hadPaid) && hadPaid.TokenType == TokenType.String)
+            record.SetValue(4, hadPaid.String == "" ? paid : hadPaid.String + ", " + paid);
+
+        if (record.TryGetValue(5, out DataToken hadData) && hadData.TokenType == TokenType.String && shown != "")
+            record.SetValue(5, hadData.String == "" ? shown : hadData.String + " | " + shown);
+
+        // Накопленное держим отдельно от пришедшего СЕЙЧАС: response говорит про этот ответ,
+        // vresponse - про весь набор.
+        string allShown = record.TryGetValue(5, out DataToken allData) && allData.TokenType == TokenType.String ? allData.String : shown;
+
+        int answers = record.TryGetValue(6, out DataToken had) && had.TokenType == TokenType.Int ? had.Int + 1 : 1;
+
+        record.SetValue(6, answers);
+
+        string owed = "";
+
+        for (int i = 0; i < urls.Count; i++)
+        {
+            if (settled.TryGetValue(i, out DataToken done) && done.TokenType == TokenType.Boolean && done.Boolean) continue;
+            if (!urls.TryGetValue(i, out DataToken url) || url.TokenType != TokenType.String) continue;
+
+            owed = owed == "" ? TailOf(url.String) : owed + ", " + TailOf(url.String);
+        }
+
+        string spent = (int)((Time.time - at.Float) * 1000f) + " ms";
+
+        // Погашено всё - набор закрыт, и это его последняя строка: полное время от отправки.
+        //
+        // Подробности приехавшего несём ЗДЕСЬ же. Иначе они пропадают: набор из четырёх обычно
+        // гасится одним долгом, промежуточной строки не возникает вовсе, и размеры тел теряются.
+        string who = id.Int + kind.String;
+
+        // СНАЧАЛА response - что принёс именно этот ответ. Он есть всегда, даже когда набор им же
+        // и закрывается: иначе не видно, чем набор набирался, а видно только итог.
+        // Короткий взгляд на пришедшее - в той же строке: убедиться, что приехал json нужного
+        // адреса, а не пустышка. Целиком тела уходят на свою панель.
+        string peek = shown == "" ? "" : "   " + (shown.Length <= Peek ? shown : shown.Substring(0, Peek) + "...");
+
+        Trace("response: " + who + " погашено [" + paid + "], ждём [" + (owed == "" ? "" : owed) + "]   " + spent + peek, false);
+
+        Data(who + " response [" + Joined(urls) + "]", shown);
+
+        if (owed != "") return;
+
+        // Набор закрыт. Строка ИТОГОВАЯ, а не повтор предыдущей: адреса, сколько ответов на них
+        // ушло и полное время. Подробности по каждому телу уже сказаны строками response.
+        Trace("vresponse: " + who + " " + Joined(urls) + "   " + urls.Count + " urls за "
+            + answers + (answers == 1 ? " ответ" : " ответа") + "   " + spent, false);
+
+        Data(who + " vresponse [" + Joined(urls) + "]", allShown);
+
+        openRequests.Remove(id);
     }
 
     // Сколько запросов ушло с подключения. LastQueries считает один адрес и сбрасывается, а долгу
@@ -638,6 +828,180 @@ public class CombineQueries : UdonSharpBehaviour
     // Адрес -> номер запроса, который за ним пошёл. Нужен только логу: тело приезжает долгом, и
     // сказать «чей это ответ» иначе нечем.
     private DataDictionary asking = new DataDictionary();
+
+    // Эндпоинт последнего отправленного запроса.
+    private string route = "";
+
+    // Незакрытые vrequest'ы: номер -> [эндпоинт, адреса, погашено].
+    //
+    // vrequest - сущность КЛИЕНТСКАЯ и неявная: это батчинг фронта, а не свойство провода. Сервер
+    // о нём не знает и знать не должен, номер у него чисто клиентский, а состав - массив адресов,
+    // ушедший одной строкой; массив из одного адреса это тоже массив.
+    //
+    // Держим его только ради последней строки: чтобы сказать «набор закрыт целиком», надо помнить,
+    // что в нём было. Пришло тело - вычеркнули; вычеркнули последнее - забыли.
+    //
+    //   vrequest  - ушёл, вот его адреса;
+    //   response  - пришёл физический ответ, вот что он погасил и что осталось;
+    //   vresponse - погашен последний адрес, набор закрыт.
+    private DataDictionary openRequests = new DataDictionary();
+
+    // Своя нумерация: vrequest'ы считаются отдельно от физических запросов. Первый набор - первый,
+    // а не второй лишь потому, что connect ушёл раньше.
+    private int vrequests;
+
+    // ЖУРНАЛ: ровно те строки, что уходят в консоль. Доска печатает их дословно, поэтому консоль и
+    // канвас рассказывают об одном прогоне одно и то же, а не два разных рассказа.
+    //
+    // Разделён надвое: что ушло и что вернулось. На риге это две панели рядом, и по ним видно, как
+    // ответы отстают от запросов - в одной колонке это тонет.
+    private string outgoing = "";
+    private string incoming = "";
+
+    public string TakeRequests()
+    {
+        string all = outgoing;
+
+        outgoing = "";
+
+        return all;
+    }
+
+    public string TakeResponses()
+    {
+        string all = incoming;
+
+        incoming = "";
+
+        return all;
+    }
+
+    // Сами тела: чей набор, какой адрес, и что пришло. В консоль их не шлём - там они забьют всё,
+    // тела бывают по сорок килобайт; на панели держим начало, этого хватает, чтобы убедиться.
+    private string payloads = "";
+
+    public string TakeData()
+    {
+        string all = payloads;
+
+        payloads = "";
+
+        return all;
+    }
+
+    // Строка тел на панель: чей набор, чем он был - response или vresponse, - весь его список
+    // адресов и сами данные. Одна строка на набор, а не на адрес: набор и есть единица.
+    private void Data(string who, string shown)
+    {
+        if (shown == "") return;
+
+        payloads = payloads == "" ? who + " " + shown : payloads + "\n" + who + " " + shown;
+    }
+
+    // Начало тела: длинное режем, переводы строк убираем - иначе одна ответка растянет панель.
+    private string Cut(string body)
+    {
+        string flat = body.Replace("\n", " ").Replace("\r", " ");
+
+        return flat.Length <= DataCut ? flat : flat.Substring(0, DataCut) + "...";
+    }
+
+    private const int DataCut = 160;
+
+    // Сколько символов json показать прямо под строкой response - «кратенько», для сверки.
+    private const int Peek = 200;
+
+    private void Trace(string line, bool request)
+    {
+        if (request) outgoing = outgoing == "" ? line : outgoing + "\n" + line;
+        else incoming = incoming == "" ? line : incoming + "\n" + line;
+
+        // Пишем в консоль в ОБОИХ модах. Prod пока отличается от dev ровно одним - полным
+        // персистом хайперов; выводы там те же, иначе проверять релиз нечем.
+        Debug.Log("[CombineQueries] " + line);
+    }
+
+    // Заводит набор и возвращает его номер. Пачка - это и один адрес тоже: хвост несёт ровно один,
+    // и он такой же vrequest, как диапазон из четырёх.
+    private int OpenRequest(DataList urls)
+    {
+        if (urls.Count == 0) return -1;
+
+        int id = ++vrequests;
+
+        DataList settled = new DataList();
+
+        for (int i = 0; i < urls.Count; i++) settled.Add(false);
+
+        DataList record = new DataList();
+
+        record.Add(route);
+        record.Add(urls);
+        record.Add(settled);
+
+        // Время набора считаем от ОТПРАВКИ запроса, а не от разбора его ответа: состав мы узнаём
+        // из ответа, но ушёл-то он раньше. Иначе у каждого набора выходил бы ровно один кулдаун
+        // SDK - пять секунд, - а не то, сколько он на самом деле шёл до последнего тела.
+        record.Add(lastLoadAt);
+
+        // Копилки: что набору уже принесли, какими телами и сколькими ответами.
+        record.Add("");
+        record.Add("");
+        record.Add(0);
+
+        openRequests.SetValue(id, record);
+
+        // Чей адрес - помним здесь же: тело приедет долгом, и подписать его иначе нечем.
+        for (int i = 0; i < urls.Count; i++)
+            if (urls.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String)
+                asking.SetValue(url.String, id);
+
+        Trace("vrequest: " + id + route + " " + Joined(urls), true);
+
+        return id;
+    }
+
+    // Гасит адрес во всех открытых наборах. Печатает не здесь: строку выдаёт Report, он же знает,
+    // что этим ответом погашено и сколько времени набор уже идёт.
+    // Имя не Settle: так зовётся публичный добор долга, и SendCustomEvent по имени их бы спутал.
+    private void SettleUrl(string payload)
+    {
+        DataList ids = openRequests.GetKeys();
+
+        for (int k = 0; k < ids.Count; k++)
+        {
+            if (!ids.TryGetValue(k, out DataToken id)) continue;
+            if (!openRequests.TryGetValue(id, out DataToken value) || value.TokenType != TokenType.DataList) continue;
+
+            DataList record = value.DataList;
+
+            if (!record.TryGetValue(1, out DataToken list) || list.TokenType != TokenType.DataList) continue;
+            if (!record.TryGetValue(2, out DataToken flags) || flags.TokenType != TokenType.DataList) continue;
+
+            DataList urls = list.DataList;
+            DataList settled = flags.DataList;
+
+            for (int i = 0; i < urls.Count; i++)
+                if (urls.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String && url.String == payload)
+                    settled.SetValue(i, true);
+        }
+    }
+
+
+    // Список адресов через запятую.
+    private string Joined(DataList urls)
+    {
+        string all = "";
+
+        for (int i = 0; i < urls.Count; i++)
+        {
+            if (!urls.TryGetValue(i, out DataToken url) || url.TokenType != TokenType.String) continue;
+
+            all = all == "" ? TailOf(url.String) : all + ", " + TailOf(url.String);
+        }
+
+        return all;
+    }
 
     // Разбирает, ЗА ЧЕМ ушёл прыжок. Диапазон тащит четыре РАЗНЫХ адреса за один запрос, и номера
     // соседей узнать больше неоткуда - забираем их в кольцо здесь, даром.
@@ -652,7 +1016,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         DataList sent = list.DataList;
 
-        string asked = "";
+        DataList asked = new DataList();
 
         for (int i = 0; i < sent.Count; i++)
         {
@@ -672,17 +1036,10 @@ public class CombineQueries : UdonSharpBehaviour
 
             Named(url, "vrequest[" + TotalQueries + "] hyper");
 
-            // Запоминаем, чей это адрес: тело за ним приедет позже, и по номеру видно, кто просил.
-            asking.SetValue(PayloadOf(url), TotalQueries);
-
-            asked = asked == "" ? TailOf(url) + " " + jump : asked + ", " + TailOf(url) + " " + jump;
+            asked.Add(PayloadOf(url));
         }
 
-#if !CQ_RELEASE
-        // Запрос печатаем ОДНОЙ строкой и списком: /h - это всегда несколько адресов, и читать их
-        // по одному незачем. Ответ (тела) придёт отдельной строкой долга.
-        if (asked != "") Debug.Log("[CombineQueries] vrequest /h " + TotalQueries + " -> " + asked);
-#endif
+        OpenRequest(asked);
     }
 
     // Дописывает адрес в строку «отправлено» вместе с его дорогой. Дорога у каждого своя: в одной
@@ -752,9 +1109,23 @@ public class CombineQueries : UdonSharpBehaviour
     private DataDictionary bodies = new DataDictionary();
 
 
-    public void RequestDirect(string url) => Send(url, false);
+    public void RequestDirect(string url) => Dispatch(url, false);
 
-    private void Send(string url, bool withFragments)
+    // Занят ли клиент. Один на сцену, а кнопок, которые в него ходят, несколько - по этому флагу
+    // риг и решает, можно ли просить.
+    //
+    // TRUE с момента, как ушёл ПЕРВЫЙ запрос дела, и до события «готово». В деле может быть много
+    // физических запросов - подключение, куски сборки, хвост, прыжки пачки, - и всё это время
+    // клиент занят одним потоком: у сервера СОБИРАЕТСЯ один адрес, и чужой кусок его испортит.
+    // Поднимают его connect, Remember, Request, RequestDirect, Run и Settle.
+    //
+    // FALSE, когда дело закрыто: пришёл последний ответ и Done снял флаг - неважно, успехом или
+    // ошибкой. Долг на это не влияет: тела могут ещё ехать, но поток свободен, и просить можно.
+    //
+    // Занятому клиенту просить бесполезно и НЕ опасно: Require молча выйдет, ничего не сломав.
+    public bool Busy() => busy;
+
+    private void Dispatch(string url, bool withFragments)
     {
         if (busy || string.IsNullOrEmpty(url)) return;
 
@@ -799,7 +1170,7 @@ public class CombineQueries : UdonSharpBehaviour
 
     // Тело последнего адреса. Канал доставки один - долг: сервер не ждёт чужой сервер, поэтому
     // тело приезжает либо в том же ответе (успел), либо в следующем. Здесь лежит уже разобранное.
-    public string TakeForwardedBody() => forwardedBody != "" ? forwardedBody : StringField(forwarded, "response");
+    public string Take() => forwardedBody != "" ? forwardedBody : StringField(forwarded, "response");
 
     private string forwardedBody = "";
 
@@ -940,16 +1311,12 @@ public class CombineQueries : UdonSharpBehaviour
         if (jump >= 0 && jump < MaxJumps) skip = count;
 
         // Голова уже отработала - значит дорога у нас составная, и стоит она на запрос дороже.
-#if CQ_RELEASE
-        // В релизе дорог всего две: hyper и head. Составные имена и «combine» - дев-подробность,
-        // по ней читается, докуда дошёл персист; сборка с нуля тут остаётся лишь как честный
-        // ответ на случай, если словаря всё-таки не хватило.
-        LastRoad = headTried ? "head" : (skip > 0 ? "hyper" : "combine");
-#else
+        //
+        // Имена одни и те же в обоих модах: prod пока отличается от dev только полным персистом,
+        // и урезать ему вывод рано - иначе релиз нечем проверять.
         LastRoad = headTried
             ? (skip > 0 ? "head/hyper" : "head/combine")
             : (skip > 0 ? "hyper" : "combine");
-#endif
 
         queueLen = count - skip + (skip > 0 ? 1 : 0);
         queue = new int[queueLen];
@@ -962,10 +1329,6 @@ public class CombineQueries : UdonSharpBehaviour
             queue[0] = jump; queueKind[0] = 4; at = 1;
 
             LastJump = jump;
-
-#if !CQ_RELEASE
-            Debug.Log("[CombineQueries] " + LastRoad + ": jump " + jump + " replaces all " + skip + " queries with one");
-#endif
         }
 
         for (int i = skip; i < count; i++) { queue[at] = q[i]; queueKind[at] = k[i]; at++; }
@@ -1053,6 +1416,14 @@ public class CombineQueries : UdonSharpBehaviour
     {
         int kind = queueKind[queuePos];
 
+        // Эндпоинт запроса - им подписан и сам запрос, и его ответ: «1/h», «4/t».
+        route = kind == 0 || kind == 1 || kind == 3 ? "/c"
+              : kind == 4 || kind == 5 ? "/h"
+              : kind == 6 ? "/hd"
+              : kind == 7 ? "/tc"
+              : kind == 8 ? "/cf"
+              : fragments ? "/t" : "/d";
+
         if (kind == 0) { Load(PhaseChunks, ChunkPool[queue[queuePos]]); return; }
 
         if (kind == 1) { Load(PhaseFragment, VfPool[queue[queuePos]]); return; }
@@ -1106,15 +1477,6 @@ public class CombineQueries : UdonSharpBehaviour
         // Сервер не ждёт чужие сервера: он отвечает сразу, а тела приезжают ДОЛГОМ - с этим же
         // ответом, если успели, иначе со следующим запросом, каким бы он ни был. Поэтому долг
         // разбираем до всего остального: там может лежать и то, чего мы ждём прямо сейчас.
-#if !CQ_RELEASE
-        // ОТВЕТ на физический запрос - просто response. Он приходит на каждый GET и означает лишь
-        // «сервер принял»; результата в нём может не быть вовсе.
-        //
-        // vresponse - другое: это готовый результат виртуального запроса, то есть тело адреса. Оно
-        // приезжает долгом и печатается отдельной строкой, привязанной к своему vrequest.
-        Debug.Log("[CombineQueries] response => vrequest." + KindOf(phase) + " " + TotalQueries + ": "
-            + response.Result.Length + " bytes");
-#endif
 
         TakeDebt(response.Result);
 
@@ -1135,20 +1497,10 @@ public class CombineQueries : UdonSharpBehaviour
         {
             connectOk = true;
 
-            // Логи по обе стороны разбора: если виден только первый, значит упали в SeedFromConnect,
-            // и молчание клиента - это не «ответ не пришёл», а исключение внутри Udon.
-            Debug.Log("[CombineQueries] connect: answer " + response.Result.Length + " bytes");
-
             SeedFromConnect(response.Result);
 
-            // В релизе про хайперы молчим: сколько их приехало и когда сработал прыжок - это
-            // внутренняя кухня, по ней видно «до и после персиста», а игроку она ни к чему.
-#if CQ_RELEASE
-            Debug.Log("[CombineQueries] connect: ready, roots " + roots.Length + ", fragments " + cachedFragments.Length);
-#else
-            Debug.Log("[CombineQueries] connect: ready, roots " + roots.Length + ", fragments " + cachedFragments.Length + ", jumps " + jumps.Count);
-#endif
-
+            // Про сам connect в лог не пишем: в консоли остаются только request/vrequest и их
+            // ответы, всё прочее - шум, за которым не видно потока.
             Done();
             return;
         }
@@ -1205,11 +1557,6 @@ public class CombineQueries : UdonSharpBehaviour
             // ТОЛЬКО НАЧАЛО. Запрос за голову тем самым не пропал - он оплатил последний кусок.
             string kept = StringField(response.Result, "kept");
 
-#if !CQ_RELEASE
-            Debug.Log("[CombineQueries] head/combine: адрес не знаком, конец «" + kept
-                + "» сервер придержал, досылаем начало");
-#endif
-
             SendCombine(kept == "" ? pendingUrl : pendingUrl.Substring(0, pendingUrl.Length - kept.Length));
             return;
         }
@@ -1221,15 +1568,6 @@ public class CombineQueries : UdonSharpBehaviour
             // обычной дорогой - собираем адрес с нуля.
             if (!BoolField(response.Result, "known"))
             {
-                // В релизе не называем ни механизм, ни номер: по такой строке видно «до и после
-                // персиста», а миру это ни к чему. Сам факт отката оставляем - он объясняет время.
-#if CQ_RELEASE
-                Debug.Log("[CombineQueries] server does not know this address, assembling instead");
-#else
-                Debug.Log("[CombineQueries] hyper: jump " + LastJump + " unknown on server ("
-                    + StringField(response.Result, "note") + "), assembling instead");
-#endif
-
                 jumps.Remove(pendingUrl);
 
                 LastJump = -1;
@@ -1269,7 +1607,6 @@ public class CombineQueries : UdonSharpBehaviour
             // быть заполнена на любой дороге, иначе по ней не сравнить сборку с прыжком.
             Named(pendingUrl, "vrequest[" + TotalQueries + "] " + LastRoad);
 
-            asking.SetValue(pendingUrl, TotalQueries);
 
             Done();
             return;
@@ -1306,16 +1643,29 @@ public class CombineQueries : UdonSharpBehaviour
         TotalQueries++;
         lastLoadAt = Time.time;
 
-#if !CQ_RELEASE
-        // Каждый уходящий запрос - vrequest, каждый пришедший ответ - vresponse. Без этого в логе
-        // не отличить «мы попросили» от «нам принесли», а между ними лежит вся асинхронность.
+        // Что ушло: vrequest - если за запросом стоит МАССИВ адресов, собранный фронтом, и просто
+        // request - если такого массива нет вовсе. Массив из одного это тоже массив.
         //
-        // Прыжок и голова здесь МОЛЧАТ: у них уходит несколько адресов, а на руках сейчас один -
-        // напечатать «1» значило бы соврать. Свой список они печатают, когда узнают его из ответа.
-        if (nextPhase != PhaseJump && nextPhase != PhaseHead)
-            Debug.Log("[CombineQueries] vrequest " + KindOf(nextPhase) + " " + TotalQueries
-                + (pendingUrl == "" ? "" : ": " + TailOf(pendingUrl)));
-#endif
+        // Хвост знает свой адрес уже сейчас - открываем набор здесь, и номера идут в порядке
+        // отправки. Прыжок и голова молчат: их состав называет сервер, набор откроется из ответа.
+        // Куски сборки, connect, код и добор долга ничего не батчат - это request.
+        string at = nextPhase == PhaseConnect ? "/connect"
+                  : nextPhase == PhaseCode ? "/k"
+                  : nextPhase == PhaseVerify ? "/kf"
+                  : route;
+
+        if (nextPhase == PhaseTail && pendingUrl != "")
+        {
+            DataList one = new DataList();
+
+            one.Add(pendingUrl);
+
+            OpenRequest(one);
+        }
+        else if (nextPhase != PhaseJump && nextPhase != PhaseHead)
+        {
+            Trace("request: " + TotalQueries + at, true);
+        }
 
         SendCustomEventDelayedSeconds(nameof(OnLoadTimeout), Timeout);
 
@@ -1394,10 +1744,6 @@ public class CombineQueries : UdonSharpBehaviour
         queueKind[0] = 6;
         queuePos = 0;
 
-#if !CQ_RELEASE
-        Debug.Log("[CombineQueries] head: f" + piece + " + base " + found + " -> " + payload);
-#endif
-
         SendNext();
 
         return true;
@@ -1425,7 +1771,8 @@ public class CombineQueries : UdonSharpBehaviour
 
         string mine = Scheme + "://" + pendingUrl;
         int ours = -1;
-        string asked = "";
+
+        DataList asked = new DataList();
 
         for (int i = 0; i < found.Count; i++)
         {
@@ -1440,15 +1787,19 @@ public class CombineQueries : UdonSharpBehaviour
 
             Named(url, "head[" + TotalQueries + "]");
 
-            asked = asked == "" ? TailOf(url) + " " + jump : asked + ", " + TailOf(url) + " " + jump;
+            asked.Add(PayloadOf(url));
 
             if (url == mine) ours = found.Count;
         }
 
-#if !CQ_RELEASE
-        // Голова тоже называет НЕСКОЛЬКО адресов - печатаем их одной строкой, как и прыжок.
-        if (asked != "") Debug.Log("[CombineQueries] vrequest /hd " + TotalQueries + " -> " + asked);
-#endif
+        // Голова тоже несёт от одного до нескольких адресов - открываем её набор и тут же закрываем:
+        // её продукт это ИМЕНА, а не тела, ждать по ней нечего. Тела возьмёт прыжок, своим номером.
+        int head = OpenRequest(asked);
+
+        for (int i = 0; i < asked.Count; i++)
+            if (asked.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String) SettleUrl(url.String);
+
+        if (head > 0) Report(head, "имена", "");
 
         return ours;
     }
@@ -1497,7 +1848,9 @@ public class CombineQueries : UdonSharpBehaviour
     {
         if (pendingUrl == "") return;
 
-        if (!bodies.ContainsKey(pendingUrl)) bodies.SetValue(pendingUrl, TakeForwardedBody());
+        if (!bodies.ContainsKey(pendingUrl)) bodies.SetValue(pendingUrl, Take());
+
+        Fill(pendingUrl, Take());
 
         Mark(pendingUrl);
     }
@@ -1524,6 +1877,7 @@ public class CombineQueries : UdonSharpBehaviour
     private void Fail(string reason)
     {
         LastError = reason;
+        Errors++;
 
         Debug.LogError("CombineQueries: " + reason);
 
@@ -1581,12 +1935,6 @@ public class CombineQueries : UdonSharpBehaviour
 
             KeepJump(url, jump);
             SeedJumps++;
-
-            // Ключ словаря - адрес БЕЗ схемы, ровно в том виде, в каком его собирает сервер.
-            // Если прыжок не срабатывает, расходятся обычно именно ключи - печатаем первый.
-#if !CQ_RELEASE
-            if (SeedJumps == 1) Debug.Log("[CombineQueries] seed jump: '" + url + "' -> " + jump);
-#endif
         }
     }
 

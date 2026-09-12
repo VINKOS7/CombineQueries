@@ -1,4 +1,4 @@
-using UdonSharp;
+﻿using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -15,7 +15,7 @@ using UnityEngine.UI;
 //                                     their own tail route. It also skips the handle cache, so it
 //                                     always pays full price: a yardstick for what the dictionary
 //                                     buys, never a way to send real traffic.
-//   client.TakeForwardedBody()        what the target url answered, ready when the event fires.
+//   client.Take()        what the target url answered, ready when the event fires.
 //   client.LastError                  empty on success, a message otherwise.
 //
 // Init also fixes the scheme, http or https, and the scheme never travels: Request strips it and
@@ -32,7 +32,7 @@ using UnityEngine.UI;
 //   {
 //       if (queries.LastError != "") { Debug.LogError(queries.LastError); return; }
 //
-//       string json = queries.TakeForwardedBody();
+//       string json = queries.Take();
 //   }
 //
 // Calling Request while a send is in flight does nothing: the client holds one send buffer,

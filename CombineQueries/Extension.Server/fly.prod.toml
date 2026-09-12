@@ -1,0 +1,43 @@
+# Прод-конфиг сервера. Разворачивать: fly deploy -c fly.prod.toml
+#
+# Секретов здесь НЕТ и быть не должно - файл едет в репозиторий. Всё, что нельзя показывать,
+# ставится отдельно и живёт в окружении машины:
+#
+#   fly secrets set ConnectionStrings__Context="Host=...;Database=...;Username=...;Password=..."
+#   fly secrets set Auth__Codeword="..."      # то же слово, что в CombineQueries.prod.fly.cs
+#   fly secrets set Auth__Token="..."         # если отличается от committed appsettings.json
+#
+# Без ConnectionStrings__Context сервер не поднимется: цепочки хранятся в постгресе, и именно они
+# делают второй заход по адресу одним запросом.
+#
+# Без Auth__Codeword гейт мастера ВЫКЛЮЧАЕТСЯ сам (MasterGate смотрит, пуст ли ключ), а клиент в
+# prod.fly собран с RequireCode = true - то есть слово он пошлёт, а проверять будет некому.
+
+app = "cq"
+primary_region = "arn"
+
+[build]
+  dockerfile = "VQueries/Dockerfile"
+
+[env]
+  ASPNETCORE_ENVIRONMENT = "Production"
+  ASPNETCORE_HTTP_PORTS = "8080"
+
+  # Серверный GC на 256 МБ только мешает: он держит больше памяти ради пропускной способности,
+  # которая тут не нужна - запросы короткие, работа идёт в фоне ящика.
+  DOTNET_gcServer = "0"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # Машину не гасим. Fly умеет игнорировать это при простое, поэтому держим ещё и min_machines:
+  # после засыпания первый connect отвечает 403 или висит полминуты, а мир к этому времени уже
+  # решил, что сервера нет.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -66,38 +66,22 @@ Thumbs.db
 /CombineQueries/Extension.Server/VQueries/appsettings.Production.json
 /CombineQueries/Extension.Server/VQueries/appsettings.Prod.json
 
-### Окружение клиента - адреса и токен, в гит не едут (рядом лежат .example)
-/Udon/CombineQueries.dev.cs
-/Udon/CombineQueries.alpha.cs
-/Udon/CombineQueries.prod.cs
-/CombineQueries/Assets/CombineQueries/CombineQueries.dev.cs
-/CombineQueries/Assets/CombineQueries/CombineQueries.dev.cs.meta
-/CombineQueries/Assets/CombineQueries/CombineQueries.alpha.cs
-/CombineQueries/Assets/CombineQueries/CombineQueries.alpha.cs.meta
-/CombineQueries/Assets/CombineQueries/CombineQueries.prod.cs
-/CombineQueries/Assets/CombineQueries/CombineQueries.prod.cs.meta
-
-### то же после переименования Assets/CombineQueries -> Assets/Src
-/CombineQueries/Assets/Src/CombineQueries.dev.cs
-/CombineQueries/Assets/Src/CombineQueries.dev.cs.meta
-/CombineQueries/Assets/Src/CombineQueries.alpha.cs
-/CombineQueries/Assets/Src/CombineQueries.alpha.cs.meta
-/CombineQueries/Assets/Src/CombineQueries.prod.cs
-/CombineQueries/Assets/Src/CombineQueries.prod.cs.meta
-
-### Move-proof: env ловим ПО ИМЕНИ на любой глубине, а не по пути.
-### Пути выше ломались при каждом переносе папок (секреты дважды становились видны гиту).
-### Шаблоны .example НЕ попадают под эти маски и продолжают ехать в репо.
+### Окружение клиента.
+###
+### Публичный CombineQueries.prod.cs ЕДЕТ в репо: он пустой, его и заполняют своим хостом.
+### Приватный - CombineQueries.prod.fly.cs, в нём настоящие адрес, токен и кодовое слово.
+### Дев-конфиг тоже приватный, рядом с ним лежит .example.
+###
+### Ловим ПО ИМЕНИ на любой глубине, а не по пути: пути ломались при каждом переносе папок,
+### и секреты дважды становились видны гиту. Шаблоны .example под маски не попадают.
 CombineQueries.dev.cs
 CombineQueries.alpha.cs
-CombineQueries.prod.cs
-CombineQueries.release.cs
+CombineQueries.prod.fly.cs
 Config.*.cs
 Config.*.cs.meta
 *.dev.cs.meta
 *.alpha.cs.meta
-*.prod.cs.meta
-*.release.cs.meta
+*.prod.fly.cs.meta
 appsettings.Alpha.json
 appsettings.Production.json
 appsettings.Prod.json

@@ -1,4 +1,4 @@
-#if !CQ_RELEASE
+﻿#if !CQ_PROD
 public static class CombineQueriesEnvironment
 {
     public const string BaseUrl = "http://localhost:5017";

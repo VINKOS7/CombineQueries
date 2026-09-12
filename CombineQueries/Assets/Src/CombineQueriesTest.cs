@@ -1,4 +1,4 @@
-using UdonSharp;
+﻿using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -64,6 +64,15 @@ public class CombineQueriesTest : UdonSharpBehaviour
     [Tooltip("Optional: status is written here")]
     public Text output;
 
+    [Tooltip("Панель ушедших vrequest'ов")]
+    public Text requests;
+
+    [Tooltip("Панель ответов: response и vresponse")]
+    public Text responses;
+
+    [Tooltip("Панель тел: чей набор, адрес и что пришло")]
+    public Text data;
+
     // ПЕРВЫМ идёт хайпер из БД: сид приезжает вместе с connect, поэтому адрес, которого клиент не
     // собирал ни разу, уходит в два запроса сразу - /h/ поднимает всю combine-часть, /t/ закрывает.
     // Реконнект для этого не нужен, знание уже на руках; поэтому шага «забыть прыжки» тут и нет.
@@ -125,6 +134,14 @@ public class CombineQueriesTest : UdonSharpBehaviour
     public override void Interact()
     {
         if (client == null) { Say("client is not assigned"); return; }
+
+        // awaiting снимает OnQueryDone, но событие уходит ОДНОЙ цели - стенду. Кнопка подключения
+        // его не получает и после первого же нажатия висел бы «занятым» навсегда. При живом
+        // сервере это незаметно (подключаются один раз и идут дальше), а вот после отказа кнопка
+        // мертва: сервер подняли, а нажать заново нельзя. Спрашиваем сам клиент - он не занят,
+        // значит прошлое нажатие отработало, чем бы оно ни кончилось.
+        if (awaiting && !client.Busy()) awaiting = false;
+
         if (awaiting) return;
 
         if (action == 0)
@@ -193,9 +210,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         int queries = packed ? client.BatchQueries : client.LastQueries;
 
-        // Адреса идут В СКОБКАХ рядом с названием шага - все, что уехали, и запрошенный среди них
-        // такой же, как остальные. Отдельной строкой их выносить незачем: это один и тот же список.
-        string line = Pad(TitleOf(step) + " (" + client.LastSent + ")", 78)
+        // Заголовок шага короткий. Адреса и их судьба идут ПОД ним, теми же строками, что и в
+        // консоли: vrequest / response / vresponse. Один рассказ, а не два.
+        string line = Pad(TitleOf(step), 34)
                     + Pad(NumberOf((int)((Time.time - startedAt) * 1000f)) + " ms", 10)
                     + Pad(NumberOf(queries) + (queries == 1 ? " query" : " queries"), 11)
                     + Pad(RoadOf(), 17)
@@ -207,10 +224,16 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         board += line + "\n";
 
+        // Ушедшее и пришедшее - в свои панели, теми же строками, что в консоли.
+        Pour(requests, client.TakeRequests());
+        Pour(responses, client.TakeResponses());
+        Pour(data, client.TakeData());
+
         step++;
 
-        Note(line);
-        Show("\n" + client.TakeForwardedBody());
+        // В консоль сводку шага НЕ пишем: там только request/vrequest и их ответы. Это тот же
+        // самый запрос, о котором уже сказал клиент, и второй раз о нём читать незачем.
+        Show("\n" + client.Take());
 
         if (step <= StepBatch) { SendStep(); return; }
 
@@ -219,16 +242,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
         Note("done");
     }
 
-    // Сколько прыжков приехало из БД. В релизе - пусто: по этому числу и видно «до и после
-    // персиста», а мир такие подробности показывать не должен.
-    private string JumpsNote()
-    {
-#if CQ_RELEASE
-        return "";
-#else
-        return "jumps from db " + NumberOf(client.SeedJumps);
-#endif
-    }
+    // Сколько прыжков приехало из БД. Показываем в обоих модах: prod пока отличается от dev
+    // только полным персистом, и это как раз то число, по которому персист и виден.
+    private string JumpsNote() => "jumps from db " + NumberOf(client.SeedJumps);
 
     private void SendStep()
     {
@@ -324,7 +340,8 @@ public class CombineQueriesTest : UdonSharpBehaviour
         awaiting = true;
         startedAt = Time.time;
 
-        Note(TitleOf(step) + "   sending " + asked);
+        // В лог о начале шага не пишем: следом клиент напечатает vrequest с настоящим составом
+        // набора, а «шаг собирается просить» - это намерение, и оно только путает.
         Show(TitleOf(step) + "   sending...");
     }
 
@@ -420,6 +437,15 @@ public class CombineQueriesTest : UdonSharpBehaviour
         }
 
         return digits;
+    }
+
+    // Дописывает строки в панель. Пусто - панели не трогаем, иначе она мигает пустотой на шагах,
+    // где в эту сторону ничего не двигалось.
+    private void Pour(Text panel, string lines)
+    {
+        if (panel == null || lines == "") return;
+
+        panel.text = panel.text == "" ? lines : panel.text + "\n" + lines;
     }
 
     private void Note(string line) => Debug.Log("[CombineQueriesTest] " + line);

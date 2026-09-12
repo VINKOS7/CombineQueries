@@ -1,5 +1,5 @@
-// Environment toggle (Tools > CombineQueries > Environment > Use release / Use dev) is disabled for now.
-// Set the target manually instead: Project Settings > Player > Scripting Define Symbols - add CQ_RELEASE
+﻿// Environment toggle (Tools > CombineQueries > Environment > Use release / Use dev) is disabled for now.
+// Set the target manually instead: Project Settings > Player > Scripting Define Symbols - add CQ_PROD
 // for the published (release) build, remove it for local dev. Uncomment below to bring the menu back.
 
 /*
@@ -9,7 +9,7 @@ using UnityEngine;
 
 public static class Environment
 {
-    private const string Define = "CQ_RELEASE";
+    private const string Define = "CQ_PROD";
 
     [MenuItem("Tools/CombineQueries/Environment/Use dev")]
     private static void UseDev() => Set(false);
