@@ -86,3 +86,10 @@ appsettings.Alpha.json
 appsettings.Production.json
 appsettings.Prod.json
 appsettings.Release.json
+
+### Переключатель контура. Секретов не содержит, но привязан к ПРИВАТНОМУ CombineQueries.prod.fly.cs:
+### он ставит CQ_PROD + CQ_FLY, а под этой парой публичный CombineQueries.prod.cs выключается. У того,
+### кто взял тулзу, приватного файла нет - и проект просто не соберётся, класса окружения не окажется
+### вовсе. Поэтому переключатель личный и в репозиторий не едет.
+HostMode.cs
+HostMode.cs.meta
