@@ -289,7 +289,7 @@ public class Speech : ISpeech
         {
             string text = _fragments[id];
 
-            if (!IsUrlRequest(text)) continue;
+            if (!Jumpable(text)) continue;
 
             // Путь считаем тем же разбором, что и на записи: прогретая цепочка обязана совпасть
             // с той, которую построит живой проход, иначе адрес заведётся дважды.
@@ -301,18 +301,30 @@ public class Speech : ISpeech
         return warmed;
     }
 
+    // Можно ли по строке заводить прыжок: она цельный запрос и не обрубок более длинного слова.
+    //
+    // Смотрит в словарь, поэтому звать ПОСЛЕ его заливки. Тем же отбором connect выпалывает из
+    // персиста цепочки, которые прогрев успел туда записать, пока фильтр был мягче.
+    public bool Jumpable(string url) => IsUrlRequest(url) && !IsStub(url);
+
     // urlRequest - строка словаря, которая сама по себе цельный запрос, а не обрубок.
     //
     // Отбор строгий намеренно: прогретый адрес попадает в дерево, а оттуда его начинает отдавать
     // голова - и каждый обрубок стоит холостого похода наружу за чужой счёт. Раньше сюда пролезали
-    // ".com/comments" (хост начинается с точки) и "…/search?q" (параметр без значения).
+    // ".com/comments" (хост начинается с точки), "…/search?q" (параметр без значения), голый
+    // "site.com" (корень сайта отдаёт HTML-страницу, а не ответ API) и "…?limit=10&skip" (второй
+    // параметр без значения - проверялся только первый).
     private static bool IsUrlRequest(string text)
     {
         if (text.Length < 5) return false;
 
         int slash = text.IndexOf('/');
-        string host = slash < 0 ? text : text[..slash];
-        string rest = slash < 0 ? "" : text[slash..];
+
+        // Без пути это корень сайта. Базовый адрес - кусок словаря, но не адрес для прыжка.
+        if (slash < 0) return false;
+
+        string host = text[..slash];
+        string rest = text[slash..];
 
         if (!Host(host)) return false;
 
@@ -321,20 +333,65 @@ public class Speech : ISpeech
 
         int query = rest.IndexOf('?');
 
-        // Есть вопрос - значит должен быть и параметр со значением: "?limit" сам по себе обрубок.
+        // Есть вопрос - значит у КАЖДОГО параметра должно быть значение: "?limit" и "&skip" обрубки.
         if (query >= 0)
-        {
-            string parameters = rest[(query + 1)..];
+            foreach (string pair in rest[(query + 1)..].Split('&'))
+            {
+                int equals = pair.IndexOf('=');
 
-            int equals = parameters.IndexOf('=');
-
-            if (equals <= 0 || equals + 1 >= parameters.Length) return false;
-        }
+                if (equals <= 0 || equals + 1 >= pair.Length) return false;
+            }
 
         char last = text[^1];
 
         return last != '/' && last != '?' && last != '&' && last != '=' && last != '.' && last != '-';
     }
+
+    // Обрубок: словарь знает то же слово длиннее. LZW растит фразу по символу, поэтому рядом с
+    // "site.com/products" в нём лежат "site.com/p", "/pro", "/product", а рядом с хостом - "site.co",
+    // и каждый такой снаружи это 404 или вовсе чужой домен.
+    //
+    // Слово продолжается буквой после буквы или связкой '-', '_'. Цифра после цифры обрубком не
+    // считается: "products/1" и "products/12" - два разных адреса. Запросы с '?' здесь не судим:
+    // обрубок параметра уже отсёк IsUrlRequest, а значение "q=Jo" рядом с "q=John" - такой же
+    // настоящий запрос, как и длинный.
+    private bool IsStub(string text)
+    {
+        if (text.Contains('?')) return false;
+
+        var sorted = SortedFragments();
+
+        int at = Array.BinarySearch(sorted, text, StringComparer.Ordinal);
+
+        // Все продолжения строки лежат в сортировке подряд сразу за ней.
+        for (int i = at < 0 ? ~at : at + 1; i < sorted.Length && sorted[i].StartsWith(text, StringComparison.Ordinal); i++)
+        {
+            if (sorted[i].Length == text.Length) continue;
+
+            char next = sorted[i][text.Length];
+
+            if (next == '-' || next == '_') return true;
+            if (char.IsAsciiLetter(next) && char.IsAsciiLetterOrDigit(text[^1])) return true;
+            if (char.IsAsciiDigit(next) && char.IsAsciiLetter(text[^1])) return true;
+        }
+
+        return false;
+    }
+
+    // Словарь по возрастанию текста - для поиска продолжений. Словарь только растёт, поэтому
+    // устаревание видно по размеру; Restore подменяет его целиком и сбрасывает явно.
+    private string[] SortedFragments()
+    {
+        if (_sorted.Length == _fragments.Count) return _sorted;
+
+        _sorted = [.. _fragments];
+
+        Array.Sort(_sorted, StringComparer.Ordinal);
+
+        return _sorted;
+    }
+
+    private string[] _sorted = [];
 
     // Хост: непустое имя, точка внутри (не с краю) и буквенная зона длиной от двух символов.
     private static bool Host(string host)
@@ -416,6 +473,8 @@ public class Speech : ISpeech
         _fragments.Clear();
         _fragIndex.Clear();
         _phrases.Clear();
+
+        _sorted = [];
 
         foreach (var seed in fragments)
         {
@@ -577,6 +636,25 @@ public class Speech : ISpeech
     // Шаг руны хранится РАЗЖАТЫМ: сравнивать надо содержимое, а не форму передачи, и тогда
     // неважно, чем кусок приехал - руной или фрагментом.
     public List<string> Canonical(string url)
+    {
+        // Последний сегмент пути - всегда ОТДЕЛЬНЫЙ шаг, каким бы длинным фрагментом словарь ни
+        // накрывал его вместе с началом. Иначе семья распадается: "site.com/products/1" лежит в
+        // словаре целиком и становится шагом от корня, а "site.com/products/7" разбирается как
+        // "site.com/products/" + "7" - два брата у разных родителей. Прыжок отдаёт семью по
+        // родителю, и четыре таких адреса уезжали четырьмя запросами вместо одного.
+        int cut = url.LastIndexOf('/');
+
+        if (cut <= 0 || cut + 1 >= url.Length) return Cover(url);
+
+        var steps = Cover(url[..(cut + 1)]);
+
+        steps.Add(HyperTree.StepOf(false, url[(cut + 1)..], 0));
+
+        return steps;
+    }
+
+    // Разбор текста словарём: самый длинный фрагмент на каждой позиции, непокрытое - одним рунным шагом.
+    private List<string> Cover(string url)
     {
         var steps = new List<string>();
         var runes = new System.Text.StringBuilder();

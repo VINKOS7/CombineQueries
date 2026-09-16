@@ -19,13 +19,13 @@ public class TranslatorController : Controller
 
     public TranslatorController(IMediator mediator) => _mediator = mediator;
 
-    [AllowAnonymous] [HttpGet("/h/{jump:int}/{count:int}/{sign:int}")] public Task<HyperResponse> HyperRange(int jump, int count, int sign) 
+    [AllowAnonymous] [HttpGet("/h/{jump:int}/{count:int}/{sign:int}")] public Task<HyperResponse> Hyper(int jump, int count, int sign) 
         => _mediator.Send(new HyperRequest { Value = jump, Count = count, Sign = sign });
     
     [AllowAnonymous] [HttpGet("/tc/{sign:int}")] public Task<CreditResponse> TakeCredit(int sign) 
         => _mediator.Send(new CreditRequest { Sign = sign });
 
-    [AllowAnonymous] [HttpGet("/hd/{fragment:int}/{shortened:int}/{sign:int}")] public Task<HeadResponse> HeadFrom(int fragment, int shortened, int sign) 
+    [AllowAnonymous] [HttpGet("/hd/{fragment:int}/{shortened:int}/{sign:int}")] public Task<HeadResponse> Head(int fragment, int shortened, int sign) 
         => _mediator.Send(new HeadRequest { Fragment = fragment, Base = shortened, Sign = sign });
 
     [AllowAnonymous] [HttpGet("/c/{runes}/{id:int}/{page:int}/{hop:int}/{q:int}")] public Task<CombineResponse> Combine(string runes, int id, int page, int hop, int q)

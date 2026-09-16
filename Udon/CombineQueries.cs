@@ -1,19 +1,50 @@
-﻿using UdonSharp;
+using UdonSharp;
 using UnityEngine;
 using VRC.SDK3.Data;
 using VRC.SDK3.StringLoading;
 using VRC.SDKBase;
 
+// Клиент сети не касается: у каждого игрока свой. Синхронизация выключена целиком - тогда и сетевые
+// события на него не проходят, и чужой игрок не дёрнет Connect, Settle или любой другой public-метод.
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class CombineQueries : UdonSharpBehaviour
 {
     [Header("Codeword typed in-world before Init/Remember")]
     public string codeword = "";
 
-    [Header("Where to report completion (optional)")]
-    public UdonSharpBehaviour target;
+    // ---- Окружение и параметры connect ----
+
+#if CQ_PROD
+    private const bool resetHypers = false;
+    private const string ResetHypersStr = "false";
+#else
+    private const string ResetHypersStr = "true";
+#endif
 
     private const bool rememberInfinite = true;
     private const bool RequireCode = CombineQueriesEnvironment.RequireCode;
+
+    private const string baseUrl = CombineQueriesEnvironment.BaseUrl;
+    private const string GrowHypersStr = CombineQueriesEnvironment.MemHypers;
+    private const string Token = CombineQueriesEnvironment.Token;
+    private const string baseForwardUrl = "vink0s.com";
+    private const string Scheme = "https";
+    private const string RememberInfiniteStr = "true";
+    private const string RuneSizeStr = "3";
+    private const string DfaSizeStr = "1024";
+    private const string PageCountStr = "64";
+    private const string HopCountStr = "64";
+
+    // ---- Алфавиты ----
+
+    private const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
+    private const string RuneAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:@!$&'()*+,;=";
+    private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
+    private const string AuthAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+    private const string Digits = "0123456789";
+    private const string Upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    // ---- Фазы загрузки ----
 
     private const int PhaseIdle = 0;
     private const int PhaseConnect = 1;
@@ -25,24 +56,8 @@ public class CombineQueries : UdonSharpBehaviour
     private const int PhaseJump = 8;
     private const int PhaseHead = 9;
     private const int PhaseCredit = 10;
-    private const int MaxRemembered = 1024;
 
-    private const string baseForwardUrl = "vink0s.com";
-    private const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
-    private const string RuneAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:@!$&'()*+,;=";
-    private const string Digits = "0123456789";
-    private const string Upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
-    private const string Scheme = "https";
-    private const string AuthAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-    private const string RememberInfiniteStr = "true";
-    private const string RuneSizeStr = "3";
-    private const string DfaSizeStr = "1024";
-    private const string PageCountStr = "64";
-    private const string HopCountStr = "64";
-    private const string baseUrl = CombineQueriesEnvironment.BaseUrl;
-    private const string GrowHypersStr = CombineQueriesEnvironment.MemHypers;
-    private const string Token = CombineQueriesEnvironment.Token;
+    // ---- Размеры, из которых запекаются пулы ----
 
     private const int DirectPieces = 4;
     private const int FragmentCount = 35;
@@ -56,21 +71,24 @@ public class CombineQueries : UdonSharpBehaviour
     private const int pageCount = 64;
     private const int hopCount = 64;
     private const int SignValues = 8;
+    private const int JumpSignValues = SignValues;
     private const int HeadLimit = 2048;
     private const int HeadBases = 8;
-    private const int JumpSignValues = SignValues;
     private const int RangeMax = 4;
     private const int CloseLimit = 1024;
 
-    private string[] roots = new string[0];
-    private readonly string[] DirectFragments = new string[] { "", "o", ".com/", "." };
+    // ---- Лимиты, тайминги, лог ----
 
-#if CQ_PROD
-            private const bool resetHypers = false;
-    private const string ResetHypersStr = "false";
-#else
-    private const string ResetHypersStr = "true";
-#endif
+    private const int MaxRemembered = 1024;
+    private const int MaxQueued = 2048;
+    private const float Timeout = 60f;
+    private const float CreditDelay = 0.5f;
+    private const int DataCut = 160;
+    private const int Peek = 200;
+
+    // ---- Запечённые ссылки ----
+
+    private readonly string[] DirectFragments = new string[] { "", "o", ".com/", "." };
 
     private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", "/0/0/0/0", Symbols, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth, SignValues);
@@ -86,8 +104,12 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
     private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
 
+    // ---- Публичное состояние ----
+
     public int LastSymbols;
     public int LastQueries;
+    public int BatchQueries;
+    public int TotalQueries;
     public int Errors;
     public int LastChunks;
     public int LastL2;
@@ -95,40 +117,94 @@ public class CombineQueries : UdonSharpBehaviour
     public int LastInfinite;
     public int LastUrls;
     public int LastJump = -1;
+    public int LastPending;
     public int SeedJumps;
 
     public string LastSent = "";
     public string LastRoad = "";
-    public string onDoneEvent = "OnQueryDone";
     public string LastError = "";
     public string LastUrl = "";
 
+    // ---- Подключение ----
+
     private bool connectOk;
-    private bool busy;
+    private bool connectReset;
     private bool chainInit;
+
+    private int signPos;
+    private string signs = "";
+
+    private string[] roots = new string[0];
+    private string[] cachedFragments = new string[0];
+    private int[] cachedFragIds = new int[0];
+
+    // ---- Текущая отправка ----
+
+    private bool busy;
     private bool fragments = true;
+    private bool headTried;
 
     private int phase;
     private int queueLen;
     private int queuePos;
-    private int signPos;
-    private int jumpRingAt;
-
-    private string pendingUrl = "";
-    private string forwarded = "";
-    private string signs = "";
-
-    private bool[] queuedDirect = new bool[0];
-    private bool[] batchDirect = new bool[0];
+    private int headTaken;
+    private float lastLoadAt;
 
     private int[] queue;
     private int[] queueKind;
-    private int[] cachedFragIds = new int[0];
 
+    private string route = "";
+    private string pendingUrl = "";
+    private string forwarded = "";
+    private string forwardedBody = "";
+
+    // ---- Очередь и пачка ----
+
+    private bool flush;
+    private bool pendingFlush;
+
+    private string[] queued = new string[0];
+    private bool[] queuedDirect = new bool[0];
+    private string[] batch = new string[0];
+    private bool[] batchDirect = new bool[0];
+    private bool[] done = new bool[0];
+
+    // ---- Коробки и тела ----
+
+    private DataDictionary boxes = new DataDictionary();
+    private DataDictionary bodies = new DataDictionary();
+
+    // Сколько запросов ушло на адрес. Считаем те, что его ПРОСИЛИ, - кусок сборки, хвост, голову,
+    // прыжок, - и запрос /tc, который привёз его тело долгом. Чужие запросы, в чьём ответе тело
+    // приехало попутно, адресу не засчитываются: платил за них не он.
+    //
+    // Число дублируется в третий слот коробки: мир видит его рядом с телом, не зная про словарь.
+    // Номер запроса, на котором выпущен адрес: от него считается, на каком запросе своего vrequest
+    // приехало тело. Снимается с первым же телом.
+    private DataDictionary releasedAt = new DataDictionary();
+
+    // ---- Прыжки ----
+
+    private int jumpRingAt;
     private string[] jumpRing = new string[MaxRemembered];
-    private string[] cachedFragments = new string[0];
-
     private DataDictionary jumps = new DataDictionary();
+
+    // ---- Лог ----
+
+    private int vrequests;
+    private DataDictionary openRequests = new DataDictionary();
+    private DataDictionary asking = new DataDictionary();
+    private string outgoing = "";
+    private string incoming = "";
+    private string payloads = "";
+
+    // ==== Публичный API ====
+
+    // Прошёл ли connect. Только чтение, как Busy: риг, который сам connect не нажимал, по нему и
+    // узнаёт, что можно начинать - события о завершении у клиента больше нет.
+    public bool Connected() => connectOk;
+
+    public bool Busy() => busy;
 
     public void Connect()
     {
@@ -146,10 +222,59 @@ public class CombineQueries : UdonSharpBehaviour
         Begin(true);
     }
 
+    public void Remember()
+    {
+        if (busy) return;
+
+        LastError = "";
+
+        Begin(false);
+    }
+
+    public DataList Require(string url) => Ask(url, false);
+
+    public DataList RequireDirect(string url) => Ask(url, true);
+
+    public string Result(DataList box)
+    {
+        if (box == null || box.Count == 0) return "";
+
+        // Спросили результат - это и есть сигнал отправки, отдельного вызова для неё нет.
+        //
+        // Флаг на самой коробке: не отправляли - выпускаем ВСЮ набранную пачку и сразу помечаем,
+        // не дожидаясь ответа. Дальше по этой коробке спрашивают сколько угодно раз, и повторных
+        // отправок это уже не вызывает.
+        if (box.TryGetValue(1, out DataToken sent) && sent.TokenType == TokenType.Boolean && !sent.Boolean)
+        {
+            box.SetValue(1, true);
+
+            Run();
+        }
+
+        return box.TryGetValue(0, out DataToken body) && body.TokenType == TokenType.String ? body.String : "";
+    }
+
+    public void Request(string url) => Dispatch(url, true);
+
+    public void RequestDirect(string url) => Dispatch(url, false);
+
     public void RequestPair(string first, string second)
     {
         Require(first);
         Require(second);
+    }
+
+    public bool Queue(string url) => Enqueue(url, false);
+
+    public bool QueueDirect(string url) => Enqueue(url, true);
+
+    public string Take() => forwardedBody != "" ? forwardedBody : StringField(forwarded, "response");
+
+    public string BodyOf(string url)
+    {
+        if (!bodies.TryGetValue(PayloadOf(url), out DataToken body)) return "";
+
+        return body.TokenType == TokenType.String ? body.String : "";
     }
 
     public void ForgetJumps()
@@ -164,30 +289,36 @@ public class CombineQueries : UdonSharpBehaviour
         jumps.Remove(PayloadOf(url));
     }
 
-        private void KeepJump(string url, int jump)
+    public string TakeRequests()
     {
-        if (jumps.ContainsKey(url)) { jumps.SetValue(url, jump); return; }
+        string all = outgoing;
 
-        string evicted = jumpRing[jumpRingAt];
+        outgoing = "";
 
-        if (evicted != null && evicted != "") jumps.Remove(evicted);
-
-        jumpRing[jumpRingAt] = url;
-        jumpRingAt = (jumpRingAt + 1) % MaxRemembered;
-
-        jumps.SetValue(url, jump);
+        return all;
     }
 
-                        public void Remember()
+    public string TakeResponses()
     {
-        if (busy) return;
+        string all = incoming;
 
-        LastError = "";
+        incoming = "";
 
-        Begin(false);
+        return all;
     }
 
-            private void Begin(bool reset)
+    public string TakeData()
+    {
+        string all = payloads;
+
+        payloads = "";
+
+        return all;
+    }
+
+    // ==== Подключение и кодовое слово ====
+
+    private void Begin(bool reset)
     {
         connectReset = reset;
 
@@ -195,8 +326,6 @@ public class CombineQueries : UdonSharpBehaviour
 
         StartCode(true);
     }
-
-        private bool connectReset;
 
     private void StartCode(bool chain)
     {
@@ -227,13 +356,55 @@ public class CombineQueries : UdonSharpBehaviour
         Load(PhaseVerify, VerifyQuery);
     }
 
-    public void Request(string url) => Dispatch(url, true);
+    private void SeedFromConnect(string json)
+    {
+        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
+        if (root.TokenType != TokenType.DataDictionary) return;
 
-    public bool Queue(string url) => Enqueue(url, false);
+        DataDictionary dict = root.DataDictionary;
 
-    public DataList Require(string url) => Ask(url, false);
+        SeedJumps = 0;
 
-        public DataList RequireDirect(string url) => Ask(url, true);
+        if (dict.TryGetValue("roots", out DataToken rootsTok) && rootsTok.TokenType == TokenType.DataList)
+        {
+            DataList list = rootsTok.DataList;
+            string[] r = new string[list.Count];
+            int n = 0;
+
+            for (int i = 0; i < list.Count; i++)
+                if (list.TryGetValue(i, out DataToken it) && it.TokenType == TokenType.String) { r[n] = it.String; n++; }
+
+            if (n == list.Count) roots = r;
+        }
+
+        signs = DictString(dict, "signs");
+        signPos = 0;
+
+        SeedJumpList(dict);
+        LearnFragmentList(dict);
+    }
+
+    private void SeedJumpList(DataDictionary dict)
+    {
+        if (!dict.TryGetValue("jumps", out DataToken seed) || seed.TokenType != TokenType.DataList) return;
+
+        DataList list = seed.DataList;
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (!list.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+
+            string url = DictString(item.DataDictionary, "url");
+            int jump = DictInt(item.DataDictionary, "jump");
+
+            if (url == "" || jump < 0) continue;
+
+            KeepJump(url, jump);
+            SeedJumps++;
+        }
+    }
+
+    // ==== Очередь и пачки ====
 
     private DataList Ask(string url, bool direct)
     {
@@ -243,7 +414,14 @@ public class CombineQueries : UdonSharpBehaviour
             ? had.DataList
             : new DataList();
 
-        if (box.Count == 0) box.Add("");
+        // Слот 0 - тело, слот 1 - отправлен ли набор, в котором едет этот адрес, слот 2 - номер
+        // запроса внутри своего vrequest, на котором тело приехало (0 - было до выпуска). Новый
+        // запрос всегда начинается неотправленным: выпустит его первый же Result по этой коробке.
+        if (box.Count == 0) { box.Add(""); box.Add(false); }
+        if (box.Count == 2) box.Add(0);
+
+        box.SetValue(1, false);
+        box.SetValue(2, 0);
 
         boxes.SetValue(key, box);
 
@@ -259,46 +437,6 @@ public class CombineQueries : UdonSharpBehaviour
 
         return box;
     }
-
-        private DataDictionary boxes = new DataDictionary();
-
-    private void Fill(string payload, string body)
-    {
-        if (!boxes.TryGetValue(payload, out DataToken had) || had.TokenType != TokenType.DataList) return;
-
-        had.DataList.SetValue(0, body);
-    }
-
-    public string Result(DataList box)
-    {
-        if (box == null || box.Count == 0) return "";
-
-        return box.TryGetValue(0, out DataToken body) && body.TokenType == TokenType.String ? body.String : "";
-    }
-
-                        private bool flush;
-
-        private bool pendingFlush;
-
-    private void Update()
-    {
-        if (!flush || busy || queued.Length == 0) return;
-
-        Run();
-    }
-
-    public void Flush()
-    {
-        if (!flush || queued.Length == 0) { pendingFlush = false; return; }
-
-        if (busy) { SendCustomEventDelayedSeconds(nameof(Flush), 0.25f); return; }
-
-        pendingFlush = false;
-
-        Run();
-    }
-
-    public bool QueueDirect(string url) => Enqueue(url, true);
 
     private bool Enqueue(string url, bool direct)
     {
@@ -320,15 +458,31 @@ public class CombineQueries : UdonSharpBehaviour
         return true;
     }
 
+    private void Update()
+    {
+        if (!flush || busy || queued.Length == 0) return;
 
+        Run();
+    }
 
-    private const int MaxQueued = 2048;
+    public void Flush()
+    {
+        if (!flush || queued.Length == 0) { pendingFlush = false; return; }
 
-    public void Run()
+        if (busy) { SendCustomEventDelayedSeconds(nameof(Flush), 0.25f); return; }
+
+        pendingFlush = false;
+
+        Run();
+    }
+
+    // Внутренняя отправка набора. Снаружи её не зовут: у мира есть Require и Result, и выпускает
+    // пачку именно Result.
+    private void Run()
     {
         if (busy || queued.Length == 0) return;
 
-                        flush = false;
+        flush = false;
 
         batch = queued;
         batchDirect = queuedDirect;
@@ -339,12 +493,17 @@ public class CombineQueries : UdonSharpBehaviour
         queuedDirect = new bool[0];
         done = new bool[batch.Length];
 
+        // Отсчёт номеров запросов идёт с выпуска. Адрес, который ещё ждёт тело с прошлого выпуска
+        // (перезапрос сторожа), отсчёт заново не начинает: его vrequest тот, первый.
+        for (int i = 0; i < batch.Length; i++)
+            if (!releasedAt.ContainsKey(PayloadOf(batch[i]))) releasedAt.SetValue(PayloadOf(batch[i]), TotalQueries);
+
         NextInBatch();
     }
 
-            private void NextInBatch()
+    private void NextInBatch()
     {
-                                int start = -1;
+        int start = -1;
 
         for (int i = 0; i < batch.Length; i++)
         {
@@ -359,7 +518,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (start >= 0) { SendRange(start, RangeMax); return; }
 
-                for (int i = 0; i < batch.Length; i++)
+        for (int i = 0; i < batch.Length; i++)
             if (!done[i]) { Dispatch(batch[i], !batchDirect[i]); return; }
 
         batch = new string[0];
@@ -367,383 +526,79 @@ public class CombineQueries : UdonSharpBehaviour
         Finish();
     }
 
-    private void SendRange(int first, int length)
+    private void Done()
     {
-        LastError = "";
-        forwarded = "";
-        forwardedBody = "";
-        pendingUrl = "";
-        LastQueries = 0;
-        LastJump = first;
-        busy = true;
+        busy = false;
+        phase = PhaseIdle;
 
-                        LastRoad = "hyper";
+        BatchQueries += LastQueries;
 
-        queueLen = 1;
-        queue = new int[1];
-        queueKind = new int[1];
-        queue[0] = (first * RangeMax + length - 1) * JumpSignValues + NextSign();
-        queueKind[0] = 5;
-        queuePos = 0;
-
-        SendNext();
-    }
-
-    private bool[] done = new bool[0];
-
-    private void TakeDebt(string json)
-    {
-        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
-        if (root.TokenType != TokenType.DataDictionary) return;
-
-        DataDictionary answer = root.DataDictionary;
-
-        LastPending = DictInt(answer, "pending");
-
-        if (LastPending < 0) LastPending = 0;
-
-        if (!answer.TryGetValue("ready", out DataToken list) || list.TokenType != TokenType.DataList) return;
-
-        DataList ready = list.DataList;
-
-                        DataDictionary touched = new DataDictionary();
-
-                DataDictionary bodyLines = new DataDictionary();
-
-        for (int i = 0; i < ready.Count; i++)
+        if (batch.Length > 0)
         {
-            if (!ready.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+            TakeBatch();
 
-            string url = PayloadOf(DictString(item.DataDictionary, "url"));
+            if (LastError == "") { NextInBatch(); return; }
 
-            if (url == "") continue;
-
-            string body = DictString(item.DataDictionary, "response");
-
-            bodies.SetValue(url, body);
-
-                                    Fill(url, body);
-
-            Mark(url);
-
-                        if (url == pendingUrl) forwardedBody = body;
-
-                                    int from = -1;
-
-            if (asking.TryGetValue(url, out DataToken owner) && owner.TokenType == TokenType.Int) from = owner.Int;
-
-                                    Named(url, from < 0 ? "vresponse" : "vresponse[" + from + "]");
-
-            string named = TailOf(url) + " " + body.Length + "b/" + DictInt(item.DataDictionary, "elapsedMs") + "ms";
-
-            if (from >= 0)
-            {
-                string was = touched.TryGetValue(from, out DataToken had) && had.TokenType == TokenType.String ? had.String : "";
-
-                touched.SetValue(from, was == "" ? named : was + ", " + named);
-
-                                                string kept = bodyLines.TryGetValue(from, out DataToken was2) && was2.TokenType == TokenType.String ? was2.String : "";
-                string shown = Cut(body);
-
-                bodyLines.SetValue(from, kept == "" ? shown : kept + " | " + shown);
-            }
-
-            SettleUrl(url);
+            batch = new string[0];
         }
 
-                        DataList ids = touched.GetKeys();
+        Finish();
 
-        for (int k = 0; k < ids.Count; k++)
-        {
-            if (!ids.TryGetValue(k, out DataToken id) || !touched.TryGetValue(id, out DataToken paid)) continue;
-
-            string shown = bodyLines.TryGetValue(id, out DataToken kept) && kept.TokenType == TokenType.String ? kept.String : "";
-
-            Report(id, paid.String, shown);
-        }
+        if (LastPending > 0) SendCustomEventDelayedSeconds(nameof(Settle), CreditDelay);
     }
 
-            private void Report(DataToken id, string paid, string shown)
+    private void TakeBatch()
     {
-        if (!openRequests.TryGetValue(id, out DataToken value) || value.TokenType != TokenType.DataList) return;
+        if (pendingUrl == "") return;
 
-        DataList record = value.DataList;
+        if (!bodies.ContainsKey(pendingUrl)) bodies.SetValue(pendingUrl, Take());
 
-        if (!record.TryGetValue(0, out DataToken kind) || kind.TokenType != TokenType.String) return;
-        if (!record.TryGetValue(1, out DataToken list) || list.TokenType != TokenType.DataList) return;
-        if (!record.TryGetValue(2, out DataToken flags) || flags.TokenType != TokenType.DataList) return;
-        if (!record.TryGetValue(3, out DataToken at) || at.TokenType != TokenType.Float) return;
+        Fill(pendingUrl, Take());
 
-        DataList urls = list.DataList;
-        DataList settled = flags.DataList;
-
-                if (record.TryGetValue(4, out DataToken hadPaid) && hadPaid.TokenType == TokenType.String)
-            record.SetValue(4, hadPaid.String == "" ? paid : hadPaid.String + ", " + paid);
-
-        if (record.TryGetValue(5, out DataToken hadData) && hadData.TokenType == TokenType.String && shown != "")
-            record.SetValue(5, hadData.String == "" ? shown : hadData.String + " | " + shown);
-
-                        string allShown = record.TryGetValue(5, out DataToken allData) && allData.TokenType == TokenType.String ? allData.String : shown;
-
-        int answers = record.TryGetValue(6, out DataToken had) && had.TokenType == TokenType.Int ? had.Int + 1 : 1;
-
-        record.SetValue(6, answers);
-
-        string owed = "";
-
-        for (int i = 0; i < urls.Count; i++)
-        {
-            if (settled.TryGetValue(i, out DataToken done) && done.TokenType == TokenType.Boolean && done.Boolean) continue;
-            if (!urls.TryGetValue(i, out DataToken url) || url.TokenType != TokenType.String) continue;
-
-            owed = owed == "" ? TailOf(url.String) : owed + ", " + TailOf(url.String);
-        }
-
-        string spent = (int)((Time.time - at.Float) * 1000f) + " ms";
-
-                                        string who = id.Int + kind.String;
-
-                                        string peek = shown == "" ? "" : "   " + (shown.Length <= Peek ? shown : shown.Substring(0, Peek) + "...");
-
-        Trace("response: " + who + " погашено [" + paid + "], ждём [" + (owed == "" ? "" : owed) + "]   " + spent + peek, false);
-
-        Data(who + " response [" + Joined(urls) + "]", shown);
-
-        if (owed != "") return;
-
-                        Trace("vresponse: " + who + " " + Joined(urls) + "   " + urls.Count + " urls за "
-            + answers + (answers == 1 ? " ответ" : " ответа") + "   " + spent, false);
-
-        Data(who + " vresponse [" + Joined(urls) + "]", allShown);
-
-        openRequests.Remove(id);
+        Mark(pendingUrl);
     }
 
-            public int TotalQueries;
-
-        public int LastPending;
-
-            private DataDictionary asking = new DataDictionary();
-
-        private string route = "";
-
-                                                    private DataDictionary openRequests = new DataDictionary();
-
-            private int vrequests;
-
-                        private string outgoing = "";
-    private string incoming = "";
-
-    public string TakeRequests()
+    private void Mark(string payload)
     {
-        string all = outgoing;
-
-        outgoing = "";
-
-        return all;
+        for (int i = 0; i < batch.Length; i++)
+            if (!done[i] && PayloadOf(batch[i]) == payload) { done[i] = true; return; }
     }
 
-    public string TakeResponses()
+    // Набор закрыт. Наружу об этом никто не сообщает: у мира есть Require и Result, и узнаёт он о
+    // готовности по непустой коробке. Событие-уведомление отсюда убрано - оно требовало подписки
+    // и цели, то есть третьего способа общаться с тулзой помимо этих двух.
+    private void Finish()
     {
-        string all = incoming;
-
-        incoming = "";
-
-        return all;
     }
 
-            private string payloads = "";
-
-    public string TakeData()
+    private void Fail(string reason)
     {
-        string all = payloads;
+        LastError = reason;
+        Errors++;
 
-        payloads = "";
+        Debug.LogError("CombineQueries: " + reason);
 
-        return all;
+        Done();
     }
 
-            private void Data(string who, string shown)
+    // ==== Коробки ====
+
+    private void Fill(string payload, string body)
     {
-        if (shown == "") return;
+        if (!boxes.TryGetValue(payload, out DataToken had) || had.TokenType != TokenType.DataList) return;
 
-        payloads = payloads == "" ? who + " " + shown : payloads + "\n" + who + " " + shown;
+        had.DataList.SetValue(0, body);
+
+        // Первое тело после выпуска: номер запроса внутри своего vrequest, на котором оно приехало.
+        // Запрос посчитан в Load ещё до отправки, поэтому ответ на первый запрос даёт ровно 1.
+        if (body == "" || !releasedAt.TryGetValue(payload, out DataToken from) || from.TokenType != TokenType.Int) return;
+
+        if (had.DataList.Count > 2) had.DataList.SetValue(2, TotalQueries - from.Int);
+
+        releasedAt.Remove(payload);
     }
 
-        private string Cut(string body)
-    {
-        string flat = body.Replace("\n", " ").Replace("\r", " ");
-
-        return flat.Length <= DataCut ? flat : flat.Substring(0, DataCut) + "...";
-    }
-
-    private const int DataCut = 160;
-
-        private const int Peek = 200;
-
-    private void Trace(string line, bool request)
-    {
-        if (request) outgoing = outgoing == "" ? line : outgoing + "\n" + line;
-        else incoming = incoming == "" ? line : incoming + "\n" + line;
-
-                        Debug.Log("[CombineQueries] " + line);
-    }
-
-    private int OpenRequest(DataList urls)
-    {
-        if (urls.Count == 0) return -1;
-
-        int id = ++vrequests;
-
-        DataList settled = new DataList();
-
-        for (int i = 0; i < urls.Count; i++) settled.Add(false);
-
-        DataList record = new DataList();
-
-        record.Add(route);
-        record.Add(urls);
-        record.Add(settled);
-
-                                record.Add(lastLoadAt);
-
-                record.Add("");
-        record.Add("");
-        record.Add(0);
-
-        openRequests.SetValue(id, record);
-
-                for (int i = 0; i < urls.Count; i++)
-            if (urls.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String)
-                asking.SetValue(url.String, id);
-
-        Trace("vrequest: " + id + route + " " + Joined(urls), true);
-
-        return id;
-    }
-
-    private void SettleUrl(string payload)
-    {
-        DataList ids = openRequests.GetKeys();
-
-        for (int k = 0; k < ids.Count; k++)
-        {
-            if (!ids.TryGetValue(k, out DataToken id)) continue;
-            if (!openRequests.TryGetValue(id, out DataToken value) || value.TokenType != TokenType.DataList) continue;
-
-            DataList record = value.DataList;
-
-            if (!record.TryGetValue(1, out DataToken list) || list.TokenType != TokenType.DataList) continue;
-            if (!record.TryGetValue(2, out DataToken flags) || flags.TokenType != TokenType.DataList) continue;
-
-            DataList urls = list.DataList;
-            DataList settled = flags.DataList;
-
-            for (int i = 0; i < urls.Count; i++)
-                if (urls.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String && url.String == payload)
-                    settled.SetValue(i, true);
-        }
-    }
-
-
-    private string Joined(DataList urls)
-    {
-        string all = "";
-
-        for (int i = 0; i < urls.Count; i++)
-        {
-            if (!urls.TryGetValue(i, out DataToken url) || url.TokenType != TokenType.String) continue;
-
-            all = all == "" ? TailOf(url.String) : all + ", " + TailOf(url.String);
-        }
-
-        return all;
-    }
-
-    private void TakeSent(string json)
-    {
-        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
-        if (root.TokenType != TokenType.DataDictionary) return;
-        if (!root.DataDictionary.TryGetValue("sent", out DataToken list) || list.TokenType != TokenType.DataList) return;
-
-        DataList sent = list.DataList;
-
-        DataList asked = new DataList();
-
-        for (int i = 0; i < sent.Count; i++)
-        {
-            if (!sent.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
-
-            string url = DictString(item.DataDictionary, "url");
-            int jump = DictInt(item.DataDictionary, "jump");
-
-            if (url == "" || jump < 0) continue;
-
-            KeepJump(PayloadOf(url), jump);
-
-                                                Mark(PayloadOf(url));
-
-            Named(url, "vrequest[" + TotalQueries + "] hyper");
-
-            asked.Add(PayloadOf(url));
-        }
-
-        OpenRequest(asked);
-    }
-
-    private void Named(string url, string mark)
-    {
-        string named = TailOf(url) + " " + mark;
-
-        LastSent = LastSent == "" ? named : LastSent + ", " + named;
-    }
-
-    private string TailOf(string url)
-    {
-        string payload = PayloadOf(url);
-        int cut = payload.IndexOf("/");
-
-        return cut < 0 || cut + 1 >= payload.Length ? payload : payload.Substring(cut + 1);
-    }
-
-    public void Settle()
-    {
-        if (busy) return;
-
-        LastError = "";
-        forwarded = "";
-
-                        pendingUrl = "";
-        LastQueries = 0;
-        busy = true;
-
-        queueLen = 1;
-        queue = new int[1];
-        queueKind = new int[1];
-        queue[0] = NextSign();
-        queueKind[0] = 7;
-        queuePos = 0;
-
-        SendNext();
-    }
-
-    public string BodyOf(string url)
-    {
-        if (!bodies.TryGetValue(PayloadOf(url), out DataToken body)) return "";
-
-        return body.TokenType == TokenType.String ? body.String : "";
-    }
-
-        public int BatchQueries;
-
-    private string[] queued = new string[0];
-    private string[] batch = new string[0];
-    private DataDictionary bodies = new DataDictionary();
-
-
-    public void RequestDirect(string url) => Dispatch(url, false);
-
-                                                    public bool Busy() => busy;
+    // ==== Отправка ====
 
     private void Dispatch(string url, bool withFragments)
     {
@@ -767,10 +622,9 @@ public class CombineQueries : UdonSharpBehaviour
 
         LastError = "";
         forwarded = "";
+        forwardedBody = "";
 
-                        forwardedBody = "";
-
-                        if (batch.Length == 0) LastSent = "";
+        if (batch.Length == 0) LastSent = "";
 
         pendingUrl = payload;
         LastUrl = url;
@@ -783,10 +637,6 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (withFragments) SendCombine(payload); else SendDirect(payload);
     }
-
-            public string Take() => forwardedBody != "" ? forwardedBody : StringField(forwarded, "response");
-
-    private string forwardedBody = "";
 
     private string PayloadOf(string url)
     {
@@ -816,7 +666,41 @@ public class CombineQueries : UdonSharpBehaviour
         return "";
     }
 
-                    private void SendCombine(string payload)
+    private int[] SymbolsOf(string url)
+    {
+        int[] buffer = new int[url.Length];
+        int count = 0, position = 0;
+
+        while (position < url.Length)
+        {
+            int best = -1, bestLength = 0;
+
+            for (int f = 0; fragments && f < roots.Length; f++)
+            {
+                if (roots[f].Length <= bestLength || position + roots[f].Length > url.Length) continue;
+                if (url.Substring(position, roots[f].Length) != roots[f]) continue;
+
+                best = f;
+                bestLength = roots[f].Length;
+            }
+
+            int letter = best < 0 ? Alphabet.IndexOf(url[position]) : -1;
+
+            if (best < 0 && letter < 0) return null;
+
+            buffer[count] = best < 0 ? letter : Alphabet.Length + best;
+            position += best < 0 ? 1 : bestLength;
+            count++;
+        }
+
+        int[] symbols = new int[count];
+
+        for (int i = 0; i < count; i++) symbols[i] = buffer[i];
+
+        return symbols;
+    }
+
+    private void SendCombine(string payload)
     {
         int[] q = new int[MaxChunks + 1];
         int[] k = new int[MaxChunks + 1];
@@ -836,7 +720,7 @@ public class CombineQueries : UdonSharpBehaviour
                 {
                     if (cachedFragments[i].Length <= flen || pos + cachedFragments[i].Length > payload.Length) continue;
 
-                                                            if (cachedFragments[i][0] != here) continue;
+                    if (cachedFragments[i][0] != here) continue;
 
                     if (payload.Substring(pos, cachedFragments[i].Length) != cachedFragments[i]) continue;
 
@@ -846,11 +730,11 @@ public class CombineQueries : UdonSharpBehaviour
 
                 if (fid >= 0)
                 {
-                                                                                int capacity = dfaSize * pageCount;
+                    int capacity = dfaSize * pageCount;
                     int hop = fid / capacity;
                     int anchor = fid - hop * capacity;
 
-                                                            int plain = (flen + RuneSize - 1) / RuneSize;
+                    int plain = (flen + RuneSize - 1) / RuneSize;
                     int cost = hop > 0 ? 2 : 1;
 
                     if (hop < hopCount && cost <= plain && count + cost <= MaxChunks)
@@ -888,20 +772,20 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (count >= MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
 
-                                                if (tail == 0 && count > 0 && k[count - 1] == 1 && q[count - 1] < CloseLimit) k[count - 1] = 8;
+        if (tail == 0 && count > 0 && k[count - 1] == 1 && q[count - 1] < CloseLimit) k[count - 1] = 8;
         else { q[count] = tail; k[count] = 2; count++; }
 
-                        int jump = JumpOf(payload);
+        int jump = JumpOf(payload);
 
-                        if (jump < 0 && !headTried && SendHead(payload)) return;
+        if (jump < 0 && !headTried && SendHead(payload)) return;
 
         LastJump = -1;
 
         int skip = 0;
 
-                                if (jump >= 0 && jump < MaxJumps) skip = count;
+        if (jump >= 0 && jump < MaxJumps) skip = count;
 
-                                        LastRoad = headTried
+        LastRoad = headTried
             ? (skip > 0 ? "head/hyper" : "head/combine")
             : (skip > 0 ? "hyper" : "combine");
 
@@ -925,7 +809,7 @@ public class CombineQueries : UdonSharpBehaviour
         SendNext();
     }
 
-            private int NextSymbol(string url, int pos, out int len)
+    private int NextSymbol(string url, int pos, out int len)
     {
         int best = -1, bestLen = 0;
 
@@ -997,11 +881,101 @@ public class CombineQueries : UdonSharpBehaviour
         SendNext();
     }
 
+    private bool SendHead(string payload)
+    {
+        int cut = payload.LastIndexOf("/");
+
+        if (cut < 0 || cut + 1 >= payload.Length) return false;
+
+        string differs = payload.Substring(cut + 1);
+        string common = payload.Substring(0, cut + 1);
+
+        int piece = -1;
+
+        for (int i = 0; i < cachedFragments.Length; i++)
+            if (cachedFragments[i] == differs && cachedFragIds[i] < HeadLimit) { piece = cachedFragIds[i]; break; }
+
+        if (piece < 0) return false;
+
+        int found = -1;
+
+        DataList keys = jumps.GetKeys();
+
+        for (int i = 0; i < keys.Count; i++)
+        {
+            if (!keys.TryGetValue(i, out DataToken key) || key.TokenType != TokenType.String) continue;
+            if (key.String.Length <= cut || key.String.Substring(0, cut + 1) != common) continue;
+
+            found = JumpOf(key.String);
+
+            if (found >= 0) break;
+        }
+
+        if (found < 0) return false;
+
+        headTried = true;
+        LastRoad = "head";
+
+        queueLen = 1;
+        queue = new int[1];
+        queueKind = new int[1];
+        queue[0] = (piece * HeadBases + (found % HeadBases)) * JumpSignValues + NextSign();
+        queueKind[0] = 6;
+        queuePos = 0;
+
+        SendNext();
+
+        return true;
+    }
+
+    private void SendRange(int first, int length)
+    {
+        LastError = "";
+        forwarded = "";
+        forwardedBody = "";
+        pendingUrl = "";
+        LastQueries = 0;
+        LastJump = first;
+        busy = true;
+
+        LastRoad = "hyper";
+
+        queueLen = 1;
+        queue = new int[1];
+        queueKind = new int[1];
+        queue[0] = (first * RangeMax + length - 1) * JumpSignValues + NextSign();
+        queueKind[0] = 5;
+        queuePos = 0;
+
+        SendNext();
+    }
+
+    public void Settle()
+    {
+        if (busy) return;
+
+        LastError = "";
+        forwarded = "";
+
+        pendingUrl = "";
+        LastQueries = 0;
+        busy = true;
+
+        queueLen = 1;
+        queue = new int[1];
+        queueKind = new int[1];
+        queue[0] = NextSign();
+        queueKind[0] = 7;
+        queuePos = 0;
+
+        SendNext();
+    }
+
     private void SendNext()
     {
         int kind = queueKind[queuePos];
 
-                route = kind == 0 || kind == 1 || kind == 3 ? "/c"
+        route = kind == 0 || kind == 1 || kind == 3 ? "/c"
               : kind == 4 || kind == 5 ? "/h"
               : kind == 6 ? "/hd"
               : kind == 7 ? "/tc"
@@ -1012,24 +986,24 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (kind == 1) { Load(PhaseFragment, VfPool[queue[queuePos]]); return; }
 
-                if (kind == 3) { Load(PhaseFragment, HopPool[queue[queuePos]]); return; }
+        if (kind == 3) { Load(PhaseFragment, HopPool[queue[queuePos]]); return; }
 
-                                if (kind == 4) { Load(PhaseJump, RangePool[(queue[queuePos] * RangeMax + RangeMax - 1) * JumpSignValues + NextSign()]); return; }
+        if (kind == 4) { Load(PhaseJump, RangePool[(queue[queuePos] * RangeMax + RangeMax - 1) * JumpSignValues + NextSign()]); return; }
 
-                if (kind == 5) { Load(PhaseJump, RangePool[queue[queuePos]]); return; }
+        if (kind == 5) { Load(PhaseJump, RangePool[queue[queuePos]]); return; }
 
-                if (kind == 6) { Load(PhaseHead, HeadPool[queue[queuePos]]); return; }
+        if (kind == 6) { Load(PhaseHead, HeadPool[queue[queuePos]]); return; }
 
-                if (kind == 7) { Load(PhaseCredit, CreditPool[queue[queuePos]]); return; }
+        if (kind == 7) { Load(PhaseCredit, CreditPool[queue[queuePos]]); return; }
 
-                if (kind == 8) { Load(PhaseTail, ClosePool[queue[queuePos] * SignValues + NextSign()]); return; }
+        if (kind == 8) { Load(PhaseTail, ClosePool[queue[queuePos] * SignValues + NextSign()]); return; }
 
-                if (!fragments) { Load(PhaseTail, DirectTailPool[queue[queuePos]]); return; }
+        if (!fragments) { Load(PhaseTail, DirectTailPool[queue[queuePos]]); return; }
 
         Load(PhaseTail, TailPool[queue[queuePos] * SignValues + NextSign()]);
     }
 
-        private int NextSign()
+    private int NextSign()
     {
         if (signs.Length == 0) return 0;
 
@@ -1040,15 +1014,57 @@ public class CombineQueries : UdonSharpBehaviour
         return sign;
     }
 
+    private void Load(int nextPhase, VRCUrl url)
+    {
+        phase = nextPhase;
+
+        LastQueries++;
+        TotalQueries++;
+        lastLoadAt = Time.time;
+
+        string at = nextPhase == PhaseConnect ? "/connect"
+                  : nextPhase == PhaseCode ? "/k"
+                  : nextPhase == PhaseVerify ? "/kf"
+                  : route;
+
+        if (nextPhase == PhaseTail && pendingUrl != "")
+        {
+            DataList one = new DataList();
+
+            one.Add(pendingUrl);
+
+            OpenRequest(one);
+        }
+        else if (nextPhase != PhaseJump && nextPhase != PhaseHead)
+        {
+            Trace("request: " + TotalQueries + at, true);
+        }
+
+        SendCustomEventDelayedSeconds(nameof(OnLoadTimeout), Timeout);
+
+        VRCStringDownloader.LoadUrl(url, this);
+    }
+
+    public void OnLoadTimeout()
+    {
+        if (!busy) return;
+
+        if (Time.time - lastLoadAt < Timeout - 1f) return;
+
+        Fail("no answer in " + Timeout + "s on phase " + phase + ", query " + LastQueries
+            + " of " + queueLen + " for " + LastUrl + " - url blocked by the SDK or server unreachable");
+    }
+
+    // ==== Ответы ====
+
     public override void OnStringLoadSuccess(IVRCStringDownload response)
     {
-                                if (phase == PhaseJump) TakeSent(response.Result);
+        if (phase == PhaseJump) TakeSent(response.Result);
         else if (phase == PhaseHead) headTaken = TakeHead(response.Result);
 
-                        
         TakeDebt(response.Result);
 
-                if (phase == PhaseCredit) { LastUrls = 0; Done(); return; }
+        if (phase == PhaseCredit) { LastUrls = 0; Done(); return; }
 
         if (phase == PhaseCode) { queuePos++; SendCode(); return; }
 
@@ -1066,17 +1082,17 @@ public class CombineQueries : UdonSharpBehaviour
 
             SeedFromConnect(response.Result);
 
-                                    Done();
+            Done();
             return;
         }
 
         if (phase == PhaseChunks || phase == PhaseFragment) { queuePos++; SendNext(); return; }
 
-                        if (phase == PhaseHead)
+        if (phase == PhaseHead)
         {
-                        int taken = headTaken;
+            int taken = headTaken;
 
-                                    if (forwardedBody != "")
+            if (forwardedBody != "")
             {
                 LastChunks = 0;
                 LastL2 = 0;
@@ -1090,7 +1106,7 @@ public class CombineQueries : UdonSharpBehaviour
                 return;
             }
 
-                                    if (taken >= 0 && JumpOf(pendingUrl) >= 0)
+            if (taken >= 0 && JumpOf(pendingUrl) >= 0)
             {
                 SendCombine(pendingUrl);
                 return;
@@ -1110,15 +1126,15 @@ public class CombineQueries : UdonSharpBehaviour
                 return;
             }
 
-                                                string kept = StringField(response.Result, "kept");
+            string kept = StringField(response.Result, "kept");
 
             SendCombine(kept == "" ? pendingUrl : pendingUrl.Substring(0, pendingUrl.Length - kept.Length));
             return;
         }
 
-                if (phase == PhaseJump)
+        if (phase == PhaseJump)
         {
-                                    if (!BoolField(response.Result, "known"))
+            if (!BoolField(response.Result, "known"))
             {
                 jumps.Remove(pendingUrl);
 
@@ -1155,8 +1171,7 @@ public class CombineQueries : UdonSharpBehaviour
             forwardedBody = "";
             forwarded = response.Result;
 
-                                    Named(pendingUrl, "vrequest[" + TotalQueries + "] " + LastRoad);
-
+            Named(pendingUrl, "vrequest[" + TotalQueries + "] " + LastRoad);
 
             Done();
             return;
@@ -1174,110 +1189,38 @@ public class CombineQueries : UdonSharpBehaviour
         Fail((result.ErrorCode == 0 ? "host unreachable (server not running?), " : "") + result.Error);
     }
 
-                                private const float Timeout = 60f;
-
-    private float lastLoadAt;
-
-    private void Load(int nextPhase, VRCUrl url)
+    private void TakeSent(string json)
     {
-        phase = nextPhase;
+        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
+        if (root.TokenType != TokenType.DataDictionary) return;
+        if (!root.DataDictionary.TryGetValue("sent", out DataToken list) || list.TokenType != TokenType.DataList) return;
 
-        LastQueries++;
-        TotalQueries++;
-        lastLoadAt = Time.time;
+        DataList sent = list.DataList;
 
-                                                        string at = nextPhase == PhaseConnect ? "/connect"
-                  : nextPhase == PhaseCode ? "/k"
-                  : nextPhase == PhaseVerify ? "/kf"
-                  : route;
+        DataList asked = new DataList();
 
-        if (nextPhase == PhaseTail && pendingUrl != "")
+        for (int i = 0; i < sent.Count; i++)
         {
-            DataList one = new DataList();
+            if (!sent.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
 
-            one.Add(pendingUrl);
+            string url = DictString(item.DataDictionary, "url");
+            int jump = DictInt(item.DataDictionary, "jump");
 
-            OpenRequest(one);
-        }
-        else if (nextPhase != PhaseJump && nextPhase != PhaseHead)
-        {
-            Trace("request: " + TotalQueries + at, true);
+            if (url == "" || jump < 0) continue;
+
+            KeepJump(PayloadOf(url), jump);
+
+            Mark(PayloadOf(url));
+
+            Named(url, "vrequest[" + TotalQueries + "] hyper");
+
+            asked.Add(PayloadOf(url));
         }
 
-        SendCustomEventDelayedSeconds(nameof(OnLoadTimeout), Timeout);
-
-        VRCStringDownloader.LoadUrl(url, this);
+        OpenRequest(asked);
     }
 
-                    public void OnLoadTimeout()
-    {
-        if (!busy) return;
-
-        if (Time.time - lastLoadAt < Timeout - 1f) return;
-
-        Fail("no answer in " + Timeout + "s on phase " + phase + ", query " + LastQueries
-            + " of " + queueLen + " for " + LastUrl + " - url blocked by the SDK or server unreachable");
-    }
-
-        private void RememberChain(int leaf)
-    {
-        if (leaf < 0 || pendingUrl == "") return;
-
-        KeepJump(pendingUrl, leaf);
-    }
-
-                        private bool SendHead(string payload)
-    {
-        int cut = payload.LastIndexOf("/");
-
-        if (cut < 0 || cut + 1 >= payload.Length) return false;
-
-                string differs = payload.Substring(cut + 1);
-        string common = payload.Substring(0, cut + 1);
-
-        int piece = -1;
-
-        for (int i = 0; i < cachedFragments.Length; i++)
-            if (cachedFragments[i] == differs && cachedFragIds[i] < HeadLimit) { piece = cachedFragIds[i]; break; }
-
-        if (piece < 0) return false;
-
-                        int found = -1;
-
-        DataList keys = jumps.GetKeys();
-
-        for (int i = 0; i < keys.Count; i++)
-        {
-            if (!keys.TryGetValue(i, out DataToken key) || key.TokenType != TokenType.String) continue;
-            if (key.String.Length <= cut || key.String.Substring(0, cut + 1) != common) continue;
-
-            found = JumpOf(key.String);
-
-            if (found >= 0) break;
-        }
-
-        if (found < 0) return false;
-
-        headTried = true;
-        LastRoad = "head";
-
-        queueLen = 1;
-        queue = new int[1];
-        queueKind = new int[1];
-        queue[0] = (piece * HeadBases + (found % HeadBases)) * JumpSignValues + NextSign();
-        queueKind[0] = 6;
-        queuePos = 0;
-
-        SendNext();
-
-        return true;
-    }
-
-            private bool headTried;
-
-            private int headTaken;
-
-                    private int TakeHead(string json)
+    private int TakeHead(string json)
     {
         if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return -1;
         if (root.TokenType != TokenType.DataDictionary) return -1;
@@ -1308,7 +1251,7 @@ public class CombineQueries : UdonSharpBehaviour
             if (url == mine) ours = found.Count;
         }
 
-                        int head = OpenRequest(asked);
+        int head = OpenRequest(asked);
 
         for (int i = 0; i < asked.Count; i++)
             if (asked.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String) SettleUrl(url.String);
@@ -1318,123 +1261,135 @@ public class CombineQueries : UdonSharpBehaviour
         return ours;
     }
 
-                private int JumpOf(string url)
-    {
-        if (!jumps.TryGetValue(url, out DataToken value)) return -1;
-
-        return value.TokenType == TokenType.Int ? value.Int : -1;
-    }
-
-    private void Done()
-    {
-        busy = false;
-        phase = PhaseIdle;
-
-        BatchQueries += LastQueries;
-
-        if (batch.Length > 0)
-        {
-            TakeBatch();
-
-            if (LastError == "") { NextInBatch(); return; }
-
-            batch = new string[0];
-        }
-
-        Finish();
-
-        if (LastPending > 0) SendCustomEventDelayedSeconds(nameof(Settle), CreditDelay);
-    }
-
-    private const float CreditDelay = 0.5f;
-
-    private void TakeBatch()
-    {
-        if (pendingUrl == "") return;
-
-        if (!bodies.ContainsKey(pendingUrl)) bodies.SetValue(pendingUrl, Take());
-
-        Fill(pendingUrl, Take());
-
-        Mark(pendingUrl);
-    }
-
-    private void Mark(string payload)
-    {
-        for (int i = 0; i < batch.Length; i++)
-            if (!done[i] && PayloadOf(batch[i]) == payload) { done[i] = true; return; }
-    }
-
-    private void Finish()
-    {
-        if (target == null || onDoneEvent == "")
-        {
-            Debug.Log("[CombineQueries] done (target is not assigned), queries " + LastQueries + ", error: " + (LastError == "" ? "none" : LastError));
-            return;
-        }
-
-        target.SendCustomEvent(onDoneEvent);
-    }
-
-    private void Fail(string reason)
-    {
-        LastError = reason;
-        Errors++;
-
-        Debug.LogError("CombineQueries: " + reason);
-
-        Done();
-    }
-
-    private void SeedFromConnect(string json)
+    private void TakeDebt(string json)
     {
         if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
         if (root.TokenType != TokenType.DataDictionary) return;
 
-        DataDictionary dict = root.DataDictionary;
+        DataDictionary answer = root.DataDictionary;
 
-        SeedJumps = 0;
+        LastPending = DictInt(answer, "pending");
 
-                        if (dict.TryGetValue("roots", out DataToken rootsTok) && rootsTok.TokenType == TokenType.DataList)
+        if (LastPending < 0) LastPending = 0;
+
+        if (!answer.TryGetValue("ready", out DataToken list) || list.TokenType != TokenType.DataList) return;
+
+        DataList ready = list.DataList;
+
+        DataDictionary touched = new DataDictionary();
+
+        DataDictionary bodyLines = new DataDictionary();
+
+        for (int i = 0; i < ready.Count; i++)
         {
-            DataList list = rootsTok.DataList;
-            string[] r = new string[list.Count];
-            int n = 0;
+            if (!ready.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
 
-            for (int i = 0; i < list.Count; i++)
-                if (list.TryGetValue(i, out DataToken it) && it.TokenType == TokenType.String) { r[n] = it.String; n++; }
+            string url = PayloadOf(DictString(item.DataDictionary, "url"));
 
-            if (n == list.Count) roots = r;
+            if (url == "") continue;
+
+            string body = DictString(item.DataDictionary, "response");
+
+            bodies.SetValue(url, body);
+
+            Fill(url, body);
+
+            Mark(url);
+
+            if (url == pendingUrl) forwardedBody = body;
+
+            int from = -1;
+
+            if (asking.TryGetValue(url, out DataToken owner) && owner.TokenType == TokenType.Int) from = owner.Int;
+
+            Named(url, from < 0 ? "vresponse" : "vresponse[" + from + "]");
+
+            string named = TailOf(url) + " " + body.Length + "b/" + DictInt(item.DataDictionary, "elapsedMs") + "ms";
+
+            if (from >= 0)
+            {
+                string was = touched.TryGetValue(from, out DataToken had) && had.TokenType == TokenType.String ? had.String : "";
+
+                touched.SetValue(from, was == "" ? named : was + ", " + named);
+
+                string kept = bodyLines.TryGetValue(from, out DataToken was2) && was2.TokenType == TokenType.String ? was2.String : "";
+                string shown = Cut(body);
+
+                bodyLines.SetValue(from, kept == "" ? shown : kept + " | " + shown);
+            }
+
+            SettleUrl(url);
         }
 
-                        signs = DictString(dict, "signs");
-        signPos = 0;
+        DataList ids = touched.GetKeys();
 
-        SeedJumpList(dict);
-        LearnFragmentList(dict);
+        for (int k = 0; k < ids.Count; k++)
+        {
+            if (!ids.TryGetValue(k, out DataToken id) || !touched.TryGetValue(id, out DataToken paid)) continue;
+
+            string shown = bodyLines.TryGetValue(id, out DataToken kept) && kept.TokenType == TokenType.String ? kept.String : "";
+
+            Report(id, paid.String, shown);
+        }
     }
 
-            private void SeedJumpList(DataDictionary dict)
+    private void Report(DataToken id, string paid, string shown)
     {
-        if (!dict.TryGetValue("jumps", out DataToken seed) || seed.TokenType != TokenType.DataList) return;
+        if (!openRequests.TryGetValue(id, out DataToken value) || value.TokenType != TokenType.DataList) return;
 
-        DataList list = seed.DataList;
+        DataList record = value.DataList;
 
-        for (int i = 0; i < list.Count; i++)
+        if (!record.TryGetValue(0, out DataToken kind) || kind.TokenType != TokenType.String) return;
+        if (!record.TryGetValue(1, out DataToken list) || list.TokenType != TokenType.DataList) return;
+        if (!record.TryGetValue(2, out DataToken flags) || flags.TokenType != TokenType.DataList) return;
+        if (!record.TryGetValue(3, out DataToken at) || at.TokenType != TokenType.Float) return;
+
+        DataList urls = list.DataList;
+        DataList settled = flags.DataList;
+
+        if (record.TryGetValue(4, out DataToken hadPaid) && hadPaid.TokenType == TokenType.String)
+            record.SetValue(4, hadPaid.String == "" ? paid : hadPaid.String + ", " + paid);
+
+        if (record.TryGetValue(5, out DataToken hadData) && hadData.TokenType == TokenType.String && shown != "")
+            record.SetValue(5, hadData.String == "" ? shown : hadData.String + " | " + shown);
+
+        string allShown = record.TryGetValue(5, out DataToken allData) && allData.TokenType == TokenType.String ? allData.String : shown;
+
+        int answers = record.TryGetValue(6, out DataToken had) && had.TokenType == TokenType.Int ? had.Int + 1 : 1;
+
+        record.SetValue(6, answers);
+
+        string owed = "";
+
+        for (int i = 0; i < urls.Count; i++)
         {
-            if (!list.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+            if (settled.TryGetValue(i, out DataToken done) && done.TokenType == TokenType.Boolean && done.Boolean) continue;
+            if (!urls.TryGetValue(i, out DataToken url) || url.TokenType != TokenType.String) continue;
 
-            string url = DictString(item.DataDictionary, "url");
-            int jump = DictInt(item.DataDictionary, "jump");
-
-            if (url == "" || jump < 0) continue;
-
-            KeepJump(url, jump);
-            SeedJumps++;
+            owed = owed == "" ? TailOf(url.String) : owed + ", " + TailOf(url.String);
         }
+
+        string spent = (int)((Time.time - at.Float) * 1000f) + " ms";
+
+        string who = id.Int + kind.String;
+
+        string peek = shown == "" ? "" : "   " + (shown.Length <= Peek ? shown : shown.Substring(0, Peek) + "...");
+
+        Trace("response: " + who + " погашено [" + paid + "], ждём [" + (owed == "" ? "" : owed) + "]   " + spent + peek, false);
+
+        Data(who + " response [" + Joined(urls) + "]", shown);
+
+        if (owed != "") return;
+
+        Trace("vresponse: " + who + " " + Joined(urls) + "   " + urls.Count + " urls за "
+            + answers + (answers == 1 ? " ответ" : " ответа") + "   " + spent, false);
+
+        Data(who + " vresponse [" + Joined(urls) + "]", allShown);
+
+        openRequests.Remove(id);
     }
 
-        private void LearnFragments(string json)
+    private void LearnFragments(string json)
     {
         if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
         if (root.TokenType != TokenType.DataDictionary) return;
@@ -1442,7 +1397,7 @@ public class CombineQueries : UdonSharpBehaviour
         LearnFragmentList(root.DataDictionary);
     }
 
-                private void LearnFragmentList(DataDictionary dict)
+    private void LearnFragmentList(DataDictionary dict)
     {
         if (!dict.TryGetValue("fragments", out DataToken fragments) || fragments.TokenType != TokenType.DataList) return;
 
@@ -1464,9 +1419,9 @@ public class CombineQueries : UdonSharpBehaviour
             int id = DictInt(item.DataDictionary, "id");
             string text = DictString(item.DataDictionary, "text");
 
-                                    if (id < 0 || text == "") continue;
+            if (id < 0 || text == "") continue;
 
-                        bool known = false;
+            bool known = false;
 
             for (int j = 0; j < have; j++) if (ids[j] == id) { known = true; break; }
 
@@ -1479,7 +1434,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (n == texts.Length) { cachedFragments = texts; cachedFragIds = ids; return; }
 
-                string[] fitTexts = new string[n];
+        string[] fitTexts = new string[n];
         int[] fitIds = new int[n];
 
         for (int i = 0; i < n; i++) { fitTexts[i] = texts[i]; fitIds[i] = ids[i]; }
@@ -1487,6 +1442,145 @@ public class CombineQueries : UdonSharpBehaviour
         cachedFragments = fitTexts;
         cachedFragIds = fitIds;
     }
+
+    private void RememberChain(int leaf)
+    {
+        if (leaf < 0 || pendingUrl == "") return;
+
+        KeepJump(pendingUrl, leaf);
+    }
+
+    private void KeepJump(string url, int jump)
+    {
+        if (jumps.ContainsKey(url)) { jumps.SetValue(url, jump); return; }
+
+        string evicted = jumpRing[jumpRingAt];
+
+        if (evicted != null && evicted != "") jumps.Remove(evicted);
+
+        jumpRing[jumpRingAt] = url;
+        jumpRingAt = (jumpRingAt + 1) % MaxRemembered;
+
+        jumps.SetValue(url, jump);
+    }
+
+    private int JumpOf(string url)
+    {
+        if (!jumps.TryGetValue(url, out DataToken value)) return -1;
+
+        return value.TokenType == TokenType.Int ? value.Int : -1;
+    }
+
+    // ==== Лог ====
+
+    private int OpenRequest(DataList urls)
+    {
+        if (urls.Count == 0) return -1;
+
+        int id = ++vrequests;
+
+        DataList settled = new DataList();
+
+        for (int i = 0; i < urls.Count; i++) settled.Add(false);
+
+        DataList record = new DataList();
+
+        record.Add(route);
+        record.Add(urls);
+        record.Add(settled);
+
+        record.Add(lastLoadAt);
+
+        record.Add("");
+        record.Add("");
+        record.Add(0);
+
+        openRequests.SetValue(id, record);
+
+        for (int i = 0; i < urls.Count; i++)
+            if (urls.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String)
+                asking.SetValue(url.String, id);
+
+        Trace("vrequest: " + id + route + " " + Joined(urls), true);
+
+        return id;
+    }
+
+    private void SettleUrl(string payload)
+    {
+        DataList ids = openRequests.GetKeys();
+
+        for (int k = 0; k < ids.Count; k++)
+        {
+            if (!ids.TryGetValue(k, out DataToken id)) continue;
+            if (!openRequests.TryGetValue(id, out DataToken value) || value.TokenType != TokenType.DataList) continue;
+
+            DataList record = value.DataList;
+
+            if (!record.TryGetValue(1, out DataToken list) || list.TokenType != TokenType.DataList) continue;
+            if (!record.TryGetValue(2, out DataToken flags) || flags.TokenType != TokenType.DataList) continue;
+
+            DataList urls = list.DataList;
+            DataList settled = flags.DataList;
+
+            for (int i = 0; i < urls.Count; i++)
+                if (urls.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String && url.String == payload)
+                    settled.SetValue(i, true);
+        }
+    }
+
+    private void Trace(string line, bool request)
+    {
+        if (request) outgoing = outgoing == "" ? line : outgoing + "\n" + line;
+        else incoming = incoming == "" ? line : incoming + "\n" + line;
+
+        Debug.Log("[CombineQueries] " + line);
+    }
+
+    private void Data(string who, string shown)
+    {
+        if (shown == "") return;
+
+        payloads = payloads == "" ? who + " " + shown : payloads + "\n" + who + " " + shown;
+    }
+
+    private string Cut(string body)
+    {
+        string flat = body.Replace("\n", " ").Replace("\r", " ");
+
+        return flat.Length <= DataCut ? flat : flat.Substring(0, DataCut) + "...";
+    }
+
+    private string Joined(DataList urls)
+    {
+        string all = "";
+
+        for (int i = 0; i < urls.Count; i++)
+        {
+            if (!urls.TryGetValue(i, out DataToken url) || url.TokenType != TokenType.String) continue;
+
+            all = all == "" ? TailOf(url.String) : all + ", " + TailOf(url.String);
+        }
+
+        return all;
+    }
+
+    private void Named(string url, string mark)
+    {
+        string named = TailOf(url) + " " + mark;
+
+        LastSent = LastSent == "" ? named : LastSent + ", " + named;
+    }
+
+    private string TailOf(string url)
+    {
+        string payload = PayloadOf(url);
+        int cut = payload.IndexOf("/");
+
+        return cut < 0 || cut + 1 >= payload.Length ? payload : payload.Substring(cut + 1);
+    }
+
+    // ==== JSON ====
 
     private int DictInt(DataDictionary dict, string field)
     {
@@ -1529,6 +1623,8 @@ public class CombineQueries : UdonSharpBehaviour
         return value.TokenType == TokenType.Boolean && value.Boolean;
     }
 
+    // ==== Сборка пулов ====
+
     private static VRCUrl[] PoolOf(string baseUri, string suffix, int symbols, string runeAlph, int runeSize, int runeWidth)
     {
         int total = 1;
@@ -1555,7 +1651,7 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-                private static VRCUrl[] HopPoolOf(string baseUri, string runeAlph, int runeWidth, int hops)
+    private static VRCUrl[] HopPoolOf(string baseUri, string runeAlph, int runeWidth, int hops)
     {
         string sentinel = RunesOf(0, runeAlph, runeWidth);
 
@@ -1566,7 +1662,7 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-            private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth, int signs)
+    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth, int signs)
     {
         int pad = Alphabet.IndexOf(':');
 
@@ -1604,7 +1700,7 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-            private static VRCUrl[] NumPoolOf(string baseUri, int total, int signs)
+    private static VRCUrl[] NumPoolOf(string baseUri, int total, int signs)
     {
         VRCUrl[] pool = new VRCUrl[total * signs];
 
@@ -1618,7 +1714,7 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-            private static VRCUrl[] RangePoolOf(string baseUri, int jumps, int max, int signs)
+    private static VRCUrl[] RangePoolOf(string baseUri, int jumps, int max, int signs)
     {
         VRCUrl[] pool = new VRCUrl[jumps * max * signs];
 
@@ -1661,7 +1757,7 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-            private static VRCUrl[] HeadPoolOf(string baseUri, int pieces, int bases, int signs)
+    private static VRCUrl[] HeadPoolOf(string baseUri, int pieces, int bases, int signs)
     {
         VRCUrl[] pool = new VRCUrl[pieces * bases * signs];
 
@@ -1701,39 +1797,5 @@ public class CombineQueries : UdonSharpBehaviour
         }
 
         return runes;
-    }
-
-    private int[] SymbolsOf(string url)
-    {
-        int[] buffer = new int[url.Length];
-        int count = 0, position = 0;
-
-        while (position < url.Length)
-        {
-            int best = -1, bestLength = 0;
-
-            for (int f = 0; fragments && f < roots.Length; f++)
-            {
-                if (roots[f].Length <= bestLength || position + roots[f].Length > url.Length) continue;
-                if (url.Substring(position, roots[f].Length) != roots[f]) continue;
-
-                best = f;
-                bestLength = roots[f].Length;
-            }
-
-            int letter = best < 0 ? Alphabet.IndexOf(url[position]) : -1;
-
-            if (best < 0 && letter < 0) return null;
-
-            buffer[count] = best < 0 ? letter : Alphabet.Length + best;
-            position += best < 0 ? 1 : bestLength;
-            count++;
-        }
-
-        int[] symbols = new int[count];
-
-        for (int i = 0; i < count; i++) symbols[i] = buffer[i];
-
-        return symbols;
     }
 }

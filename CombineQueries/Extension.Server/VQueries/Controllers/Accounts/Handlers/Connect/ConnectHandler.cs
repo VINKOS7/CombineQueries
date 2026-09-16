@@ -80,7 +80,7 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
                 Jumps = JumpsOf(),
                 Roots = Translator.Fragments,
                 Hypers = Seed(_speech.HyperUrls, (i, u) => new HyperSeed(i, u), SeedLimit),
-                Fragments = Seed(_speech.FragmentTexts, (i, t) => new FragmentSeed(i, t), Math.Min(SeedLimit, Reach(request)))
+                Fragments = Seed(_speech.FragmentTexts, (i, t) => new FragmentSeed(i, t), Math.Min(FragmentSeedLimit, Reach(request)))
             };
         }
         catch (Exception ex)
@@ -112,6 +112,21 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
         get
         {
             int limit = _configuration.GetValue("Init:SeedLimit", 512);
+
+            return limit > 0 ? limit : int.MaxValue;
+        }
+    }
+
+    // Словарь режем ОТДЕЛЬНЫМ лимитом. Общий SeedLimit (512) держит сид прыжков, а словарь им резался
+    // по первым адресам: всё, что сервер выучил позже, - а это как раз длинные префиксы вроде
+    // «site.com/product», - до клиента на connect не доезжало, и он собирал адрес рунами. Потолок
+    // остаётся: сравнение с каждой строкой на клиенте идёт в Udon, и десятки тысяч строк там не
+    // бесплатны.
+    private int FragmentSeedLimit
+    {
+        get
+        {
+            int limit = _configuration.GetValue("Init:FragmentSeedLimit", 4096);
 
             return limit > 0 ? limit : int.MaxValue;
         }

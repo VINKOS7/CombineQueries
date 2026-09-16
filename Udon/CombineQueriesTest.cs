@@ -1,7 +1,14 @@
-﻿using UdonSharp;
+using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
+using VRC.SDK3.Data;
+using VRC.SDK3.UdonNetworkCalling;
+using VRC.SDKBase;
+using VRC.Udon.Common.Interfaces;
 
+// Нажатия ГЛОБАЛЬНЫЕ: сетевым событием они уходят всем игрокам, и каждый выполняет их у себя -
+// своим клиентом и в свои доски. Синхронизируется только снимок досок - для тех, кто зашёл позже.
+[UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class CombineQueriesTest : UdonSharpBehaviour
 {
     public CombineQueries client;
@@ -131,7 +138,79 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private float startedAt;
     private string board = "";
 
+    // Снимок досок для тех, кто зашёл позже. Пишет только владелец кнопки прогона и только в узлах -
+    // старт и конец прогона, вход игрока, смена владельца: живые игроки считают доски сами, снимок
+    // нужен лишь опоздавшим. syncedReady - остальные уже подключены, и опоздавшему пора догнать.
+    [UdonSynced] private string syncedStatus = "";
+    [UdonSynced] private string syncedRequests = "";
+    [UdonSynced] private string syncedResponses = "";
+    [UdonSynced] private string syncedData = "";
+    [UdonSynced] private bool syncedRunning;
+    [UdonSynced] private bool syncedReady;
+
+    // Считает ли этот игрок доски сам. До первого своего прогона он зритель и показывает снимок,
+    // после - снимок игнорирует: чужие доски перетирали бы свои.
+    private bool live;
+
+    // Куб кнопки прогона. Пока прогон идёт, он гаснет и нажатия не принимает - как у кнопки шагов:
+    // заблокированная кнопка, которая выглядит как обычная, неотличима от сломанной.
+    private Renderer cube;
+    private Color idle;
+
+    private void Start()
+    {
+        cube = GetComponent<Renderer>();
+
+        if (cube != null) idle = cube.material.color;
+
+        // Снимок мог прийти раньше Start, когда гасить было ещё нечего.
+        Lit(!Locked());
+    }
+
+    // on - кнопка свободна, off - идёт прогон. Гаснет только кнопка прогона: кнопка подключения
+    // стоит на том же скрипте, но блокировать её нечем - прогона у неё нет.
+    private void Lit(bool on)
+    {
+        if (cube == null || action != 1) return;
+
+        cube.material.color = on ? idle : new Color(idle.r * 0.25f, idle.g * 0.25f, idle.b * 0.25f, idle.a);
+    }
+
+    // Кодовое слово: поле сцены, а если оно пустое - то, с которым собран мир.
+    //
+    // Поле сериализовано, и билдер рига проставил его ОДИН РАЗ, в тот мод, что был тогда. Переключил
+    // контур дефайнами - в сцене осталось старое, у дева пустое. Пустое слово это очередь букв
+    // нулевой длины: клиент не шлёт ни одной /k/, сразу зовёт /kf, и сервер отвечает 403. Выглядит
+    // как «слово не то», хотя слова не было вовсе.
+    private string Word() => codeword == "" ? CombineQueriesEnvironment.Codeword : codeword;
+
+    // Клиент больше ни о чём не уведомляет: наружу у него только Require и Result, события с целью
+    // и подпиской убраны. Готовность видно по тому, что поток освободился, - её и ждём здесь.
+    private void Update()
+    {
+        if (!awaiting || client == null || client.Busy()) return;
+
+        OnQueryDone();
+    }
+
+    // Нажатие рассылается всем, нажавшему тоже. Решает нажавший: его кнопка прогона занята - не шлём
+    // никому, иначе у свободных игроков прогон стартовал бы, а у него нет, и доски разошлись бы.
     public override void Interact()
+    {
+        if (client == null) { Say("client is not assigned"); return; }
+
+        if (action == 1 && Locked())
+        {
+            Note("занято: идёт прогон, дождись done");
+            return;
+        }
+
+        SendCustomNetworkEvent(NetworkEventTarget.All, nameof(Press));
+    }
+
+    // Логика нажатия. Приходит каждому игроку, в том числе нажавшему.
+    [NetworkCallable]
+    public void Press()
     {
         if (client == null) { Say("client is not assigned"); return; }
 
@@ -142,11 +221,19 @@ public class CombineQueriesTest : UdonSharpBehaviour
         // значит прошлое нажатие отработало, чем бы оно ни кончилось.
         if (awaiting && !client.Busy()) awaiting = false;
 
+        // Прогон идёт - кнопка заблокирована. Куб уже потушен, а в лог кладём строку, чтобы и в
+        // консоли было видно, почему нажатие ничего не сделало.
+        if (action == 1 && running)
+        {
+            Note("занято: идёт прогон, дождись done");
+            return;
+        }
+
         if (awaiting) return;
 
         if (action == 0)
         {
-            client.codeword = codeword;
+            client.codeword = Word();
             client.Connect();
 
             // Раньше здесь стояло безусловное «init sent», даже когда метод выходил молча
@@ -159,7 +246,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         if (action == 2)
         {
-            client.codeword = codeword;
+            client.codeword = Word();
             client.Remember();
 
             awaiting = client.LastError == "";
@@ -168,21 +255,70 @@ public class CombineQueriesTest : UdonSharpBehaviour
             return;
         }
 
+        // Connect мог нажать другой куб - у него свой экземпляр стенда и свой ready. Спрашиваем сам
+        // клиент: подключён один раз - подключён для всех кнопок.
+        if (!ready && client.Connected()) ready = true;
+
+        // Зритель, чей клиент ещё догоняет connect по снимку, доски не заводит: «run Connect first»
+        // затёр бы прогон, который идёт у всех остальных.
+        if (!ready && !live && syncedReady) { Note("клиент ещё подключается - показываю снимок"); return; }
+
         if (!ready) { Say("run Connect first"); return; }
 
-        if (running) { running = false; Say("run stopped"); return; }
+        // Нажатие после завершённого прогона - прогон заново, с чистыми досками.
+        StartRun();
+    }
 
+    // Сколько vrequest выпускает один прогон. Считаем по журналу клиента, а не по шагам: шаг с
+    // пачкой клиент может разбить на несколько наборов, и девять шагов дали бы больше девяти.
+    private const int MaxVrequests = 9;
+
+    // Сколько vrequest уже ушло в этом прогоне.
+    private int vrequests;
+
+    // Сколько раз mark встречается в text.
+    private int Count(string text, string mark)
+    {
+        int count = 0;
+        int at = text.IndexOf(mark);
+
+        while (at >= 0) { count++; at = text.IndexOf(mark, at + mark.Length); }
+
+        return count;
+    }
+
+    // Прогон с нуля: доски пустые, счётчик vrequest обнулён. Журналы клиента выпиваем впустую,
+    // чтобы хвост прошлого прогона не лёг строками в новый.
+    private void StartRun()
+    {
         running = true;
+        live = true;
         step = StepHyperDb;
+        vrequests = 0;
+
+        Lit(false);
+
+        client.TakeRequests();
+        client.TakeResponses();
+        client.TakeData();
+
+        if (output != null) output.text = "";
+        if (requests != null) requests.text = "";
+        if (responses != null) responses.text = "";
+        if (data != null) data.text = "";
+
         board = testUrlSeeded + "   " + NumberOf(testUrlSeeded.Length) + " chars   (hyper from db, never sent)\n"
               + testUrlFull + "   " + NumberOf(testUrlFull.Length) + " chars   (levels L1-L3)\n"
               + testUrlLearn + "   " + NumberOf(testUrlLearn.Length) + " chars   (infinite: learn, then reuse)\n"
               + testUrl + "   " + NumberOf(testUrl.Length) + " chars   (partial - post/1 is plain)\n\n";
 
         SendStep();
+
+        Snapshot();
     }
 
-    public void OnQueryDone()
+    // Private: по сети её звать нельзя, а public-метод без подчёркивания вызвал бы любой игрок.
+    private void OnQueryDone()
     {
         awaiting = false;
 
@@ -190,7 +326,10 @@ public class CombineQueriesTest : UdonSharpBehaviour
         {
             running = false;
 
+            Lit(true);
+
             Say("ERROR\n" + client.LastError);
+            Snapshot();
             return;
         }
 
@@ -224,8 +363,13 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         board += line + "\n";
 
+        // Что ушло за шаг - считаем vrequest прямо по журналу, прежде чем вылить его в панель.
+        string sent = client.TakeRequests();
+
+        vrequests += Count(sent, "vrequest:");
+
         // Ушедшее и пришедшее - в свои панели, теми же строками, что в консоли.
-        Pour(requests, client.TakeRequests());
+        Pour(requests, sent);
         Pour(responses, client.TakeResponses());
         Pour(data, client.TakeData());
 
@@ -235,11 +379,18 @@ public class CombineQueriesTest : UdonSharpBehaviour
         // самый запрос, о котором уже сказал клиент, и второй раз о нём читать незачем.
         Show("\n" + client.Take());
 
-        if (step <= StepBatch) { SendStep(); return; }
+        // Прогон ограничен числом vrequest, а не шагов: набралось девять - останавливаемся. Шаг
+        // посреди себя не режем, поэтому последний может немного перебрать, если его пачка ушла
+        // несколькими наборами.
+        if (vrequests < MaxVrequests && step <= StepBatch) { SendStep(); return; }
 
         running = false;
 
-        Note("done");
+        Lit(true);
+
+        Note("done, vrequests " + NumberOf(vrequests));
+
+        Snapshot();
     }
 
     // Сколько прыжков приехало из БД. Показываем в обоих модах: prod пока отличается от dev
@@ -265,7 +416,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
             Ask(testUrlSeeded);
             Ask(testUrlFull);
             Ask(testUrlPartialBig);
-            client.Run();
+            Release();
         }
         else if (step == StepHead3)
         {
@@ -276,7 +427,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
             Ask(testUrlRecipes);
             Ask(testUrlQuotes);
             Ask(testUrlCart6);
-            client.Run();
+            Release();
         }
         else if (step == StepHead2)
         {
@@ -294,7 +445,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
             Ask(testUrlComments);
             Ask(testUrlTodo1);
             Ask(testUrlTodo2);
-            client.Run();
+            Release();
         }
         else if (step == StepHead1)
         {
@@ -304,7 +455,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
             Ask(testUrlUser1);
             Ask(testUrlUser2);
             Ask(testUrlUser3);
-            client.Run();
+            Release();
         }
         else if (step == StepHeadPartial)
         {
@@ -314,7 +465,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
             Ask(testUrlRecipes);
             Ask(testUrlQuotes);
             Ask(testUrlSameStart);
-            client.Run();
+            Release();
         }
         else if (step == StepHeadDirect)
         {
@@ -324,7 +475,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
             Ask(testUrlRecipes);
             Ask(testUrlQuotes);
             AskDirect(testUrl);
-            client.Run();
+            Release();
         }
         else if (step == StepAllDirect)
         {
@@ -333,7 +484,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
             AskDirect(testUrlUser5);
             AskDirect(testUrlPost1);
             AskDirect(testUrlPost2);
-            client.Run();
+            Release();
         }
         else { Remember(testUrl + " direct"); client.RequestDirect(testUrl); }
 
@@ -397,14 +548,25 @@ public class CombineQueriesTest : UdonSharpBehaviour
     {
         Remember(url);
 
-        client.Require(url);
+        keep = client.Require(url);
     }
 
     private void AskDirect(string url)
     {
         Remember(url + " direct");
 
-        client.RequireDirect(url);
+        keep = client.RequireDirect(url);
+    }
+
+    // Коробка ПОСЛЕДНЕГО адреса шага. Нужна ровно для одного: по ней и выпускается набор.
+    private DataList keep;
+
+    // Отправка набора. Один Result на весь шаг - минимум, который вообще возможен: первый же вызов
+    // выпускает всё, что набрано, и помечает набор отправленным. Тела стенд по-прежнему берёт
+    // журналами, коробку он не читает.
+    private void Release()
+    {
+        if (keep != null) client.Result(keep);
     }
 
     private void Remember(string url)
@@ -450,6 +612,58 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         panel.text = panel.text == "" ? lines : panel.text + "\n" + lines;
     }
+
+    // Занята ли кнопка прогона: у живого - своим прогоном, у зрителя - прогоном владельца по снимку.
+    private bool Locked() => live ? running : syncedRunning;
+
+    // Кладёт доски в снимок. Только кнопка прогона - доски её - и только владелец: сериализует он.
+    //
+    // Зритель, ставший владельцем, когда прежний ушёл, отдаёт доски как есть, а кнопку - свободной:
+    // чужой прогресс он не считает, и снять занятость потом было бы некому.
+    private void Snapshot()
+    {
+        if (action != 1 || !Networking.IsOwner(gameObject)) return;
+
+        syncedStatus = output != null ? output.text : "";
+        syncedRequests = requests != null ? requests.text : "";
+        syncedResponses = responses != null ? responses.text : "";
+        syncedData = data != null ? data.text : "";
+        syncedRunning = running;
+        syncedReady = client != null && client.Connected();
+
+        RequestSerialization();
+    }
+
+    public override void OnDeserialization()
+    {
+        if (action != 1 || live) return;
+
+        if (output != null) output.text = syncedStatus;
+        if (requests != null) requests.text = syncedRequests;
+        if (responses != null) responses.text = syncedResponses;
+        if (data != null) data.text = syncedData;
+
+        Lit(!Locked());
+
+        // Остальные уже подключены - догоняем connect молча, чтобы следующее нажатие отработало и у
+        // нас. Remember, а не Connect: пустому клиенту это то же самое, но без resetHypers, и сервер
+        // не сбросит хайперы тем, у кого прямо сейчас идёт прогон.
+        if (syncedReady && client != null && !client.Connected() && !client.Busy())
+        {
+            client.codeword = Word();
+            client.Remember();
+        }
+    }
+
+    // Вошедший получает доски на сейчас, а не на последний узел: вход посреди прогона иначе показал
+    // бы его начало.
+    public override void OnPlayerJoined(VRCPlayerApi player) => Snapshot();
+
+    public override void OnOwnershipTransferred(VRCPlayerApi player) => Snapshot();
+
+    // Владение по запросу не отдаём: снимок пишет владелец, и перехвативший его подсунул бы опоздавшим
+    // чужие доски. Ушедшего владельца VRChat заменяет сам, мимо запроса.
+    public override bool OnOwnershipRequest(VRCPlayerApi requestingPlayer, VRCPlayerApi requestedOwner) => false;
 
     private void Note(string line) => Debug.Log("[CombineQueriesTest] " + line);
 

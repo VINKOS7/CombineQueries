@@ -7,4 +7,5 @@
     <BuildDependency Project="VQueries.Domain/CombineQueries.Domain.csproj" />
     <BuildDependency Project="VQueries.Infra/CombineQueries.Infra.csproj" />
   </Project>
+  <Project Path="VQueries.Tests/CombineQueries.Tests.csproj" />
 </Solution>

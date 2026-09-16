@@ -103,10 +103,8 @@ public static class TestSceneBuilder
             stepsRig.client = client;
             stepsRig.output = stepsText;
 
-            // Событие о завершении уходит ОДНОЙ цели - стенду. Риг шагов его не ждёт: он опрашивает
-            // свою коробку сам, как это будет делать любой мир со стороны.
-            client.target = sendTest;
-            client.onDoneEvent = "OnQueryDone";
+            // Целей и событий у клиента больше нет: наружу он отдаёт только Require и Result, а оба
+            // рига сами смотрят, освободился ли поток и приехало ли их тело.
 
             UdonSharpEditorUtility.CopyProxyToUdon(client);
             UdonSharpEditorUtility.CopyProxyToUdon(initTest);
