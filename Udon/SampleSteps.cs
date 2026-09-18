@@ -2,9 +2,7 @@ using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 using VRC.SDK3.Data;
-using VRC.SDK3.UdonNetworkCalling;
 using VRC.SDKBase;
-using VRC.Udon.Common.Interfaces;
 
 // РЕЛИЗНЫЙ РИГ: одна кнопка, и в ней весь смысл тулзы.
 //
@@ -17,8 +15,9 @@ using VRC.Udon.Common.Interfaces;
 // products/7..10, вторая - products/11 и 12. Каждая пачка это свои Require и ОДИН Result, который
 // её и выпускает, и у каждой своё время - от её собственного vrequest.
 //
-// Нажатие ГЛОБАЛЬНОЕ: сетевым событием оно уходит всем игрокам, и каждый выполняет его у себя -
-// своим клиентом и в свою доску. Синхронизируется только снимок доски - для тех, кто зашёл позже.
+// ОБЩИЙ ЭКРАН. Шаги каждый копит свои, но прогон ведёт НАЖАВШИЙ: по его шагам, и его доску видят
+// все. Пока прогон идёт - кнопка заперта у всех; нажать снова можно только после того, как он
+// отработал. Ведущий забирает объект и транслирует доску снимком; вошедший позже видит её на сейчас.
 //
 // Риг НЕЗАВИСИМ от остальных: он не перехватывает событие клиента и не читает его журнал. Просит
 // через Require, получает коробки и ждёт по ним результат - так же, как это будет делать любой мир,
@@ -42,7 +41,7 @@ public class SampleSteps : UdonSharpBehaviour
     private Vector3 was;
     private bool started;
 
-    // Куб самой кнопки. Пока её запрос в пути, она гаснет: заблокированная кнопка, которая выглядит
+    // Куб самой кнопки. Пока прогон в пути, он гаснет: заблокированная кнопка, которая выглядит
     // как обычная, неотличима от сломанной - жмёшь и не понимаешь, почему ничего не происходит.
     private Renderer cube;
     private Color idle;
@@ -54,10 +53,10 @@ public class SampleSteps : UdonSharpBehaviour
         if (cube != null) idle = cube.material.color;
 
         // Снимок мог прийти раньше Start, когда гасить было ещё нечего.
-        Lit(!Locked());
+        Lit(!Blocked());
     }
 
-    // on - кнопка свободна, off - занята своим запросом.
+    // on - кнопка свободна, off - идёт чей-то прогон.
     private void Lit(bool on)
     {
         if (cube == null) return;
@@ -101,14 +100,16 @@ public class SampleSteps : UdonSharpBehaviour
 
     private string log = "";
 
-    // Снимок доски для тех, кто зашёл позже: лог и строка прогресса пачек, пустой прогресс - кнопка
-    // свободна. Пишет только владелец и только в узлах - нажатие, закрытие, вход игрока, смена
-    // владельца: живые игроки считают доску сами, снимок нужен лишь опоздавшим.
+    // Снимок доски для всех: доска ведущего, чтобы каждый видел то же и её изменение. syncedRunning -
+    // идёт ли прогон: по нему кнопка заперта у всех, а не только у ведущего. Пишет только владелец
+    // объекта (ведущий), в узлах прогона - покадрово сеть VRChat не вывезет.
     [UdonSynced] private string syncedLog = "";
     [UdonSynced] private string syncedProgress = "";
+    [UdonSynced] private bool syncedRunning;
 
-    // Считает ли этот игрок доску сам. До первого Press он зритель и показывает снимок владельца,
-    // после - снимок игнорирует: чужая доска перетирала бы свою.
+    // Ведёт ли доску этот игрок сам (он нажал). Не ведущий - зритель: доску берёт из снимка и не
+    // считает свою, иначе она перетёрла бы экран ведущего. Сбрасывается по концу прогона - тогда
+    // следующий ведущий покажет уже свою.
     private bool live;
 
     // Сколько отказов клиента мы уже показали. Считаем их, а НЕ сравниваем текст: сервер лежит, и
@@ -152,7 +153,7 @@ public class SampleSteps : UdonSharpBehaviour
     }
 
     // Ждём тела по коробкам. Пусто - ещё едут: это норма, а не ошибка, сервер не держит игрока,
-    // пока ходит наружу.
+    // пока ходит наружу. Крутится только у ведущего: у зрителя pack == null.
     private void Wait()
     {
         if (pack == null) return;
@@ -163,6 +164,7 @@ public class SampleSteps : UdonSharpBehaviour
         {
             said = client.Errors;
             pack = null;
+            live = false;
 
             log = log + "\nrefused: " + client.LastError;
 
@@ -226,6 +228,7 @@ public class SampleSteps : UdonSharpBehaviour
             log = log + "\n" + Cut(Body(0));
 
             pack = null;
+            live = false;
 
             Lit(true);
             Show();
@@ -233,7 +236,9 @@ public class SampleSteps : UdonSharpBehaviour
             return;
         }
 
-        if (changed) Show();
+        // Что-то сдвинулось - показываем себе и транслируем доску всем: это и есть «все видят
+        // изменение». Узел синхронизации, не каждый кадр.
+        if (changed) { Show(); Snapshot(); }
 
         if (client.Busy()) return;
 
@@ -342,22 +347,24 @@ public class SampleSteps : UdonSharpBehaviour
         pack.SetValue(at, new DataToken(box));
     }
 
-    // Нажатие рассылается всем, нажавшему тоже. Решает нажавший: его кнопка занята - не шлём никому,
-    // иначе у свободных игроков пачка ушла бы, а у него нет, и доски разошлись бы.
-    //
-    // Номер берём с шагов НАЖАВШЕГО и везём в событии: счётчик у каждого игрока свой, и без этого у
-    // всех ушли бы разные адреса.
+    // Нажатие ведёт САМ нажавший, локально. Пока идёт чей-то прогон - заперто у всех: нажать можно
+    // только после того, как он отработал.
     public override void Interact()
     {
         if (client == null) { log = "client is not assigned"; Show(); return; }
 
-        if (Locked())
+        if (Blocked())
         {
-            Debug.Log("[SampleSteps] занято: ждём ответы");
+            Debug.Log("[SampleSteps] занято: идёт прогон, дождись конца");
             return;
         }
 
-        SendCustomNetworkEvent(NetworkEventTarget.All, nameof(Press), steps);
+        // Ведёт нажавший: забираем объект, чтобы наша доска ушла всем, и гоним по СВОИМ шагам.
+        if (Networking.LocalPlayer != null) Networking.SetOwner(Networking.LocalPlayer, gameObject);
+
+        live = true;
+
+        BeginRun(steps);
 
         // Счётчик обнуляем сразу: пока ответы едут, игрок уже шагает дальше, и эти шаги пойдут в
         // следующий запрос. Иначе одни и те же шаги уехали бы дважды.
@@ -367,27 +374,9 @@ public class SampleSteps : UdonSharpBehaviour
         Show();
     }
 
-    // Логика нажатия. Приходит каждому игроку; pressedSteps - число шагов того, кто нажал.
-    [NetworkCallable]
-    public void Press(int pressedSteps)
+    // Заводит прогон по числу шагов нажавшего. Первая пачка: четыре Require, затем ОДИН Result.
+    private void BeginRun(int pressedSteps)
     {
-        if (client == null) { log = "client is not assigned"; Show(); return; }
-
-        // Ждём своё - второе нажатие игнорируем. Иначе оно подменит коробки, и тела первых пачек
-        // приедут в никуда: следим-то мы уже за другими.
-        //
-        // Молча выходить нельзя: снаружи это ровно то же, что мёртвая кнопка. Куб к этому моменту
-        // уже потушен, а в лог кладём строку - чтобы было видно и тому, кто смотрит в консоль.
-        if (pack != null)
-        {
-            Debug.Log("[SampleSteps] занято: ждём ответы");
-            return;
-        }
-
-        // С этого нажатия доску считаем сами, снимок владельца больше не нужен.
-        live = true;
-
-        // Число приходит по сети, и прислать его может кто угодно: отрицательное в адрес не пускаем.
         if (pressedSteps < 0) pressedSteps = 0;
 
         int total = First + Second;
@@ -418,7 +407,6 @@ public class SampleSteps : UdonSharpBehaviour
         // Снимок счётчика ДО запроса: чужие отказы, случившиеся до нашего нажатия, не наши.
         said = client.Errors;
 
-        // Первая пачка: четыре Require, затем ОДИН Result. Вторая уйдёт, когда эта закроется.
         for (int i = 0; i < First; i++) Put(i, asks[i]);
 
         Release(First - 1);
@@ -429,30 +417,30 @@ public class SampleSteps : UdonSharpBehaviour
         Snapshot();
     }
 
-    // Занята ли кнопка: у живого - своей пачкой, у зрителя - пачкой владельца по снимку.
-    private bool Locked() => live ? pack != null : syncedProgress != "";
+    // Заперто у всех, пока идёт прогон: у ведущего - своей пачкой, у зрителя - по снимку.
+    private bool Blocked() => pack != null || syncedRunning;
 
-    // Кладёт доску в снимок. Сериализует только владелец, остальным звать бесполезно.
-    //
-    // Зритель, ставший владельцем, когда прежний ушёл, отдаёт лог как есть, а кнопку - свободной:
-    // чужой прогресс он не считает, и снять занятость потом было бы некому.
+    // Кладёт доску в снимок - доску ведущего, чтобы все видели то же и её изменение. Только владелец
+    // объекта: сериализует он. Зритель сюда и не попадает - у него pack == null и владения нет.
     private void Snapshot()
     {
         if (!Networking.IsOwner(gameObject)) return;
 
         syncedLog = log;
         syncedProgress = pack == null ? "" : Progress();
+        syncedRunning = pack != null;
 
         RequestSerialization();
     }
 
     public override void OnDeserialization()
     {
+        // Ведущий считает доску сам, снимок он не применяет - это его же эхо.
         if (live) return;
 
         log = syncedLog;
 
-        Lit(!Locked());
+        Lit(!Blocked());
         Show();
     }
 
@@ -461,10 +449,6 @@ public class SampleSteps : UdonSharpBehaviour
     public override void OnPlayerJoined(VRCPlayerApi player) => Snapshot();
 
     public override void OnOwnershipTransferred(VRCPlayerApi player) => Snapshot();
-
-    // Владение по запросу не отдаём: снимок пишет владелец, и перехвативший его подсунул бы опоздавшим
-    // чужую доску. Ушедшего владельца VRChat заменяет сам, мимо запроса.
-    public override bool OnOwnershipRequest(VRCPlayerApi requestingPlayer, VRCPlayerApi requestedOwner) => false;
 
     private string Cut(string body)
     {
@@ -483,10 +467,10 @@ public class SampleSteps : UdonSharpBehaviour
     {
         if (output == null) return;
 
-        // Пока ждём своё - так и пишем, по каждой пачке отдельно. Молчащая доска неотличима от
-        // сломанной. Зритель пишет прогресс владельца из снимка.
+        // Ведущий пишет свой прогресс; зритель во время чужого прогона - прогресс из снимка; вне
+        // прогона - своё число шагов. Молчащая доска неотличима от сломанной.
         string tail = pack != null ? Progress()
-            : Locked() ? syncedProgress
+            : Blocked() ? syncedProgress
             : steps + " steps - press to send";
 
         output.text = (log == "" ? "" : log + "\n\n") + tail;

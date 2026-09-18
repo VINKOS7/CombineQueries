@@ -4,7 +4,7 @@ using UnityEngine;
 using UdonSharpEditor;
 
 // Ставит в сцену куб со щупом конкурентности и заводит его program asset. Отдельно от
-// TestSceneBuilder: щуп диагностический, в продукт не входит и в Udon/ не синхронизируется.
+// TestSceneBuilder: щуп диагностический, в продукт не входит.
 public static class LongPollProbeBuilder
 {
     [MenuItem("Tools/CombineQueries/Add long-poll probe")]

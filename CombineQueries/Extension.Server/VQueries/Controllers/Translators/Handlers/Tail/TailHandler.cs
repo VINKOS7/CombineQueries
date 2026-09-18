@@ -24,9 +24,10 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech sp
         // Выключение - на клиенте: SignValues=1 делает подпись единственной и сверку тривиальной.
         if (request.Type == TypeQuery.Fragmentate && !speech.CheckSign(request.Sign))
         {
-            speech.Fault($"tail sign {request.Sign} rejected");
+            // Приём НЕ роняем: часть чужая, а не поток разъехался. У остальных клиентов свои
+            // кольца, и падать им из-за чужого запроса незачем.
 
-            logger.LogWarning("tail: sign {Sign} rejected, stream dropped until connect", request.Sign);
+            logger.LogWarning("tail: sign {Sign} rejected, not in the expected parts", request.Sign);
 
             throw new Exception("auth error: tail sign rejected");
         }

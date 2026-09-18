@@ -9,8 +9,11 @@ public record SentUrl(
     [property: JsonProperty("url")] string Url,
     [property: JsonProperty("jump")] int Jump);
 
-public record HyperResponse
+public record HyperResponse : ISigned
 {
+    // Новое кольцо частей токена, если старое кончилось на этом запросе.
+    [JsonProperty("signs")] public string? Signs { get; set; }
+
     [JsonProperty("resumed")] public int Resumed { get; set; }
 
     [JsonProperty("known")] public bool Known { get; set; }

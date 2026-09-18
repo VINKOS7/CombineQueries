@@ -59,7 +59,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
     public string BodyOf(string url) => _bodies.GetValueOrDefault(PayloadOf(url), "");
 
-    // Номер запроса внутри своего vrequest, на котором приехало тело, - то же, что слот 2 коробки у клиента.
+    // Номер запроса, на котором приехало тело: 0 - сам vrequest, дальше - запросы после него. Как слот 2 коробки у клиента.
     public int SpentOf(string url) => _spent.GetValueOrDefault(PayloadOf(url));
 
     public async Task ConnectAsync()
@@ -302,6 +302,11 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
     private void Debt(JsonNode answer)
     {
+        // Новое кольцо частей: старое кончилось на этом запросе, дальше идём по свежему с начала.
+        string fresh = answer["signs"]?.GetValue<string>() ?? "";
+
+        if (fresh != "" && fresh != _signs) { _signs = fresh; _signPosition = 0; }
+
         _pending = Math.Max(0, answer["pending"]?.GetValue<int>() ?? 0);
 
         foreach (var item in Items(answer, "ready"))
@@ -312,7 +317,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
             _bodies[url] = Text(item, "response");
 
-            if (!_spent.ContainsKey(url) && _batch.Any(asked => PayloadOf(asked) == url)) _spent[url] = TotalQueries - _releasedAt;
+            if (!_spent.ContainsKey(url) && _batch.Any(asked => PayloadOf(asked) == url)) _spent[url] = Math.Max(0, TotalQueries - _releasedAt - 1);
 
             Mark(url);
         }

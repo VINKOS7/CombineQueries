@@ -23,9 +23,10 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
         // равен хвосту - и подпись у него такая же полная. Попытка ровно одна.
         if (!speech.CheckSign(request.Sign))
         {
-            speech.Fault($"hyper sign {request.Sign} rejected");
+            // Приём НЕ роняем: часть чужая, а не поток разъехался. У остальных клиентов свои
+            // кольца, и падать им из-за чужого запроса незачем.
 
-            logger.LogWarning("hyper: sign {Sign} rejected, stream dropped until connect", request.Sign);
+            logger.LogWarning("hyper: sign {Sign} rejected, not in the expected parts", request.Sign);
 
             throw new Exception("auth error: hyper sign rejected");
         }

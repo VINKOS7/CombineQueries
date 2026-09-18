@@ -77,6 +77,9 @@ public interface ISpeech
 
     bool CheckSign(int sign);
 
+    // Новое кольцо, если старое кончилось на последней проверке. Забирается один раз.
+    string TakeFreshSigns();
+
     // Подпись пониженного разрешения: то же кольцо, но сверяется остаток по values.
     bool CheckSign(int sign, int values);
 

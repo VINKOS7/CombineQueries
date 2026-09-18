@@ -218,7 +218,26 @@ public class Speech : ISpeech
     // В /c/ то же самое стоило бы 830 584 * SignValues.
     public string Signs { get; private set; } = "";
 
-    private int _signPos;
+    // Поток одного клиента: его кольцо, позиция в нём и когда по нему в последний раз приходили.
+    // Клиентов много, поэтому и потоков много: сервер держит по одному на каждое подключение.
+    private sealed class SignStream
+    {
+        public string Ring = "";
+        public int Position;
+        public DateTime Seen;
+
+        public int Next => Ring[Position] - '0';
+    }
+
+    private readonly List<SignStream> _streams = [];
+
+    // Список правят разные запросы сразу: поиск, сдвиг и выдача нового кольца обязаны идти целиком,
+    // иначе двое разберут один поток пополам.
+    private readonly object _signLock = new();
+
+    // Сколько подключений помним. Больше - вытесняем самое давнее: его клиент либо ушёл, либо
+    // подключится заново, а бесконечный список искал бы чужую часть тем дольше, чем дольше живёт сервер.
+    private const int MaxStreams = 32;
 
     public const int SignValues = 8;
 
@@ -235,15 +254,80 @@ public class Speech : ISpeech
     // прыжков на SignValues (4096 -> 32768 ссылок), а бит удваивает (4096 -> 8192).
     public bool CheckSign(int sign) => CheckSign(sign, SignValues);
 
+    // Пришедшую часть ищем среди ОЖИДАЕМЫХ - по одной на подключённого клиента. Нашлась - поток
+    // известный, сдвигаем его на следующую; не нашлась - часть чужая, и запрос отбивается.
+    //
+    // Части всего SignValues, поэтому двое могут ждать одну и ту же. Тогда берём поток, по которому
+    // приходили позже: клиент шлёт запросы очередью, и свежий поток куда вероятнее.
     public bool CheckSign(int sign, int values)
     {
-        if (Signs.Length == 0) return true;
+        if (sign < 0 || sign >= values) return false;
 
-        bool ok = sign >= 0 && sign < values && (Signs[_signPos] - '0') % values == sign;
+        lock (_signLock)
+        {
+            if (_streams.Count == 0) return true;
 
-        _signPos = (_signPos + 1) % Signs.Length;
+            SignStream? mine = null;
 
-        return ok;
+            foreach (var stream in _streams)
+                if (stream.Next % values == sign && (mine is null || stream.Seen > mine.Seen)) mine = stream;
+
+            if (mine is null) return false;
+
+            mine.Position++;
+            mine.Seen = DateTime.UtcNow;
+
+            // Кольцо кончилось - на его место рождается новое, и уезжает тем же ответом, в котором
+            // клиент потратил последнюю часть. Тот, кто подслушал кольцо целиком, получает его мёртвым:
+            // следующая часть придёт уже из того, которого он не видел.
+            if (mine.Position < mine.Ring.Length) return true;
+
+            mine.Ring = NewSigns();
+            mine.Position = 0;
+
+            _fresh.Value = mine.Ring;
+
+            return true;
+        }
+    }
+
+    // Новый поток на connect: кольцо рождается здесь и уезжает клиенту, сервер оставляет себе
+    // позицию в нём. Своё кольцо у каждого - по нему клиенты и различаются.
+    private string OpenSigns()
+    {
+        string ring = NewSigns();
+
+        lock (_signLock)
+        {
+            if (_streams.Count >= MaxStreams)
+            {
+                var oldest = _streams[0];
+
+                foreach (var stream in _streams) if (stream.Seen < oldest.Seen) oldest = stream;
+
+                _streams.Remove(oldest);
+            }
+
+            _streams.Add(new SignStream { Ring = ring, Position = 0, Seen = DateTime.UtcNow });
+        }
+
+        return ring;
+    }
+
+    public int Streams { get { lock (_signLock) return _streams.Count; } }
+
+    // Привязано к ЗАПРОСУ, а не к серверу: сервер один на всех, и общее поле отдало бы новое кольцо
+    // тому, чей ответ собрался первым. AsyncLocal живёт внутри той же цепочки вызовов, что и проверка.
+    private static readonly AsyncLocal<string> _fresh = new();
+
+    // Кольцо, выданное взамен кончившегося. Забирает его ОДИН ответ - тот, что его и увезёт клиенту.
+    public string TakeFreshSigns()
+    {
+        string fresh = _fresh.Value ?? "";
+
+        _fresh.Value = "";
+
+        return fresh;
     }
 
     // Сколько значений у подписи прыжка: один бит.
@@ -461,8 +545,7 @@ public class Speech : ISpeech
         Broken = false;
         LastFault = "";
 
-        Signs = NewSigns();
-        _signPos = 0;
+        Signs = OpenSigns();
     }
 
     // Заливка тёплого словаря из персиста (вызывается на connect, после SetContext). Индекс списка

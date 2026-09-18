@@ -32,9 +32,10 @@ public class HeadHandler(ILogger<HeadHandler> logger, IOutbox outbox, ISpeech sp
         // равна хвосту. Попытка ровно одна - дальше приём валится до connect.
         if (!speech.CheckSign(request.Sign))
         {
-            speech.Fault($"head sign {request.Sign} rejected");
+            // Приём НЕ роняем: часть чужая, а не поток разъехался. У остальных клиентов свои
+            // кольца, и падать им из-за чужого запроса незачем.
 
-            logger.LogWarning("head: sign {Sign} rejected, stream dropped until connect", request.Sign);
+            logger.LogWarning("head: sign {Sign} rejected, not in the expected parts", request.Sign);
 
             throw new Exception("auth error: head sign rejected");
         }

@@ -415,8 +415,9 @@ public class CombineQueries : UdonSharpBehaviour
             : new DataList();
 
         // Слот 0 - тело, слот 1 - отправлен ли набор, в котором едет этот адрес, слот 2 - номер
-        // запроса внутри своего vrequest, на котором тело приехало (0 - было до выпуска). Новый
-        // запрос всегда начинается неотправленным: выпустит его первый же Result по этой коробке.
+        // запроса, на котором тело приехало: 0 - сам vrequest (или тело было до выпуска), дальше -
+        // запросы после конца его GET. Новый запрос всегда начинается неотправленным: выпустит его
+        // первый же Result по этой коробке.
         if (box.Count == 0) { box.Add(""); box.Add(false); }
         if (box.Count == 2) box.Add(0);
 
@@ -589,11 +590,12 @@ public class CombineQueries : UdonSharpBehaviour
 
         had.DataList.SetValue(0, body);
 
-        // Первое тело после выпуска: номер запроса внутри своего vrequest, на котором оно приехало.
-        // Запрос посчитан в Load ещё до отправки, поэтому ответ на первый запрос даёт ровно 1.
+        // Первое тело после выпуска: номер запроса, на котором оно приехало. Сам vrequest - это
+        // запрос 0, счёт идёт от конца его GET: тело в ответе на него даёт 0, в следующем запросе - 1.
+        // Load считает запрос до отправки, поэтому ответ на vrequest застаёт счётчик на единицу выше отсечки.
         if (body == "" || !releasedAt.TryGetValue(payload, out DataToken from) || from.TokenType != TokenType.Int) return;
 
-        if (had.DataList.Count > 2) had.DataList.SetValue(2, TotalQueries - from.Int);
+        if (had.DataList.Count > 2) had.DataList.SetValue(2, Mathf.Max(0, TotalQueries - from.Int - 1));
 
         releasedAt.Remove(payload);
     }
@@ -1267,6 +1269,12 @@ public class CombineQueries : UdonSharpBehaviour
         if (root.TokenType != TokenType.DataDictionary) return;
 
         DataDictionary answer = root.DataDictionary;
+
+        // Старое кольцо частей кончилось - сервер прислал новое тем же ответом, в котором мы
+        // потратили последнюю часть. Ту часть он уже зачёл, поэтому новое кольцо начинаем с начала.
+        string fresh = DictString(answer, "signs");
+
+        if (fresh != "" && fresh != signs) { signs = fresh; signPos = 0; }
 
         LastPending = DictInt(answer, "pending");
 

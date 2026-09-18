@@ -10,8 +10,11 @@ public record Found(
     [property: JsonProperty("url")] string Url,
     [property: JsonProperty("jump")] int Jump);
 
-public record HeadResponse
+public record HeadResponse : ISigned
 {
+    // Новое кольцо частей токена, если старое кончилось на этом запросе.
+    [JsonProperty("signs")] public string? Signs { get; set; }
+
     // Нашлись ли адреса с этим куском. false - клиент диктует свой url обычной дорогой.
     [JsonProperty("known")] public bool Known { get; set; }
 

@@ -100,4 +100,11 @@ HostMode.cs.meta
 
 ### Архив: всё, что вышло из работы, но выбрасывать жалко. Лежит на диске, в репозиторий не едет.
 ### Там и старые конфиги с настоящими токеном и кодовым словом - из-за них архив и утёк на dev.
+### Тильда в конце - чтобы Unity не импортировал старые .cs: Udon/ он видит через Assets/Src.
 Udon/Archive/
+Udon/Archive~/
+
+### Клиент живёт ОДНИМ экземпляром в Udon/. Unity компилирует только внутри Assets/, поэтому
+### Assets/Src - junction на Udon/, а не папка. После клонирования создать его заново:
+###   New-Item -ItemType Junction -Path CombineQueries\Assets\Src -Target Udon
+/CombineQueries/Assets/Src

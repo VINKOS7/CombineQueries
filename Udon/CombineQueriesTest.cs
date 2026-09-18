@@ -2,12 +2,11 @@ using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 using VRC.SDK3.Data;
-using VRC.SDK3.UdonNetworkCalling;
 using VRC.SDKBase;
-using VRC.Udon.Common.Interfaces;
 
-// Нажатия ГЛОБАЛЬНЫЕ: сетевым событием они уходят всем игрокам, и каждый выполняет их у себя -
-// своим клиентом и в свои доски. Синхронизируется только снимок досок - для тех, кто зашёл позже.
+// Чёрный куб (Connect) закреплён за первым нажавшим - для остальных заперт, только он жмёт его снова.
+// Зелёный куб (прогон) и красный (шаги) работают как раньше, локально у нажавшего. Ничего, кроме
+// закрепления чёрного, тут не синхронизируется.
 [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class CombineQueriesTest : UdonSharpBehaviour
 {
@@ -138,22 +137,8 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private float startedAt;
     private string board = "";
 
-    // Снимок досок для тех, кто зашёл позже. Пишет только владелец кнопки прогона и только в узлах -
-    // старт и конец прогона, вход игрока, смена владельца: живые игроки считают доски сами, снимок
-    // нужен лишь опоздавшим. syncedReady - остальные уже подключены, и опоздавшему пора догнать.
-    [UdonSynced] private string syncedStatus = "";
-    [UdonSynced] private string syncedRequests = "";
-    [UdonSynced] private string syncedResponses = "";
-    [UdonSynced] private string syncedData = "";
-    [UdonSynced] private bool syncedRunning;
-    [UdonSynced] private bool syncedReady;
-
-    // Считает ли этот игрок доски сам. До первого своего прогона он зритель и показывает снимок,
-    // после - снимок игнорирует: чужие доски перетирали бы свои.
-    private bool live;
-
-    // Куб кнопки прогона. Пока прогон идёт, он гаснет и нажатия не принимает - как у кнопки шагов:
-    // заблокированная кнопка, которая выглядит как обычная, неотличима от сломанной.
+    // Куб кнопки. Пока прогон идёт (зелёный) или чёрный закреплён за другим - гаснет и нажатий не
+    // принимает: заблокированная кнопка, которая выглядит как обычная, неотличима от сломанной.
     private Renderer cube;
     private Color idle;
 
@@ -163,17 +148,21 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         if (cube != null) idle = cube.material.color;
 
-        // Снимок мог прийти раньше Start, когда гасить было ещё нечего.
-        Lit(!Locked());
+        // Закрепление чёрного могло прийти раньше Start, когда гасить было ещё нечего.
+        Lit(!Blocked());
     }
 
-    // on - кнопка свободна, off - идёт прогон. Гаснет только кнопка прогона: кнопка подключения
-    // стоит на том же скрипте, но блокировать её нечем - прогона у неё нет.
+    // on - кнопка свободна, off - заблокирована. Чёрный куб темнее не станет, поэтому тёмный вместо
+    // гашения становится серым - иначе блок не виден.
     private void Lit(bool on)
     {
-        if (cube == null || action != 1) return;
+        if (cube == null || action == 2) return;
 
-        cube.material.color = on ? idle : new Color(idle.r * 0.25f, idle.g * 0.25f, idle.b * 0.25f, idle.a);
+        Color off = idle.r + idle.g + idle.b < 0.3f
+            ? new Color(0.35f, 0.35f, 0.35f, idle.a)
+            : new Color(idle.r * 0.25f, idle.g * 0.25f, idle.b * 0.25f, idle.a);
+
+        cube.material.color = on ? idle : off;
     }
 
     // Кодовое слово: поле сцены, а если оно пустое - то, с которым собран мир.
@@ -188,46 +177,50 @@ public class CombineQueriesTest : UdonSharpBehaviour
     // и подпиской убраны. Готовность видно по тому, что поток освободился, - её и ждём здесь.
     private void Update()
     {
+        Guard();
+
         if (!awaiting || client == null || client.Busy()) return;
 
         OnQueryDone();
     }
 
-    // Нажатие рассылается всем, нажавшему тоже. Решает нажавший: его кнопка прогона занята - не шлём
-    // никому, иначе у свободных игроков прогон стартовал бы, а у него нет, и доски разошлись бы.
     public override void Interact()
     {
         if (client == null) { Say("client is not assigned"); return; }
 
-        if (action == 1 && Locked())
+        // Чёрный куб (Connect/Remember): закреплён за первым нажавшим, для остальных заперт.
+        if (action != 1)
         {
-            Note("занято: идёт прогон, дождись done");
+            if (ConnectLocked()) { Say("занято: чёрный куб закреплён за другим игроком"); return; }
+
+            if (!ConnectTaken()) Claim();
+
+            Act();
             return;
         }
 
-        SendCustomNetworkEvent(NetworkEventTarget.All, nameof(Press));
-    }
+        // Зелёный куб (прогон): локальный прогон нажавшего, как было.
+        if (running) { Note("занято: идёт прогон, дождись done"); return; }
 
-    // Логика нажатия. Приходит каждому игроку, в том числе нажавшему.
-    [NetworkCallable]
-    public void Press()
-    {
-        if (client == null) { Say("client is not assigned"); return; }
-
-        // awaiting снимает OnQueryDone, но событие уходит ОДНОЙ цели - стенду. Кнопка подключения
-        // его не получает и после первого же нажатия висел бы «занятым» навсегда. При живом
-        // сервере это незаметно (подключаются один раз и идут дальше), а вот после отказа кнопка
-        // мертва: сервер подняли, а нажать заново нельзя. Спрашиваем сам клиент - он не занят,
-        // значит прошлое нажатие отработало, чем бы оно ни кончилось.
         if (awaiting && !client.Busy()) awaiting = false;
 
-        // Прогон идёт - кнопка заблокирована. Куб уже потушен, а в лог кладём строку, чтобы и в
-        // консоли было видно, почему нажатие ничего не сделало.
-        if (action == 1 && running)
-        {
-            Note("занято: идёт прогон, дождись done");
-            return;
-        }
+        if (awaiting) return;
+
+        // Connect мог нажать другой куб - у клиента общее подключение. Спрашиваем сам клиент.
+        if (!ready && client.Connected()) ready = true;
+
+        if (!ready) { Say("run Connect first"); return; }
+
+        // Нажатие после завершённого прогона - прогон заново, с чистыми досками.
+        StartRun();
+    }
+
+    // Connect/Remember. Зовётся только у владельца чёрного куба - гейт стоит в Interact.
+    private void Act()
+    {
+        // Кнопка не занята своим прошлым запросом - спрашиваем клиент: он не занят, значит прошлое
+        // нажатие отработало, чем бы оно ни кончилось.
+        if (awaiting && !client.Busy()) awaiting = false;
 
         if (awaiting) return;
 
@@ -244,29 +237,13 @@ public class CombineQueriesTest : UdonSharpBehaviour
             return;
         }
 
-        if (action == 2)
-        {
-            client.codeword = Word();
-            client.Remember();
+        // action == 2
+        client.codeword = Word();
+        client.Remember();
 
-            awaiting = client.LastError == "";
+        awaiting = client.LastError == "";
 
-            Say(awaiting ? "remember sent" : "remember refused: " + client.LastError);
-            return;
-        }
-
-        // Connect мог нажать другой куб - у него свой экземпляр стенда и свой ready. Спрашиваем сам
-        // клиент: подключён один раз - подключён для всех кнопок.
-        if (!ready && client.Connected()) ready = true;
-
-        // Зритель, чей клиент ещё догоняет connect по снимку, доски не заводит: «run Connect first»
-        // затёр бы прогон, который идёт у всех остальных.
-        if (!ready && !live && syncedReady) { Note("клиент ещё подключается - показываю снимок"); return; }
-
-        if (!ready) { Say("run Connect first"); return; }
-
-        // Нажатие после завершённого прогона - прогон заново, с чистыми досками.
-        StartRun();
+        Say(awaiting ? "remember sent" : "remember refused: " + client.LastError);
     }
 
     // Сколько vrequest выпускает один прогон. Считаем по журналу клиента, а не по шагам: шаг с
@@ -292,7 +269,6 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private void StartRun()
     {
         running = true;
-        live = true;
         step = StepHyperDb;
         vrequests = 0;
 
@@ -313,8 +289,6 @@ public class CombineQueriesTest : UdonSharpBehaviour
               + testUrl + "   " + NumberOf(testUrl.Length) + " chars   (partial - post/1 is plain)\n\n";
 
         SendStep();
-
-        Snapshot();
     }
 
     // Private: по сети её звать нельзя, а public-метод без подчёркивания вызвал бы любой игрок.
@@ -329,7 +303,6 @@ public class CombineQueriesTest : UdonSharpBehaviour
             Lit(true);
 
             Say("ERROR\n" + client.LastError);
-            Snapshot();
             return;
         }
 
@@ -389,8 +362,6 @@ public class CombineQueriesTest : UdonSharpBehaviour
         Lit(true);
 
         Note("done, vrequests " + NumberOf(vrequests));
-
-        Snapshot();
     }
 
     // Сколько прыжков приехало из БД. Показываем в обоих модах: prod пока отличается от dev
@@ -613,57 +584,57 @@ public class CombineQueriesTest : UdonSharpBehaviour
         panel.text = panel.text == "" ? lines : panel.text + "\n" + lines;
     }
 
-    // Занята ли кнопка прогона: у живого - своим прогоном, у зрителя - прогоном владельца по снимку.
-    private bool Locked() => live ? running : syncedRunning;
-
-    // Кладёт доски в снимок. Только кнопка прогона - доски её - и только владелец: сериализует он.
-    //
-    // Зритель, ставший владельцем, когда прежний ушёл, отдаёт доски как есть, а кнопку - свободной:
-    // чужой прогресс он не считает, и снять занятость потом было бы некому.
-    private void Snapshot()
+    // Заблокирован ли КУБ для гашения: зелёный - идёт прогон; чёрный - закреплён за другим игроком.
+    private bool Blocked()
     {
-        if (action != 1 || !Networking.IsOwner(gameObject)) return;
+        if (action != 1) return ConnectLocked();
 
-        syncedStatus = output != null ? output.text : "";
-        syncedRequests = requests != null ? requests.text : "";
-        syncedResponses = responses != null ? responses.text : "";
-        syncedData = data != null ? data.text : "";
-        syncedRunning = running;
-        syncedReady = client != null && client.Connected();
+        return running;
+    }
+
+    // Кто первым нажал чёрный куб в этом инстансе. Жать дальше может только он, сколько угодно раз:
+    // connect перевыдаёт знаки на сервере, и чужое нажатие рвёт поток тому, кто уже работает.
+    // -1 - ещё никто; новый инстанс начинает с чистого, и куб снова свободен.
+    [UdonSynced] private int connectOwner = -1;
+
+    // Что сейчас показывает куб - чтобы не перекрашивать материал каждый кадр.
+    private bool shownLocked;
+
+    // Чёрный куб закреплён за игроком, который сейчас в инстансе. Ушедший блок с собой уносит: иначе
+    // куб остался бы заблокированным для всех навсегда.
+    private bool ConnectTaken() => connectOwner >= 0 && Utilities.IsValid(VRCPlayerApi.GetPlayerById(connectOwner));
+
+    // Заблокирован для этого игрока: закреплён, и не за ним. Только чёрный куб.
+    private bool ConnectLocked() => action != 1 && ConnectTaken() && (Networking.LocalPlayer == null || Networking.LocalPlayer.playerId != connectOwner);
+
+    // Забирает чёрный куб себе: владение объектом, чтобы записать закрепление, и сразу рассылка.
+    private void Claim()
+    {
+        if (Networking.LocalPlayer == null) return;
+
+        Networking.SetOwner(Networking.LocalPlayer, gameObject);
+
+        connectOwner = Networking.LocalPlayer.playerId;
 
         RequestSerialization();
     }
 
-    public override void OnDeserialization()
+    private void Guard()
     {
-        if (action != 1 || live) return;
+        bool blocked = Blocked();
 
-        if (output != null) output.text = syncedStatus;
-        if (requests != null) requests.text = syncedRequests;
-        if (responses != null) responses.text = syncedResponses;
-        if (data != null) data.text = syncedData;
+        if (blocked == shownLocked) return;
 
-        Lit(!Locked());
+        shownLocked = blocked;
 
-        // Остальные уже подключены - догоняем connect молча, чтобы следующее нажатие отработало и у
-        // нас. Remember, а не Connect: пустому клиенту это то же самое, но без resetHypers, и сервер
-        // не сбросит хайперы тем, у кого прямо сейчас идёт прогон.
-        if (syncedReady && client != null && !client.Connected() && !client.Busy())
-        {
-            client.codeword = Word();
-            client.Remember();
-        }
+        Lit(!blocked);
     }
 
-    // Вошедший получает доски на сейчас, а не на последний узел: вход посреди прогона иначе показал
-    // бы его начало.
-    public override void OnPlayerJoined(VRCPlayerApi player) => Snapshot();
+    // Закрепление чёрного приезжает синхронизацией - перекрашиваем куб под новое состояние.
+    public override void OnDeserialization() => Guard();
 
-    public override void OnOwnershipTransferred(VRCPlayerApi player) => Snapshot();
-
-    // Владение по запросу не отдаём: снимок пишет владелец, и перехвативший его подсунул бы опоздавшим
-    // чужие доски. Ушедшего владельца VRChat заменяет сам, мимо запроса.
-    public override bool OnOwnershipRequest(VRCPlayerApi requestingPlayer, VRCPlayerApi requestedOwner) => false;
+    // Владение отдаём: чёрный куб забирает первый нажавший, чтобы записать закрепление.
+    public override bool OnOwnershipRequest(VRCPlayerApi requestingPlayer, VRCPlayerApi requestedOwner) => true;
 
     private void Note(string line) => Debug.Log("[CombineQueriesTest] " + line);
 

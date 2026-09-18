@@ -13,9 +13,10 @@ public class CreditHandler(ILogger<CreditHandler> logger, IOutbox outbox, ISpeec
 
         if (!speech.CheckSign(request.Sign))
         {
-            speech.Fault($"credit sign {request.Sign} rejected");
+            // Приём НЕ роняем: часть чужая, а не поток разъехался. У остальных клиентов свои
+            // кольца, и падать им из-за чужого запроса незачем.
 
-            logger.LogWarning("credit: sign {Sign} rejected, stream dropped until connect", request.Sign);
+            logger.LogWarning("credit: sign {Sign} rejected, not in the expected parts", request.Sign);
 
             throw new Exception("auth error: credit sign rejected");
         }
