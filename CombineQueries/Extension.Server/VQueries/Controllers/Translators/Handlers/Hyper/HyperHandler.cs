@@ -42,11 +42,11 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
 
         if (count == 0)
         {
-            var settled = outbox.Take();
+            var settled = outbox.Take(speech.Stream);
 
-            logger.LogInformation("hyper: debt asked, {Ready} ready now, {Pending} in flight", settled.Count, outbox.Pending);
+            logger.LogInformation("hyper: debt asked, {Ready} ready now, {Pending} in flight", settled.Count, outbox.Pending(speech.Stream));
 
-            return Task.FromResult(new HyperResponse { Known = true, Urls = 0, Ready = settled, Pending = outbox.Pending });
+            return Task.FromResult(new HyperResponse { Known = true, Urls = 0, Ready = settled, Pending = outbox.Pending(speech.Stream) });
         }
 
         // Просили count адресов - значит и отдать надо count РАЗНЫХ адресов, а не count номеров.
@@ -74,15 +74,15 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
 
             urls.Add(new SentUrl(full, jump));
 
-            outbox.Fetch(full);
+            outbox.Fetch(full, speech.Stream);
         }
 
         if (urls.Count > 0)
         {
-            var ready = outbox.Take();
+            var ready = outbox.Take(speech.Stream);
 
             logger.LogInformation("hyper: jump {Jump}{Range} -> {Urls} urls sent ({Sent}), {Ready} ready now, {Pending} in flight",
-                request.Value, count > 1 ? "+" + count : "", urls.Count, string.Join(", ", urls.Select(sent => sent.Url)), ready.Count, outbox.Pending);
+                request.Value, count > 1 ? "+" + count : "", urls.Count, string.Join(", ", urls.Select(sent => sent.Url)), ready.Count, outbox.Pending(speech.Stream));
 
             return Task.FromResult(new HyperResponse
             {
@@ -91,7 +91,7 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
                 ForwardedUrl = urls[0].Url,
                 Sent = urls,
                 Ready = ready,
-                Pending = outbox.Pending
+                Pending = outbox.Pending(speech.Stream)
             });
         }
 

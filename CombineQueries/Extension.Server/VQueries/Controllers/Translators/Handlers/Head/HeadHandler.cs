@@ -68,10 +68,10 @@ public class HeadHandler(ILogger<HeadHandler> logger, IOutbox outbox, ISpeech sp
         // Голова НАРУЖУ НЕ ХОДИТ. Её дело - назвать: вот адреса и вот их номера. Забирает их
         // прыжок, он для того и есть; смешивать поиск с доставкой значит ходить за телами, которых
         // могли и не просить. Долг она при этом несёт как любой ответ - но своего не создаёт.
-        var ready = outbox.Take();
+        var ready = outbox.Take(speech.Stream);
 
         logger.LogInformation("head: '{Text}' -> {Urls} found, {Ready} ready now, {Pending} in flight",
-            text, found.Count, ready.Count, outbox.Pending);
+            text, found.Count, ready.Count, outbox.Pending(speech.Stream));
 
         return Task.FromResult(new HeadResponse
         {
@@ -79,7 +79,7 @@ public class HeadHandler(ILogger<HeadHandler> logger, IOutbox outbox, ISpeech sp
             Urls = found.Count,
             Found = found.Select(chain => new Found(speech.Scheme + "://" + chain.Url, chain.Jump)).ToList(),
             Ready = ready,
-            Pending = outbox.Pending
+            Pending = outbox.Pending(speech.Stream)
         });
     }
 }

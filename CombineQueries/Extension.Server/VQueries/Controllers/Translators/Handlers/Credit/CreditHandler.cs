@@ -21,10 +21,10 @@ public class CreditHandler(ILogger<CreditHandler> logger, IOutbox outbox, ISpeec
             throw new Exception("auth error: credit sign rejected");
         }
 
-        var ready = outbox.Take();
+        var ready = outbox.Take(speech.Stream);
 
-        logger.LogInformation("credit: {Ready} paid now, {Pending} still in flight", ready.Count, outbox.Pending);
+        logger.LogInformation("credit: {Ready} paid now, {Pending} still in flight", ready.Count, outbox.Pending(speech.Stream));
 
-        return Task.FromResult(new CreditResponse { Ready = ready, Pending = outbox.Pending });
+        return Task.FromResult(new CreditResponse { Ready = ready, Pending = outbox.Pending(speech.Stream) });
     }
 }

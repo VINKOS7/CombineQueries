@@ -2,7 +2,9 @@ using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 using VRC.SDK3.Data;
+using VRC.SDK3.UdonNetworkCalling;
 using VRC.SDKBase;
+using VRC.Udon.Common.Interfaces;
 
 // Чёрный куб (Connect) закреплён за первым нажавшим - для остальных заперт, только он жмёт его снова.
 // Зелёный куб (прогон) и красный (шаги) работают как раньше, локально у нажавшего. Ничего, кроме
@@ -178,6 +180,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private void Update()
     {
         Guard();
+        CatchUp();
 
         if (!awaiting || client == null || client.Busy()) return;
 
@@ -195,7 +198,13 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
             if (!ConnectTaken()) Claim();
 
-            Act();
+            // Отметка инстанса: по ней подключается тот, кто зайдёт позже.
+            if (action == 0 && Networking.IsOwner(gameObject)) { linked = true; RequestSerialization(); }
+
+            // Чёрный подключает ИНСТАНС, а не одного нажавшего: событие уходит всем, и каждый
+            // подключает свой клиент у себя. Иначе у остальных клиент не подключён, и их кубы
+            // отвечают «Init has not run», хотя жать их никто не запрещал.
+            SendCustomNetworkEvent(NetworkEventTarget.All, nameof(Linked));
             return;
         }
 
@@ -215,7 +224,32 @@ public class CombineQueriesTest : UdonSharpBehaviour
         StartRun();
     }
 
-    // Connect/Remember. Зовётся только у владельца чёрного куба - гейт стоит в Interact.
+    // Подключение инстанса. Приходит каждому игроку, в том числе нажавшему: чёрный куб один, а
+    // клиентов столько же, сколько игроков, и подключиться должен каждый.
+    [NetworkCallable]
+    public void Linked() => Act();
+
+    // Инстанс подключён - значит подключён и тот, кто зашёл потом. Отметка синхронизирована, так что
+    // зашедший видит её сам и догоняет молча.
+    [UdonSynced] private bool linked;
+
+    // Догон опоздавшего. Remember, а не Connect: он не сбрасывает то, что сервер уже накопил тем,
+    // кто прямо сейчас работает.
+    private void CatchUp()
+    {
+        if (action != 0 || !linked || client == null) return;
+
+        if (awaiting || client.Connected() || client.Busy()) return;
+
+        client.codeword = Word();
+        client.Remember();
+
+        awaiting = client.LastError == "";
+
+        Say(awaiting ? "инстанс подключён - догоняю" : "remember refused: " + client.LastError);
+    }
+
+    // Connect/Remember у себя. Право нажать чёрный проверено в Interact у того, кто его нажал.
     private void Act()
     {
         // Кнопка не занята своим прошлым запросом - спрашиваем клиент: он не занят, значит прошлое

@@ -62,9 +62,9 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech sp
 
         // Наружу идём в фон: сборка закончена, а ждать чужой сервер клиенту незачем. Тело приедет
         // ДОЛГОМ - с этим же ответом, если успело, иначе со следующим запросом.
-        outbox.Fetch(url);
+        outbox.Fetch(url, speech.Stream);
 
-        var ready = outbox.Take();
+        var ready = outbox.Take(speech.Stream);
 
         int handle = speech.Intern(url, assembled.ElapsedMs);
 
@@ -74,7 +74,7 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech sp
             speech.TreeChains, speech.TreeNodes, speech.TreeDeepest, speech.LastLeaf, speech.LastPrefix, speech.LastShared);
 
         logger.LogInformation("tail: assembled in {TotalMs} ms ({Requests} requests), handle {Handle}, +{Learned} fragments, {Ready} ready now, {Pending} in flight",
-            assembled.ElapsedMs, assembled.Runes + 1, handle, learned.Addressable.Count, ready.Count, outbox.Pending);
+            assembled.ElapsedMs, assembled.Runes + 1, handle, learned.Addressable.Count, ready.Count, outbox.Pending(speech.Stream));
 
         if (learned.Overflowed.Count > 0)
             logger.LogWarning("tail: (not enough addresses) +{Overflowed} fragments stored as Infinite, direct for this query", learned.Overflowed.Count);
@@ -87,7 +87,7 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech sp
             Runes = assembled.Runes,
             ForwardedUrl = url,
             Ready = ready,
-            Pending = outbox.Pending,
+            Pending = outbox.Pending(speech.Stream),
             Handle = handle,
             Leaf = speech.LastLeaf,
             Prefix = speech.LastPrefix,

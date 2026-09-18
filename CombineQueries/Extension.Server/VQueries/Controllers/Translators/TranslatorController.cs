@@ -25,8 +25,6 @@ public class TranslatorController : Controller
         _speech = speech;
     }
 
-    // Ответ подписанного маршрута увозит новое кольцо, если старое кончилось именно на этом запросе.
-    // Только подписанные: у /c/ и /d/ части нет, и чужое кольцо уехало бы не тому, кто его ждёт.
     private async Task<TAnswer> Signed<TAnswer>(Task<TAnswer> asked) where TAnswer : ISigned
     {
         var answer = await asked;

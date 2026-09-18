@@ -222,11 +222,23 @@ public class Speech : ISpeech
     // Клиентов много, поэтому и потоков много: сервер держит по одному на каждое подключение.
     private sealed class SignStream
     {
+        // Номер потока: по нему ящик долгов отличает, чьи тела он держит.
+        public int Id;
+
         public string Ring = "";
         public int Position;
         public DateTime Seen;
 
+        // Набор частей этого клиента: [Lane, Lane + Size). Наборы не пересекаются, поэтому по любой
+        // части видно, чей запрос - без этого сервер путал клиентов и клал тело в чужой ящик.
+        public int Lane;
+        public int Size = SignValues;
+
+
+
         public int Next => Ring[Position] - '0';
+
+        public bool Owns(int part) => part >= Lane && part < Lane + Size;
     }
 
     private readonly List<SignStream> _streams = [];
@@ -235,9 +247,20 @@ public class Speech : ISpeech
     // иначе двое разберут один поток пополам.
     private readonly object _signLock = new();
 
-    // Сколько подключений помним. Больше - вытесняем самое давнее: его клиент либо ушёл, либо
-    // подключится заново, а бесконечный список искал бы чужую часть тем дольше, чем дольше живёт сервер.
-    private const int MaxStreams = 32;
+    // Части делятся на наборы ПОСТОЯННОГО размера, и набор закрепляется за клиентом до конца его
+    // жизни. Переразбирать на лету нельзя: старое кольцо клиента попало бы в чужой набор, и его
+    // запросы засчитывались бы соседу.
+    //
+    // Одна часть на клиента - восемь клиентов разом, столько мастер и держит инстансов. Кольцо при
+    // этом вырождается в постоянную строку: часть становится просто номером клиента, и очерёдность
+    // уже ничего не стережёт. Поставить 2 - вернутся четыре клиента и проверка чередования.
+    private const int LaneSize = 1;
+
+    private const int MaxStreams = SignValues / LaneSize;
+
+    // Сколько поток живёт без запросов. Переживший этот срок считается ушедшим, и его набор забирает
+    // новый клиент: иначе восемь реконнектов заперли бы сервер навсегда.
+    private static readonly TimeSpan SignLife = TimeSpan.FromMinutes(10);
 
     public const int SignValues = 8;
 
@@ -269,20 +292,29 @@ public class Speech : ISpeech
 
             SignStream? mine = null;
 
+            // Часть ждут несколько - берём того, чей это НАБОР: наборы не пересекаются, и хозяин
+            // ровно один. Такое бывает сразу после переразбиения, пока кто-то ещё на старом кольце.
+            // Хозяина нет вовсе - берём того, по кому приходили позже.
             foreach (var stream in _streams)
-                if (stream.Next % values == sign && (mine is null || stream.Seen > mine.Seen)) mine = stream;
+            {
+                if (stream.Next % values != sign) continue;
+
+                if (mine is null || stream.Owns(sign) || (!mine.Owns(sign) && stream.Seen > mine.Seen)) mine = stream;
+            }
 
             if (mine is null) return false;
 
             mine.Position++;
             mine.Seen = DateTime.UtcNow;
 
+            _stream.Value = mine.Id;
+
             // Кольцо кончилось - на его место рождается новое, и уезжает тем же ответом, в котором
             // клиент потратил последнюю часть. Тот, кто подслушал кольцо целиком, получает его мёртвым:
             // следующая часть придёт уже из того, которого он не видел.
             if (mine.Position < mine.Ring.Length) return true;
 
-            mine.Ring = NewSigns();
+            mine.Ring = NewSigns(mine.Lane, mine.Size);
             mine.Position = 0;
 
             _fresh.Value = mine.Ring;
@@ -295,11 +327,15 @@ public class Speech : ISpeech
     // позицию в нём. Своё кольцо у каждого - по нему клиенты и различаются.
     private string OpenSigns()
     {
-        string ring = NewSigns();
-
         lock (_signLock)
         {
-            if (_streams.Count >= MaxStreams)
+            // Ушедшие освобождают свой набор: по ним давно не приходили.
+            _streams.RemoveAll(stream => DateTime.UtcNow - stream.Seen > SignLife);
+
+            // Свободных наборов нет - забираем самый залежавшийся вместе с его набором. Отказывать
+            // нельзя: подключаются и заново, и каждый отказ запирал бы сервер до конца чужого срока
+            // жизни. Вытесненный получит отказ на своём следующем запросе и подключится сам.
+            while (_streams.Count >= MaxStreams)
             {
                 var oldest = _streams[0];
 
@@ -308,13 +344,50 @@ public class Speech : ISpeech
                 _streams.Remove(oldest);
             }
 
-            _streams.Add(new SignStream { Ring = ring, Position = 0, Seen = DateTime.UtcNow });
+            int lane = FreeLane();
+
+            var mine = new SignStream
+            {
+                Id = ++_lastStream,
+                Lane = lane,
+                Size = LaneSize,
+                Ring = NewSigns(lane, LaneSize),
+                Seen = DateTime.UtcNow
+            };
+
+            _streams.Add(mine);
+
+            _stream.Value = mine.Id;
+
+            return mine.Ring;
+        }
+    }
+
+    // Первый набор, который никем не занят. Занятых всегда меньше, чем наборов: место освобождает
+    // вытеснение выше.
+    private int FreeLane()
+    {
+        for (int lane = 0; lane < SignValues; lane += LaneSize)
+        {
+            bool taken = false;
+
+            foreach (var stream in _streams) if (stream.Lane == lane) { taken = true; break; }
+
+            if (!taken) return lane;
         }
 
-        return ring;
+        return 0;
     }
 
     public int Streams { get { lock (_signLock) return _streams.Count; } }
+
+    private int _lastStream;
+
+    // Чей запрос сейчас обрабатывается. Как и свежее кольцо, привязано к запросу: сервер один на всех,
+    // а поток у каждого свой. 0 - части в запросе не было (/c, /d), и общий ящик тут единственный.
+    private static readonly AsyncLocal<int> _stream = new();
+
+    public int Stream => _stream.Value;
 
     // Привязано к ЗАПРОСУ, а не к серверу: сервер один на всех, и общее поле отдало бы новое кольцо
     // тому, чей ответ собрался первым. AsyncLocal живёт внутри той же цепочки вызовов, что и проверка.
@@ -333,11 +406,12 @@ public class Speech : ISpeech
     // Сколько значений у подписи прыжка: один бит.
     public const int JumpSignValues = 2;
 
-    private static string NewSigns()
+    // Кольцо из частей ОДНОГО набора: [from, from + size).
+    private static string NewSigns(int from, int size)
     {
         var signs = new char[SignLength];
 
-        for (int i = 0; i < SignLength; i++) signs[i] = (char)('0' + System.Security.Cryptography.RandomNumberGenerator.GetInt32(SignValues));
+        for (int i = 0; i < SignLength; i++) signs[i] = (char)('0' + from + System.Security.Cryptography.RandomNumberGenerator.GetInt32(size));
 
         return new string(signs);
     }

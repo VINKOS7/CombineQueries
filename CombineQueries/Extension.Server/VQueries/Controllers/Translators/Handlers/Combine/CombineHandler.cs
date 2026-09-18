@@ -67,8 +67,8 @@ public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech, IOut
 
         // Долг цепляем и сюда: он копится между запросами, а комбайнов в сборке больше всего -
         // значит через них он и доедет раньше всего.
-        var ready = outbox.Take();
+        var ready = outbox.Take(speech.Stream);
 
-        return Task.FromResult(new CombineResponse { Received = received, Ready = ready, Pending = outbox.Pending });
+        return Task.FromResult(new CombineResponse { Received = received, Ready = ready, Pending = outbox.Pending(speech.Stream) });
     }
 }
