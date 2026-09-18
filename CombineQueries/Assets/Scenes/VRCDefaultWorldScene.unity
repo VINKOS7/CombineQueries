@@ -356,7 +356,6 @@ MonoBehaviour:
   _udonSharpBackingUdonBehaviour: {fileID: 256977219}
   client: {fileID: 1336585641}
   action: 1
-  owner: {fileID: 0}
   codeword: 
   output: {fileID: 1378402707}
   requests: {fileID: 1224049336}
@@ -1539,7 +1538,6 @@ MonoBehaviour:
   _udonSharpBackingUdonBehaviour: {fileID: 1435982654}
   client: {fileID: 1336585641}
   action: 0
-  owner: {fileID: 0}
   codeword: 
   output: {fileID: 1378402707}
   requests: {fileID: 0}
@@ -2300,9 +2298,9 @@ MonoBehaviour:
   DynamicPrefabs: []
   DynamicMaterials:
   - {fileID: 2100000, guid: cea7f1e7e1e52a14ba543be0c99ed572, type: 2}
-  - {fileID: 671119288}
   - {fileID: 1670410191}
   - {fileID: 1785042150}
+  - {fileID: 671119288}
   LightMapsNear: []
   LightMapsFar: []
   LightMode: 0
