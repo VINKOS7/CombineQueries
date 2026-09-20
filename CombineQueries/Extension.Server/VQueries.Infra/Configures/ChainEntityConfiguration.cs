@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 using CombineQueries.Domain.Aggregates.Translator;
+using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Infra.Configures;
 

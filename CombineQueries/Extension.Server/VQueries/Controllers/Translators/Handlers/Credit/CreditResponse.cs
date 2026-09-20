@@ -1,6 +1,7 @@
 using Newtonsoft.Json;
 
 using CombineQueries.Api.Services.Outbox;
+using CombineQueries.Api.Controllers.Accounts;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Credit;
 

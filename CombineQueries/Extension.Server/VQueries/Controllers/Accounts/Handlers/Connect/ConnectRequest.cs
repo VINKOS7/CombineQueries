@@ -1,8 +1,8 @@
 using MediatR;
 using Newtonsoft.Json;
 using Microsoft.AspNetCore.Mvc;
-using CombineQueries.Domain.Aggregates.Translator;
 using CombineQueries.Domain.Aggregates.Translator.types;
+using CombineQueries.Domain.Aggregates.Translator;
 
 namespace CombineQueries.Api.Controllers.Accounts.Handlers.Connect;
 

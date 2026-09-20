@@ -415,14 +415,21 @@ public class CombineQueries : UdonSharpBehaviour
             : new DataList();
 
         // Слот 0 - тело, слот 1 - отправлен ли набор, в котором едет этот адрес, слот 2 - номер
-        // запроса, на котором тело приехало: 0 - сам vrequest (или тело было до выпуска), дальше -
-        // запросы после конца его GET. Новый запрос всегда начинается неотправленным: выпустит его
-        // первый же Result по этой коробке.
+        // запроса внутри своего vrequest, в ответе которого тело приехало: ответ на сам vrequest
+        // это первый. Слот 3 - во что обошлась ОТПРАВКА адреса: куски сборки с хвостом, либо один
+        // запрос, если адрес назвал прыжок или голова. Слот 4 - тот же ответ, но номером с начала
+        // работы клиента: по нему видно место в общем потоке запросов.
+        //
+        // Новый запрос всегда начинается неотправленным: выпустит его первый же Result по коробке.
         if (box.Count == 0) { box.Add(""); box.Add(false); }
         if (box.Count == 2) box.Add(0);
+        if (box.Count == 3) box.Add(0);
+        if (box.Count == 4) box.Add(0);
 
         box.SetValue(1, false);
         box.SetValue(2, 0);
+        box.SetValue(3, 0);
+        box.SetValue(4, 0);
 
         boxes.SetValue(key, box);
 
@@ -538,7 +545,17 @@ public class CombineQueries : UdonSharpBehaviour
         {
             TakeBatch();
 
-            if (LastError == "") { NextInBatch(); return; }
+            if (LastError == "")
+            {
+                NextInBatch();
+
+                // Набор закрылся прямо тут, и раньше этот выход уносил с собой планирование добора:
+                // долг оставался у сервера до сторожа мира. NextInBatch либо занял клиент следующим
+                // куском, либо закончил - во втором случае долг забираем сами.
+                if (!busy && LastPending > 0) SendCustomEventDelayedSeconds(nameof(Settle), CreditDelay);
+
+                return;
+            }
 
             batch = new string[0];
         }
@@ -551,6 +568,10 @@ public class CombineQueries : UdonSharpBehaviour
     private void TakeBatch()
     {
         if (pendingUrl == "") return;
+
+        // Адрес набора отправляли МЫ: его цена - все запросы с Dispatch до этого Done, то есть
+        // голова, прыжок, куски сборки и хвост.
+        Sent(pendingUrl, LastQueries);
 
         if (!bodies.ContainsKey(pendingUrl)) bodies.SetValue(pendingUrl, Take());
 
@@ -584,18 +605,29 @@ public class CombineQueries : UdonSharpBehaviour
 
     // ==== Коробки ====
 
+    // Во что обошлась отправка адреса. Ставим, а не прибавляем: это цена ЭТОЙ отправки.
+    private void Sent(string payload, int queries)
+    {
+        if (!boxes.TryGetValue(payload, out DataToken had) || had.TokenType != TokenType.DataList) return;
+
+        if (had.DataList.Count > 3) had.DataList.SetValue(3, queries);
+    }
+
     private void Fill(string payload, string body)
     {
         if (!boxes.TryGetValue(payload, out DataToken had) || had.TokenType != TokenType.DataList) return;
 
         had.DataList.SetValue(0, body);
 
-        // Первое тело после выпуска: номер запроса, на котором оно приехало. Сам vrequest - это
-        // запрос 0, счёт идёт от конца его GET: тело в ответе на него даёт 0, в следующем запросе - 1.
-        // Load считает запрос до отправки, поэтому ответ на vrequest застаёт счётчик на единицу выше отсечки.
+        // Первое тело после выпуска: в ответе какого запроса оно приехало. Считаем с единицы -
+        // ответ на сам vrequest и есть первый. Load считает запрос до отправки, поэтому разница с
+        // отсечкой уже даёт нужный номер.
         if (body == "" || !releasedAt.TryGetValue(payload, out DataToken from) || from.TokenType != TokenType.Int) return;
 
-        if (had.DataList.Count > 2) had.DataList.SetValue(2, Mathf.Max(0, TotalQueries - from.Int - 1));
+        if (had.DataList.Count > 2) had.DataList.SetValue(2, TotalQueries - from.Int);
+
+        // И тот же ответ номером с начала работы клиента.
+        if (had.DataList.Count > 4) had.DataList.SetValue(4, TotalQueries);
 
         releasedAt.Remove(payload);
     }
@@ -954,7 +986,16 @@ public class CombineQueries : UdonSharpBehaviour
 
     public void Settle()
     {
-        if (busy) return;
+        // Занятость добор НЕ отменяет, а откладывает. Раньше запланированный добор молча исчезал,
+        // если клиент в этот миг что-то грузил, и долг оставался у сервера до сторожа мира - отсюда
+        // и провалы в десять секунд между телами. Ограничивать отправку нам незачем: её и так
+        // ограничивает VRCStringDownloader, а добор лишь забирает уже готовые ответы.
+        if (busy)
+        {
+            if (LastPending > 0) SendCustomEventDelayedSeconds(nameof(Settle), CreditDelay);
+
+            return;
+        }
 
         LastError = "";
         forwarded = "";
@@ -1214,6 +1255,9 @@ public class CombineQueries : UdonSharpBehaviour
 
             Mark(PayloadOf(url));
 
+            // Прыжок назвал чужой адрес одним запросом - столько его отправка и стоила.
+            if (PayloadOf(url) != pendingUrl) Sent(PayloadOf(url), 1);
+
             Named(url, "vrequest[" + TotalQueries + "] hyper");
 
             asked.Add(PayloadOf(url));
@@ -1245,6 +1289,9 @@ public class CombineQueries : UdonSharpBehaviour
             if (url == "" || jump < 0) continue;
 
             KeepJump(PayloadOf(url), jump);
+
+            // То же у головы: назвала адрес одним запросом.
+            if (PayloadOf(url) != pendingUrl) Sent(PayloadOf(url), 1);
 
             Named(url, "head[" + TotalQueries + "]");
 

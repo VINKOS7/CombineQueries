@@ -190,7 +190,8 @@ public class SampleSteps : UdonSharpBehaviour
             seen[i] = true;
             changed = true;
 
-            log = log + "\nresponse: " + asks[i] + ", " + body.Length + " bytes, " + Queries(i) + " queries, " + Ms(i < First ? sentFirst : sentSecond) + " ms";
+            log = log + "\nresponse " + Global(i) + "." + Answer(i) + ": " + asks[i] + ", " + body.Length
+                + " bytes, " + Queries(i) + " queries, " + Ms(i < First ? sentFirst : sentSecond) + " ms";
         }
 
         int readyFirst = Ready(0, First);
@@ -277,13 +278,21 @@ public class SampleSteps : UdonSharpBehaviour
     // Время от момента from до сейчас.
     private int Ms(float from) => (int)((Time.time - from) * 1000f);
 
-    // Сколько запросов клиент потратил на адрес i-й коробки: те, что его просили, и тот, что
-    // привёз тело долгом. Клиент кладёт это в третий слот коробки.
-    private int Queries(int at)
+    // Во что обошлась ОТПРАВКА адреса i-й коробки: куски сборки с хвостом, либо один запрос, если
+    // адрес назвал прыжок или голова. Клиент кладёт это в четвёртый слот.
+    private int Queries(int at) => Slot(at, 3);
+
+    // Номер запроса своего vrequest, в ответе которого приехало тело: ответ на сам vrequest первый.
+    private int Answer(int at) => Slot(at, 2);
+
+    // Тот же ответ, но номером с начала работы клиента - место в общем потоке запросов.
+    private int Global(int at) => Slot(at, 4);
+
+    private int Slot(int at, int slot)
     {
         if (!pack.TryGetValue(at, out DataToken box) || box.TokenType != TokenType.DataList) return 0;
 
-        return box.DataList.TryGetValue(2, out DataToken count) && count.TokenType == TokenType.Int ? count.Int : 0;
+        return box.DataList.TryGetValue(slot, out DataToken count) && count.TokenType == TokenType.Int ? count.Int : 0;
     }
 
     // Сколько коробок из [from, to) уже с телом.

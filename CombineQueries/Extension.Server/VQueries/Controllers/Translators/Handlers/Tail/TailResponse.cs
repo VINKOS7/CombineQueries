@@ -3,6 +3,7 @@ using Newtonsoft.Json;
 using CombineQueries.Api.Services.Outbox;
 
 using CombineQueries.Api.Services.Speech;
+using CombineQueries.Api.Controllers.Accounts;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 

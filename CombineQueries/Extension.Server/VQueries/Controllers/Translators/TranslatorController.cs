@@ -10,6 +10,7 @@ using CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 using CombineQueries.Api.Controllers.Translators.Handlers.Credit;
 using CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 using CombineQueries.Api.Services.Speech;
+using CombineQueries.Api.Controllers.Accounts;
 
 namespace CombineQueries.Api.Controllers.Translators;
 
@@ -23,15 +24,6 @@ public class TranslatorController : Controller
     {
         _mediator = mediator;
         _speech = speech;
-    }
-
-    private async Task<TAnswer> Signed<TAnswer>(Task<TAnswer> asked) where TAnswer : ISigned
-    {
-        var answer = await asked;
-
-        answer.Signs = _speech.TakeFreshSigns();
-
-        return answer;
     }
 
     [AllowAnonymous] [HttpGet("/h/{jump:int}/{count:int}/{sign:int}")] public Task<HyperResponse> Hyper(int jump, int count, int sign) 
@@ -54,4 +46,14 @@ public class TranslatorController : Controller
 
     [AllowAnonymous] [HttpGet("/cf/{id:int}/{sign:int}")] public Task<TailResponse> CloseWith(int id, int sign)
         => Signed(_mediator.Send(new TailRequest { Runes = "", Sign = sign, Fragment = id, Type = TypeQuery.Fragmentate }));
+
+    //костыльно, но Декоратор, мб стоит оформить в отдельный класс\сервис, но пока так
+    private async Task<TAnswer> Signed<TAnswer>(Task<TAnswer> asked) where TAnswer : ISigned
+    {
+        var answer = await asked;
+
+        answer.Signs = _speech.TakeFreshSigns();
+
+        return answer;
+    }
 }

@@ -1,6 +1,6 @@
 using Dotseed.Domain;
 
-namespace CombineQueries.Domain.Aggregates.Translator;
+namespace CombineQueries.Domain.Aggregates.Translator.types;
 
 // Строка словаря транслятора: ГЛОБАЛЬНЫЙ адрес -> текст. Адрес тот же, которым живёт рантайм
 // (Speech._fragments): [0, dfaSize) - L2, [dfaSize, dfaSize*pageCount) - L3 (id = page*dfaSize + offset),
