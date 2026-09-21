@@ -23,7 +23,7 @@ public class TranslatorController : Controller
     public TranslatorController(IMediator mediator, ISpeech speech)
     {
         _mediator = mediator;
-        _speech = speech;
+        _speech = speech;// its problem
     }
 
     [AllowAnonymous] [HttpGet("/h/{jump:int}/{count:int}/{sign:int}")] public Task<HyperResponse> Hyper(int jump, int count, int sign) 
@@ -48,6 +48,7 @@ public class TranslatorController : Controller
         => Signed(_mediator.Send(new TailRequest { Runes = "", Sign = sign, Fragment = id, Type = TypeQuery.Fragmentate }));
 
     //костыльно, но Декоратор, мб стоит оформить в отдельный класс\сервис, но пока так
+    // надо перести в обработчик(и)
     private async Task<TAnswer> Signed<TAnswer>(Task<TAnswer> asked) where TAnswer : ISigned
     {
         var answer = await asked;
