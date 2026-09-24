@@ -21,8 +21,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     [UdonSynced] private bool linked;
     [UdonSynced] private bool syncedRunning;
-    //[UdonSynced] private string syncedShowValueBuf = string.Empty;
     [UdonSynced] private string syncedBoard = string.Empty;
+    [UdonSynced] private bool awaiting;
+
 
     public int action = 0;
 
@@ -132,7 +133,6 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private const int StepBatch = 17;
 
     private bool ready;
-    private bool awaiting;
     private int step;
     private float startedAt;
     //private string board = "";
@@ -158,8 +158,8 @@ public class CombineQueriesTest : UdonSharpBehaviour
     {
         if (cube == null || action == 2) return;
 
-        cube.material.color = on 
-            ? idle 
+        cube.material.color = on
+            ? idle
             : new Color(idle.r * 0.25f, idle.g * 0.25f, idle.b * 0.25f, idle.a);
     }
 
@@ -208,6 +208,8 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (syncedRunning) { Note("занято: идёт прогон, дождись done"); return; }
 
         if (awaiting && !client.Busy()) awaiting = false;
+
+        RequestSerialization();
 
         if (awaiting) return;
 
@@ -307,6 +309,8 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private void StartRun()
     {
         syncedRunning = true;
+
+        RequestSerialization();
 
         // Начинаем сразу с пачки. Одиночные шаги (StepHyperDb и всё, что за StepLast) остались в
         // коде, но в прогон не входят: стенд показывает то же, что лестница, - набор адресов одним
@@ -670,13 +674,21 @@ public class CombineQueriesTest : UdonSharpBehaviour
     // Забирает чёрный куб себе: владение объектом, чтобы записать закрепление, и сразу рассылка.
     private void Claim()
     {
-        if (Networking.LocalPlayer == null) return;
+        if (Networking.LocalPlayer == null)
+            return;
 
-        Networking.SetOwner(Networking.LocalPlayer, gameObject);
+        if (!Networking.IsOwner(gameObject))
+        {
+            Networking.SetOwner(
+                Networking.LocalPlayer,
+                gameObject
+            );
+        }
 
         connectOwner = Networking.LocalPlayer.playerId;
-
         RequestSerialization();
+
+        Guard();
     }
 
     private void Guard()
@@ -700,7 +712,12 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private void Show(string tail)
     {
-        if (output != null) output.text = syncedBoard + tail;
+        if (output != null)
+        {
+            output.text = syncedBoard + tail;
+
+            RequestSerialization();
+        }
     }
 
     private void Say(string message)
