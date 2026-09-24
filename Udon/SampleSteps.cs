@@ -1,31 +1,22 @@
+using Newtonsoft.Json;
 using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 using VRC.SDK3.Data;
 using VRC.SDKBase;
 
-// РЕЛИЗНЫЙ РИГ: одна кнопка, и в ней весь смысл тулзы.
-//
-// Мир считает, сколько шагов прошёл игрок, и по нажатию идёт по адресам, в которых это число стоит
-// прямо в пути. Таких адресов не существовало до нажатия, запечь их заранее нельзя - а Udon умеет
-// грузить только запечённое. Поэтому кнопка и показывает то, чего в мире без тулзы не бывает.
-//
-// Одно нажатие - ДВЕ пачки ПО ОЧЕРЕДИ: сперва четыре адреса; как только они все пришли, следом два.
-// Номер идёт от числа шагов и растёт на единицу сквозь обе: при 7 шагах первая пачка это
-// products/7..10, вторая - products/11 и 12. Каждая пачка это свои Require и ОДИН Result, который
-// её и выпускает, и у каждой своё время - от её собственного vrequest.
-//
-// ОБЩИЙ ЭКРАН. Шаги каждый копит свои, но прогон ведёт НАЖАВШИЙ: по его шагам, и его доску видят
-// все. Пока прогон идёт - кнопка заперта у всех; нажать снова можно только после того, как он
-// отработал. Ведущий забирает объект и транслирует доску снимком; вошедший позже видит её на сейчас.
-//
-// Риг НЕЗАВИСИМ от остальных: он не перехватывает событие клиента и не читает его журнал. Просит
-// через Require, получает коробки и ждёт по ним результат - так же, как это будет делать любой мир,
-// взявший тулзу.
 [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class SampleSteps : UdonSharpBehaviour
 {
     public CombineQueries client;
+
+    // Снимок доски для всех: доска ведущего, чтобы каждый видел то же и её изменение. syncedRunning -
+    // идёт ли прогон: по нему кнопка заперта у всех, а не только у ведущего. Пишет только владелец
+    // объекта (ведущий), в узлах прогона - покадрово сеть VRChat не вывезет.
+    [UdonSynced] private string syncedLog = "";
+    [UdonSynced] private string syncedProgress = "";
+    [UdonSynced] private bool syncedRunning;
+
 
     [Tooltip("Начало адреса. Число шагов дописывается в конец")]
     public string urlPrefix = "https://dummyjson.com/products/";
@@ -61,7 +52,9 @@ public class SampleSteps : UdonSharpBehaviour
     {
         if (cube == null) return;
 
-        cube.material.color = on ? idle : new Color(idle.r * 0.25f, idle.g * 0.25f, idle.b * 0.25f, idle.a);
+        cube.material.color = on 
+            ? idle 
+            : new Color(idle.r * 0.25f, idle.g * 0.25f, idle.b * 0.25f, idle.a);
     }
 
     // Размеры пачек одного нажатия: сперва четыре адреса, следом два.
@@ -70,6 +63,7 @@ public class SampleSteps : UdonSharpBehaviour
 
     // Коробки обеих пачек подряд: [0, First) - первая, [First, First + Second) - вторая. Места второй
     // заведены сразу, но заполняются только когда она уходит.
+    // Ключи пачки: Require отдаёт ключ, Result по нему же возвращает тело.
     private DataList pack;
 
     // Адреса в том же порядке - для вывода.
@@ -99,13 +93,6 @@ public class SampleSteps : UdonSharpBehaviour
     private float waitedFrom;
 
     private string log = "";
-
-    // Снимок доски для всех: доска ведущего, чтобы каждый видел то же и её изменение. syncedRunning -
-    // идёт ли прогон: по нему кнопка заперта у всех, а не только у ведущего. Пишет только владелец
-    // объекта (ведущий), в узлах прогона - покадрово сеть VRChat не вывезет.
-    [UdonSynced] private string syncedLog = "";
-    [UdonSynced] private string syncedProgress = "";
-    [UdonSynced] private bool syncedRunning;
 
     // Ведёт ли доску этот игрок сам (он нажал). Не ведущий - зритель: доску берёт из снимка и не
     // считает свою, иначе она перетёрла бы экран ведущего. Сбрасывается по концу прогона - тогда
@@ -176,22 +163,62 @@ public class SampleSteps : UdonSharpBehaviour
 
         bool changed = false;
 
-        // response - на каждое тело, как только оно пришло. Время - от vrequest СВОЕЙ пачки.
+        // Сперва шапка response - это ОДИН ответ сервера, - а под ней response-url на каждый адрес,
+        // который в нём приехал. Раньше номер ответа повторялся в каждой строке, и выглядело так,
+        // будто ответов было столько же, сколько тел. Время - от vrequest СВОЕЙ пачки.
         int bound = secondSent ? pack.Count : First;
 
-        for (int i = 0; i < bound; i++)
+        // Потолок обязателен, и вот почему. Выход из цикла держится на том, что каждый проход
+        // пометит хотя бы одну коробку, а это верно, только если Global(pick) не изменится между
+        // выбором и печатью. Но Body() по дороге зовёт client.Result(), то есть Run(), - и поручиться
+        // за неизменность номера нельзя. В Udon цена ошибки не исключение, а повисший главный поток:
+        // редактор перестаёт выходить из плеймода, и помогает только убийство процесса.
+        //
+        // Проходов физически не может быть больше, чем коробок: каждый закрывает хотя бы одну.
+        for (int pass = 0; pass < bound; pass++)
         {
-            if (seen[i]) continue;
+            // Самый ранний из непоказанных ответов: тела одного ответа делят его номер.
+            int pick = -1;
 
-            string body = Body(i);
+            for (int i = 0; i < bound; i++)
+            {
+                if (seen[i] || Body(i) == "") continue;
 
-            if (body == "") continue;
+                if (pick < 0 || Global(i) < Global(pick)) pick = i;
+            }
 
-            seen[i] = true;
-            changed = true;
+            if (pick < 0) break;
 
-            log = log + "\nresponse " + Global(i) + "." + Answer(i) + ": " + asks[i] + ", " + body.Length
-                + " bytes, " + Queries(i) + " queries, " + Ms(i < First ? sentFirst : sentSecond) + " ms";
+            int answer = Global(pick);
+            int urls = 0, bytes = 0;
+
+            for (int i = 0; i < bound; i++)
+            {
+                if (seen[i] || Body(i) == "" || Global(i) != answer) continue;
+
+                urls++;
+                bytes += Body(i).Length;
+            }
+
+            log = log + "\nresponse " + answer + ": " + urls + " urls, " + bytes + " bytes, "
+                + Ms(pick < First ? sentFirst : sentSecond) + " ms";
+
+            // Вторая цифра - номер ОТВЕТА внутри своего vrequest. Номер самого ответа уже в шапке, и
+            // повторять его в каждой строке значило бы писать всем одно и то же: тела одного ответа
+            // делят его номер, и строки выглядели бы как 10.1, 10.1 - будто шапки не хватает.
+            for (int i = 0; i < bound; i++)
+            {
+                if (seen[i] || Body(i) == "" || Global(i) != answer) continue;
+
+                seen[i] = true;
+                changed = true;
+
+                string body = Body(i);
+
+                log = log + "\nresponse-url " + answer + "." + Answer(i) + ": " + asks[i] + ", " + body.Length
+                    + " bytes, " + Queries(i) + " queries, " + client.StatusName(Key(i))
+                    + ", " + Ms(i < First ? sentFirst : sentSecond) + " ms   " + Cut(body, 125);
+            }
         }
 
         int readyFirst = Ready(0, First);
@@ -226,7 +253,7 @@ public class SampleSteps : UdonSharpBehaviour
 
         if (closedFirst && closedSecond)
         {
-            log = log + "\n" + Cut(Body(0));
+            log = log + "\n" + Cut(Body(0), 200);
 
             pack = null;
             live = false;
@@ -241,6 +268,9 @@ public class SampleSteps : UdonSharpBehaviour
         // изменение». Узел синхронизации, не каждый кадр.
         if (changed) { Show(); Snapshot(); }
 
+        // Пока у клиента что-то в полёте, переспрашивать нечего: ответ либо привезёт наше
+        // тело, либо довеском долг. Без этой строки сторож переспрашивает поверх летящего и
+        // сам же держит полёт непустым.
         if (client.Busy()) return;
 
         // Сторож: чужая пачка может увести наш адрес с собой, и тогда тело уедет в её набор, а мы
@@ -258,6 +288,10 @@ public class SampleSteps : UdonSharpBehaviour
     // Выпуск второй пачки: два Require, затем ОДИН Result. Её vrequest и её часы - отсюда.
     private void SendSecond()
     {
+        // Границы второй пачки это [First, First + Second), поэтому и предел обхода такой же.
+        // Было Second, то есть 2 при First = 4: оба обхода не делали НИ ОДНОГО шага - строка
+        // уходила пустой, адреса не просились вовсе, и пачку выпускал только сторож, через
+        // Patience. Отсюда и её 20 с на первое тело.
         int total = First + Second;
 
         string line = "\nvrequest 2 ->";
@@ -270,6 +304,7 @@ public class SampleSteps : UdonSharpBehaviour
         waitedFrom = sentSecond;
         secondSent = true;
 
+        Debug.Log("SendSecond");
         for (int i = First; i < total; i++) Put(i, asks[i]);
 
         Release(total - 1);
@@ -280,19 +315,19 @@ public class SampleSteps : UdonSharpBehaviour
 
     // Во что обошлась ОТПРАВКА адреса i-й коробки: куски сборки с хвостом, либо один запрос, если
     // адрес назвал прыжок или голова. Клиент кладёт это в четвёртый слот.
-    private int Queries(int at) => Slot(at, 3);
+    private int Queries(int at) => client.QueriesOf(Key(at));
 
     // Номер запроса своего vrequest, в ответе которого приехало тело: ответ на сам vrequest первый.
-    private int Answer(int at) => Slot(at, 2);
+    private int Answer(int at) => client.AnswerOf(Key(at));
 
     // Тот же ответ, но номером с начала работы клиента - место в общем потоке запросов.
-    private int Global(int at) => Slot(at, 4);
+    private int Global(int at) => client.GlobalOf(Key(at));
 
-    private int Slot(int at, int slot)
+    private string Key(int at)
     {
-        if (!pack.TryGetValue(at, out DataToken box) || box.TokenType != TokenType.DataList) return 0;
+        if (pack == null || !pack.TryGetValue(at, out DataToken key) || key.TokenType != TokenType.String) return "";
 
-        return box.DataList.TryGetValue(slot, out DataToken count) && count.TokenType == TokenType.Int ? count.Int : 0;
+        return key.String;
     }
 
     // Сколько коробок из [from, to) уже с телом.
@@ -328,17 +363,21 @@ public class SampleSteps : UdonSharpBehaviour
 
     // Тело i-й коробки или пусто. Читаем слот напрямую, МИМО Result: Result - это сигнал отправки,
     // и звать его на каждом кадре ради проверки было бы неправдой о том, сколько раз мы просим.
+    // Метку ставим перед КАЖДЫМ Result: он же и выпускает набор, а клиент общий - без метки строки
+    // лестницы и стенда лягут в консоль вперемешку и неразличимо.
     private string Body(int at)
     {
-        if (!pack.TryGetValue(at, out DataToken box) || box.TokenType != TokenType.DataList) return "";
+        client.who = "steps";
 
-        return box.DataList.TryGetValue(0, out DataToken body) && body.TokenType == TokenType.String ? body.String : "";
+        return client.Result(Key(at));
     }
 
     // Один Result на пачку: он и выпускает её целиком.
     private void Release(int at)
     {
-        if (pack.TryGetValue(at, out DataToken box) && box.TokenType == TokenType.DataList) client.Result(box.DataList);
+        client.who = "steps";
+
+        client.Result(Key(at));
     }
 
     // Просит адрес и кладёт его коробку на место at.
@@ -347,13 +386,7 @@ public class SampleSteps : UdonSharpBehaviour
     // раза - и Wait принял бы его за новый ответ в тот же кадр, с временем 0 мс.
     private void Put(int at, string url)
     {
-        DataList box = client.Require(url);
-
-        if (box == null) return;
-
-        if (box.Count > 0) box.SetValue(0, "");
-
-        pack.SetValue(at, new DataToken(box));
+        pack.SetValue(at, client.Require(url));
     }
 
     // Нажатие ведёт САМ нажавший, локально. Пока идёт чей-то прогон - заперто у всех: нажать можно
@@ -459,11 +492,13 @@ public class SampleSteps : UdonSharpBehaviour
 
     public override void OnOwnershipTransferred(VRCPlayerApi player) => Snapshot();
 
-    private string Cut(string body)
+    // Начало тела одной строкой. Переводы строк плющим: иначе один ответ разъезжается по
+    // канвасу на десяток строк и прячет всё остальное. Ширина доводом - у строки адреса своя.
+    private string Cut(string body, int width)
     {
         string flat = body.Replace("\n", " ").Replace("\r", " ");
 
-        return flat.Length <= 200 ? flat : flat.Substring(0, 200) + "...";
+        return flat.Length <= width ? flat : flat.Substring(0, width) + "...";
     }
 
     private string State(int got, int size) =>

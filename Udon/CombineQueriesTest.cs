@@ -14,7 +14,16 @@ public class CombineQueriesTest : UdonSharpBehaviour
 {
     public CombineQueries client;
 
-    [Tooltip("0 = Connect, 1 = run the comparison, 2 = Remember (повторное подключение дельтой)")]
+    public Text output;
+    public Text requests;
+    public Text responses;
+    public Text data;
+
+    [UdonSynced] private bool linked;
+    [UdonSynced] private bool syncedRunning;
+    //[UdonSynced] private string syncedShowValueBuf = string.Empty;
+    [UdonSynced] private string syncedBoard = string.Empty;
+
     public int action = 0;
 
     [Tooltip("Codeword the server expects (Auth:Codeword); empty in dev")]
@@ -69,17 +78,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
     private string testUrlUser4 = "https://dummyjson.com/users/4";
     private string testUrlUser5 = "https://dummyjson.com/users/5";
 
-    [Tooltip("Optional: status is written here")]
-    public Text output;
 
-    [Tooltip("Панель ушедших vrequest'ов")]
-    public Text requests;
-
-    [Tooltip("Панель ответов: response и vresponse")]
-    public Text responses;
-
-    [Tooltip("Панель тел: чей набор, адрес и что пришло")]
-    public Text data;
 
     // ПЕРВЫМ идёт хайпер из БД: сид приезжает вместе с connect, поэтому адрес, которого клиент не
     // собирал ни разу, уходит в два запроса сразу - /h/ поднимает всю combine-часть, /t/ закрывает.
@@ -134,10 +133,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private bool ready;
     private bool awaiting;
-    private bool running;
     private int step;
     private float startedAt;
-    private string board = "";
+    //private string board = "";
 
     // Куб кнопки. Пока прогон идёт (зелёный) или чёрный закреплён за другим - гаснет и нажатий не
     // принимает: заблокированная кнопка, которая выглядит как обычная, неотличима от сломанной.
@@ -160,11 +158,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
     {
         if (cube == null || action == 2) return;
 
-        Color off = idle.r + idle.g + idle.b < 0.3f
-            ? new Color(0.35f, 0.35f, 0.35f, idle.a)
+        cube.material.color = on 
+            ? idle 
             : new Color(idle.r * 0.25f, idle.g * 0.25f, idle.b * 0.25f, idle.a);
-
-        cube.material.color = on ? idle : off;
     }
 
     // Кодовое слово: поле сцены, а если оно пустое - то, с которым собран мир.
@@ -209,7 +205,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
         }
 
         // Зелёный куб (прогон): локальный прогон нажавшего, как было.
-        if (running) { Note("занято: идёт прогон, дождись done"); return; }
+        if (syncedRunning) { Note("занято: идёт прогон, дождись done"); return; }
 
         if (awaiting && !client.Busy()) awaiting = false;
 
@@ -229,9 +225,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
     [NetworkCallable]
     public void Linked() => Act();
 
-    // Инстанс подключён - значит подключён и тот, кто зашёл потом. Отметка синхронизирована, так что
-    // зашедший видит её сам и догоняет молча.
-    [UdonSynced] private bool linked;
+
 
     // Догон опоздавшего. Remember, а не Connect: он не сбрасывает то, что сервер уже накопил тем,
     // кто прямо сейчас работает.
@@ -284,6 +278,16 @@ public class CombineQueriesTest : UdonSharpBehaviour
     // пачкой клиент может разбить на несколько наборов, и девять шагов дали бы больше девяти.
     private const int MaxVrequests = 9;
 
+    // Последний шаг прогона. Раньше конца не было вовсе: условие пускало до StepBatch = 17, а
+    // обрывался прогон СЛУЧАЙНО - на шаге 7 уходил RequestDirect в /d, ловил 404, и OnQueryDone
+    // глушил всё по LastError. Точку /d закрыли, прямой вызов с фронта убрали - и прогон поехал
+    // через все восемнадцать шагов. Теперь конец задан явно и виден одной строкой.
+    private const int StepLast = StepHead2;
+
+    // Первая пачка прогона. Между StepFirst и StepLast - весь сценарий бирюзовой кнопки: четвёрка,
+    // следом двойка, и конец. Ровно та же форма, что у красной лестницы.
+    private const int StepFirst = StepHead3;
+
     // Сколько vrequest уже ушло в этом прогоне.
     private int vrequests;
 
@@ -302,8 +306,12 @@ public class CombineQueriesTest : UdonSharpBehaviour
     // чтобы хвост прошлого прогона не лёг строками в новый.
     private void StartRun()
     {
-        running = true;
-        step = StepHyperDb;
+        syncedRunning = true;
+
+        // Начинаем сразу с пачки. Одиночные шаги (StepHyperDb и всё, что за StepLast) остались в
+        // коде, но в прогон не входят: стенд показывает то же, что лестница, - набор адресов одним
+        // Require/Result, - только набор у него постоянный, без записи шагов игрока.
+        step = StepFirst;
         vrequests = 0;
 
         Lit(false);
@@ -317,7 +325,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (responses != null) responses.text = "";
         if (data != null) data.text = "";
 
-        board = testUrlSeeded + "   " + NumberOf(testUrlSeeded.Length) + " chars   (hyper from db, never sent)\n"
+        syncedBoard = testUrlSeeded + "   " + NumberOf(testUrlSeeded.Length) + " chars   (hyper from db, never sent)\n"
               + testUrlFull + "   " + NumberOf(testUrlFull.Length) + " chars   (levels L1-L3)\n"
               + testUrlLearn + "   " + NumberOf(testUrlLearn.Length) + " chars   (infinite: learn, then reuse)\n"
               + testUrl + "   " + NumberOf(testUrl.Length) + " chars   (partial - post/1 is plain)\n\n";
@@ -332,7 +340,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
         if (client.LastError != "")
         {
-            running = false;
+            syncedRunning = false;
 
             Lit(true);
 
@@ -350,7 +358,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
             return;
         }
-        if (!running) return;
+        if (!syncedRunning) return;
 
         bool packed = step == StepBatch || (step >= StepHead3 && step <= StepAllDirect);
 
@@ -368,7 +376,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
                     + Pad("L3 " + NumberOf(client.LastL3), 6)
                     + "inf " + NumberOf(client.LastInfinite);
 
-        board += line + "\n";
+        syncedBoard += line + "\n";
 
         // Что ушло за шаг - считаем vrequest прямо по журналу, прежде чем вылить его в панель.
         string sent = client.TakeRequests();
@@ -389,9 +397,9 @@ public class CombineQueriesTest : UdonSharpBehaviour
         // Прогон ограничен числом vrequest, а не шагов: набралось девять - останавливаемся. Шаг
         // посреди себя не режем, поэтому последний может немного перебрать, если его пачка ушла
         // несколькими наборами.
-        if (vrequests < MaxVrequests && step <= StepBatch) { SendStep(); return; }
+        if (vrequests < MaxVrequests && step <= StepLast) { SendStep(); return; }
 
-        running = false;
+        syncedRunning = false;
 
         Lit(true);
 
@@ -444,12 +452,15 @@ public class CombineQueriesTest : UdonSharpBehaviour
             //
             // Итого 2 гипера + 2 сборки = 1 + 1 + 4 = 6 запросов. Два из них - плата за голову,
             // и она окупается ровно тогда, когда адрес собрал кто-то другой.
+            // Вторая пачка прогона - ДВА адреса, как у лестницы: сперва четвёрка, потом пара.
+            //
+            // comments сервер знает, а клиент нет: голова находит его по куску расхождения и даёт
+            // номер, тело забирает прыжок. Забываем именно его - расхождение «comments» есть в
+            // словаре, а у цифры спрашивать нечем.
             client.ForgetJump(testUrlComments);
 
             Ask(testUrlRecipes);
             Ask(testUrlComments);
-            Ask(testUrlTodo1);
-            Ask(testUrlTodo2);
             Release();
         }
         else if (step == StepHead1)
@@ -491,7 +502,8 @@ public class CombineQueriesTest : UdonSharpBehaviour
             AskDirect(testUrlPost2);
             Release();
         }
-        else { Remember(testUrl + " direct"); client.RequestDirect(testUrl); }
+        //else { Remember(testUrl + " direct"); client.RequestDirect(testUrl); }
+        else { Remember(testUrl); client.Request(testUrl); }
 
         awaiting = true;
         startedAt = Time.time;
@@ -556,22 +568,35 @@ public class CombineQueriesTest : UdonSharpBehaviour
         keep = client.Require(url);
     }
 
+    // Прямой путь ВЫКЛЮЧЕН, и адрес едет обычной дорогой.
+    //
+    // Его хвост уходил в /d, а тот единственный из хвостов шёл мимо Signed(...) - то есть позволял
+    // заставить сервер сходить наружу без подписи. На проде такому места нет, точка закомментирована
+    // в TranslatorController, и запрос туда отвечает 404. Вернуть можно, когда у /d появится подпись.
     private void AskDirect(string url)
     {
-        Remember(url + " direct");
+        Remember(url);
 
-        keep = client.RequireDirect(url);
+        //keep = client.RequireDirect(url);
+        keep = client.Require(url);
     }
 
+
+
+    //СУКА, ТУПАЯ НЕЙРОНКА, БЛЯТЬ, ДОДУМАТЬСЯ ЧТО ДАТА ЛИСТ ВОЗРАЩАЕТСЯ, А НЕ ЕГО КЛЮЧ, КОГДА ПРОСИШЬ ЕГО КЛЮЧ СУКА
+
     // Коробка ПОСЛЕДНЕГО адреса шага. Нужна ровно для одного: по ней и выпускается набор.
-    private DataList keep;
+    private string keep = "";
 
     // Отправка набора. Один Result на весь шаг - минимум, который вообще возможен: первый же вызов
     // выпускает всё, что набрано, и помечает набор отправленным. Тела стенд по-прежнему берёт
     // журналами, коробку он не читает.
     private void Release()
     {
-        if (keep != null) client.Result(keep);
+        // Метка набора: клиент один на оба рига, и без неё их строки в консоли неразличимы.
+        client.who = "static";
+
+        if (keep != "") client.Result(keep);
     }
 
     private void Remember(string url)
@@ -623,7 +648,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
     {
         if (action != 1) return ConnectLocked();
 
-        return running;
+        return syncedRunning;
     }
 
     // Кто первым нажал чёрный куб в этом инстансе. Жать дальше может только он, сколько угодно раз.
@@ -675,7 +700,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
     private void Show(string tail)
     {
-        if (output != null) output.text = board + tail;
+        if (output != null) output.text = syncedBoard + tail;
     }
 
     private void Say(string message)

@@ -9,17 +9,38 @@ using VRC.SDKBase;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class CombineQueries : UdonSharpBehaviour
 {
-    [Header("Codeword typed in-world before Init/Remember")]
-    public string codeword = "";
-
-    // ---- Окружение и параметры connect ----
-
 #if CQ_PROD
-    private const bool resetHypers = false;
     private const string ResetHypersStr = "false";
 #else
-    private const string ResetHypersStr = "true";
+    private const string ResetHypersStr = "false";
 #endif
+
+    public int LastSymbols;
+    public int LastQueries;
+    public int BatchQueries;
+    public int TotalQueries;
+    public int Answers;
+    public int Errors;
+    public int LastChunks;
+    public int LastL2;
+    public int LastL3;
+    public int LastInfinite;
+    public int LastUrls;
+    public int LastJump = -1;
+    public int LastPending;
+    public int SeedJumps;
+
+    [Header("Codeword typed in-world before Init/Remember")]
+    public string codeword = "";
+    // Чей это набор. Клиент один на весь мир, а просящих в нём несколько, и в общей консоли их
+    // строки ложатся вперемешку. Метку ставит сам просящий перед Result, она садится в запись
+    // vrequest и потом едет во всех его строках: vrequest, response, vresponse.
+    public string who = "";
+
+    public string LastSent = "";
+    public string LastRoad = "";
+    public string LastError = "";
+    public string LastUrl = "";
 
     private const bool rememberInfinite = true;
     private const bool RequireCode = CombineQueriesEnvironment.RequireCode;
@@ -66,7 +87,10 @@ public class CombineQueries : UdonSharpBehaviour
     private const int RuneWidth = 4;
     private const int NumSize = 4;
     private const int MaxChunks = 256;
-    private const int MaxJumps = 4096;
+    // Потолок номера прыжка. Половина прежних 4096 - это плата за вдвое широкое окно: пул стоит
+    // MaxJumps * RangeMax * подписи, и обмен держит его прежним. На проде самый большой номер 1090,
+    // запас двойной. Номер выше потолка не ломается, а теряет прыжок: такой адрес едет сборкой.
+    private const int MaxJumps = 2048;
     private const int dfaSize = 1024;
     private const int pageCount = 64;
     private const int hopCount = 64;
@@ -74,7 +98,11 @@ public class CombineQueries : UdonSharpBehaviour
     private const int JumpSignValues = SignValues;
     private const int HeadLimit = 2048;
     private const int HeadBases = 8;
-    private const int RangeMax = 4;
+    // Ширина окна: сколько адресов семьи сервер отдаёт за один /h. Было 4, и в семью из 75 детей
+    // (dummyjson.com/products/) попадала половина пачки - между products/1 и products/4 лежат
+    // products/12, /11, /0, и они съедали бюджет. Восемь накрывают всю четвёрку за один запрос.
+    // Больше не имеет смысла: у сервера Batch = 8.
+    private const int RangeMax = 8;
     private const int CloseLimit = 1024;
 
     // ---- Лимиты, тайминги, лог ----
@@ -104,27 +132,6 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
     private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
 
-    // ---- Публичное состояние ----
-
-    public int LastSymbols;
-    public int LastQueries;
-    public int BatchQueries;
-    public int TotalQueries;
-    public int Errors;
-    public int LastChunks;
-    public int LastL2;
-    public int LastL3;
-    public int LastInfinite;
-    public int LastUrls;
-    public int LastJump = -1;
-    public int LastPending;
-    public int SeedJumps;
-
-    public string LastSent = "";
-    public string LastRoad = "";
-    public string LastError = "";
-    public string LastUrl = "";
-
     // ---- Подключение ----
 
     private bool connectOk;
@@ -140,14 +147,13 @@ public class CombineQueries : UdonSharpBehaviour
 
     // ---- Текущая отправка ----
 
-    private bool busy;
     private bool fragments = true;
-    private bool headTried;
 
+    // Рукопожатие (кодовое слово и connect) идёт строго по одному запросу, его и ведём фазой.
+    // Всё остальное узнаётся из самого ответа: запросов в полёте много, «текущего» не бывает.
     private int phase;
     private int queueLen;
     private int queuePos;
-    private int headTaken;
     private float lastLoadAt;
 
     private int[] queue;
@@ -158,30 +164,65 @@ public class CombineQueries : UdonSharpBehaviour
     private string forwarded = "";
     private string forwardedBody = "";
 
-    // ---- Очередь и пачка ----
+    // Сколько запросов ещё не ответило. Занятость наружу считается по нему; очередь ОТПРАВКИ держит
+    // сам VRCStringDownloader, повторять её здесь нечем и незачем.
+    private int inFlight;
 
-    private bool flush;
-    private bool pendingFlush;
+    // Запланирован ли добор долга - чтобы не плодить его на каждый ответ.
+    private bool pendingSettle;
 
-    private string[] queued = new string[0];
-    private bool[] queuedDirect = new bool[0];
-    private string[] batch = new string[0];
-    private bool[] batchDirect = new bool[0];
-    private bool[] done = new bool[0];
+    // Номер vrequest текущей пачки: один на пачку, выдаётся при выпуске.
+    private int batchRequest = -1;
 
-    // ---- Коробки и тела ----
-
-    private DataDictionary boxes = new DataDictionary();
-    private DataDictionary bodies = new DataDictionary();
-
-    // Сколько запросов ушло на адрес. Считаем те, что его ПРОСИЛИ, - кусок сборки, хвост, голову,
-    // прыжок, - и запрос /tc, который привёз его тело долгом. Чужие запросы, в чьём ответе тело
-    // приехало попутно, адресу не засчитываются: платил за них не он.
+    // ---- Таблица запросов ----
     //
-    // Число дублируется в третий слот коробки: мир видит его рядом с телом, не зная про словарь.
-    // Номер запроса, на котором выпущен адрес: от него считается, на каком запросе своего vrequest
-    // приехало тело. Снимается с первым же телом.
-    private DataDictionary releasedAt = new DataDictionary();
+    // Слот на адрес. Мир получает от Require ключ и по нему же спрашивает Result. Ожидания в таблице
+    // нет: проход отправки пропускает слоты, которые уже в полёте, а пришедшее тело помечает слот
+    // переиспользуемым - его и займёт первый же новый адрес.
+    private string[] slotKey = new string[0];
+
+    // Печёная ссылка, которой слот просили: по ней ответ находит хозяина, когда адреса в ответе нет.
+    private string[] slotSent = new string[0];
+
+    private bool[] slotLoading = new bool[0];
+    private bool[] slotDelete = new bool[0];
+    private bool[] slotDirect = new bool[0];
+
+    // Голову по этому адресу уже звали: второй раз она не поможет.
+    private bool[] slotHeaded = new bool[0];
+
+    // Какой вопрос слот задал голове, -1 если не задавал. Вопрос - это пара «кусок расхождения,
+    // найденный номер», и по нему же печётся ссылка: одинаковый вопрос даёт одинаковую ссылку.
+    private int[] slotHead = new int[0];
+
+    // Сколько запросов ушло на адрес, на каком запросе своего vrequest пришло тело, тот же запрос
+    // номером с начала работы клиента, и номер запроса на выпуске.
+    private int[] slotQueries = new int[0];
+    private int[] slotAnswer = new int[0];
+    private int[] slotGlobal = new int[0];
+    private int[] slotReleased = new int[0];
+
+    // Виды запроса: те же числа, что у queueKind, плюс служебные сверху.
+    private const int KindChunk = 0;
+    private const int KindFragment = 1;
+    private const int KindTail = 2;
+    private const int KindHop = 3;
+    private const int KindJumpOne = 4;
+    private const int KindRange = 5;
+    private const int KindHead = 6;
+    private const int KindCredit = 7;
+    private const int KindClose = 8;
+
+    // Единственный словарь тел: ключ - адрес без схемы, значение - пара «состояние, тело».
+    //
+    // Состояний три, и отсутствия записи среди них нет: запись заводит сам Require, поэтому «нет в
+    // словаре» значит ровно одно - этот адрес не просили ни разу. Раньше состояние подменяла пустая
+    // строка, и пустой ответ сервера был неотличим от неприехавшего: такой адрес ждали вечно.
+    private const int StatusInit = 0;
+    private const int StatusLoading = 1;
+    private const int StatusLoaded = 2;
+
+    private DataDictionary bodies = new DataDictionary();
 
     // ---- Прыжки ----
 
@@ -204,19 +245,20 @@ public class CombineQueries : UdonSharpBehaviour
     // узнаёт, что можно начинать - события о завершении у клиента больше нет.
     public bool Connected() => connectOk;
 
-    public bool Busy() => busy;
+    public bool Busy() => inFlight > 0;
 
     public void Connect()
     {
-        if (busy) return;
+        if (inFlight > 0) return;
 
-        LastError = "";
+        LastError = string.Empty;
 
         if (RuneAlphabet.Length != Alphabet.Length - 6) { Fail("RuneAlphabet must be Alphabet minus #%[]/?"); return; }
 
         roots = new string[0];
         cachedFragments = new string[0];
         cachedFragIds = new int[0];
+
         ForgetJumps();
 
         Begin(true);
@@ -224,57 +266,125 @@ public class CombineQueries : UdonSharpBehaviour
 
     public void Remember()
     {
-        if (busy) return;
+        if (inFlight > 0) return;
 
         LastError = "";
 
         Begin(false);
     }
 
-    public DataList Require(string url) => Ask(url, false);
+    // Просит адрес и возвращает КЛЮЧ, по которому потом спросят результат. Сама ничего не шлёт:
+    // отправку выпускает Result, и одним проходом по всей набранной пачке.
+    public string Require(string url) => Ask(url, false);
 
-    public DataList RequireDirect(string url) => Ask(url, true);
+    public string RequireDirect(string url) => Ask(url, true);
 
-    public string Result(DataList box)
+    // Результат по ключу. Первый вызов выпускает всё, что набрано и ещё не в полёте, дальше просто
+    // читает словарь тел. Пустая строка значит либо «ещё едет», либо пустой ответ - различает их
+    // StatusOf, и спрашивать о приезде надо им.
+    public string Result(string key)
     {
-        if (box == null || box.Count == 0) return "";
+        if (key == "") return "";
 
-        // Спросили результат - это и есть сигнал отправки, отдельного вызова для неё нет.
-        //
-        // Флаг на самой коробке: не отправляли - выпускаем ВСЮ набранную пачку и сразу помечаем,
-        // не дожидаясь ответа. Дальше по этой коробке спрашивают сколько угодно раз, и повторных
-        // отправок это уже не вызывает.
-        if (box.TryGetValue(1, out DataToken sent) && sent.TokenType == TokenType.Boolean && !sent.Boolean)
-        {
-            box.SetValue(1, true);
+        Run();
 
-            Run();
-        }
-
-        return box.TryGetValue(0, out DataToken body) && body.TokenType == TokenType.String ? body.String : "";
+        return BodyOf(key);
     }
 
-    public void Request(string url) => Dispatch(url, true);
-
-    public void RequestDirect(string url) => Dispatch(url, false);
-
-    public void RequestPair(string first, string second)
+    // Сколько запросов ушло на адрес.
+    public int QueriesOf(string key)
     {
-        Require(first);
-        Require(second);
+        int at = SlotOf(key);
+
+        return at < 0 ? 0 : slotQueries[at];
     }
 
-    public bool Queue(string url) => Enqueue(url, false);
+    // На каком запросе своего vrequest пришло тело: ответ на сам vrequest - первый.
+    public int AnswerOf(string key)
+    {
+        int at = SlotOf(key);
 
-    public bool QueueDirect(string url) => Enqueue(url, true);
+        return at < 0 ? 0 : slotAnswer[at];
+    }
+
+    // Тот же ответ номером с начала работы клиента.
+    public int GlobalOf(string key)
+    {
+        int at = SlotOf(key);
+
+        return at < 0 ? 0 : slotGlobal[at];
+    }
+
+    public void Request(string url) => Dispatch(PayloadOf(url), true);
+
+    public void RequestDirect(string url) => Dispatch(PayloadOf(url), false);
+
+    // maybe depraceted
+    //public void RequestPair(string first, string second)
+    //{
+    //    Require(first);
+    //    Require(second);
+    //}
 
     public string Take() => forwardedBody != "" ? forwardedBody : StringField(forwarded, "response");
 
+    // Состояние адреса: -1 не просили ни разу, Init запись заведена, Loading запрос в пути,
+    // Loaded тело свежее.
+    public int StatusOf(string key) => bodies.TryGetValue(PayloadOf(key), out DataToken slot) && slot.TokenType == TokenType.DataList
+        ? slot.DataList.TryGetValue(0, out DataToken status) && status.TokenType == TokenType.Int ? status.Int : -1
+        : -1;
+
+    // Состояние словом - для вывода. Пусто у того, чего ни разу не просили.
+    //
+    // Лесенкой, а не switch-выражением: UdonSharp компилирует C# 7.3, и рекурсивных образцов там
+    // ещё нет - CS8370.
+    public string StatusName(string key)
+    {
+        int status = StatusOf(key);
+
+        return status == StatusInit ? "Init"
+             : status == StatusLoading ? "Loading"
+             : status == StatusLoaded ? "Loaded" : "";
+    }
+
+    // Приехало ли тело. Спрашивать этим, а не сравнением тела с пустотой: пустой ответ - тоже ответ.
+    public bool Loaded(string key) => StatusOf(key) == StatusLoaded;
+
+    // Тоже без switch-выражения, и заодно без дыры: образец `string key` не покрывал null, а
+    // непокрытое значение в рантайме - исключение.
     public string BodyOf(string url)
     {
-        if (!bodies.TryGetValue(PayloadOf(url), out DataToken body)) return "";
+        string key = PayloadOf(url);
 
-        return body.TokenType == TokenType.String ? body.String : "";
+        return StatusOf(key) == StatusLoaded ? Stored(key) : "";
+    }
+
+    // Тело как лежит, без оглядки на состояние.
+    private string Stored(string key)
+    {
+        if (!bodies.TryGetValue(key, out DataToken slot) || slot.TokenType != TokenType.DataList) return "";
+
+        return slot.DataList.TryGetValue(1, out DataToken body) && body.TokenType == TokenType.String ? body.String : "";
+    }
+
+    // Кладёт состояние адреса. Прошлое тело при этом НЕ стирается: наружу его и так не видно -
+    // BodyOf отдаёт только у Loaded, - а кешу неизменяемых ответов оно ещё пригодится.
+    private void KeepBody(string key, int status, string body)
+    {
+        DataList slot = new DataList();
+
+        slot.Add(status);
+        slot.Add(body);
+
+        bodies.SetValue(key, slot);
+    }
+
+    // Слот ушёл в полёт или вернулся ждать своего окна: Init <-> Loading.
+    private void Flying(int at, bool flying)
+    {
+        slotLoading[at] = flying;
+
+        KeepBody(slotKey[at], flying ? StatusLoading : StatusInit, Stored(slotKey[at]));
     }
 
     public void ForgetJumps()
@@ -322,16 +432,17 @@ public class CombineQueries : UdonSharpBehaviour
     {
         connectReset = reset;
 
-        if (!RequireCode) { busy = true; Load(PhaseConnect, reset ? ConnectQuery : RememberQuery); return; }
+        if (!RequireCode) { LoadPhase(PhaseConnect, reset ? ConnectQuery : RememberQuery); return; }
 
+        // for codegen, maybe deprecated
         StartCode(true);
     }
 
     private void StartCode(bool chain)
     {
         chainInit = chain;
-
         queueLen = codeword.Length;
+
         queue = new int[queueLen];
 
         for (int i = 0; i < queueLen; i++)
@@ -343,7 +454,6 @@ public class CombineQueries : UdonSharpBehaviour
             queue[i] = index;
         }
 
-        busy = true;
         queuePos = 0;
 
         SendCode();
@@ -351,9 +461,9 @@ public class CombineQueries : UdonSharpBehaviour
 
     private void SendCode()
     {
-        if (queuePos < queueLen) { Load(PhaseCode, AuthPool[queue[queuePos]]); return; }
+        if (queuePos < queueLen) { LoadPhase(PhaseCode, AuthPool[queue[queuePos]]); return; }
 
-        Load(PhaseVerify, VerifyQuery);
+        LoadPhase(PhaseVerify, VerifyQuery);
     }
 
     private void SeedFromConnect(string json)
@@ -368,11 +478,11 @@ public class CombineQueries : UdonSharpBehaviour
         if (dict.TryGetValue("roots", out DataToken rootsTok) && rootsTok.TokenType == TokenType.DataList)
         {
             DataList list = rootsTok.DataList;
-            string[] r = new string[list.Count];
-            int n = 0;
 
-            for (int i = 0; i < list.Count; i++)
-                if (list.TryGetValue(i, out DataToken it) && it.TokenType == TokenType.String) { r[n] = it.String; n++; }
+            int n = 0;
+            string[] r = new string[list.Count];
+
+            for (int i = 0; i < list.Count; i++) if (list.TryGetValue(i, out DataToken it) && it.TokenType == TokenType.String) r[n] = it.String; n++;
 
             if (n == list.Count) roots = r;
         }
@@ -394,8 +504,9 @@ public class CombineQueries : UdonSharpBehaviour
         {
             if (!list.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
 
-            string url = DictString(item.DataDictionary, "url");
             int jump = DictInt(item.DataDictionary, "jump");
+
+            string url = DictString(item.DataDictionary, "url");
 
             if (url == "" || jump < 0) continue;
 
@@ -404,193 +515,250 @@ public class CombineQueries : UdonSharpBehaviour
         }
     }
 
-    // ==== Очередь и пачки ====
+    // ==== Таблица запросов ====
 
-    private DataList Ask(string url, bool direct)
+    private string Ask(string url, bool direct)
     {
         string key = PayloadOf(url);
 
-        DataList box = boxes.TryGetValue(key, out DataToken had) && had.TokenType == TokenType.DataList
-            ? had.DataList
-            : new DataList();
+        if (key == "") { Fail("Init fixed the scheme to " + Scheme + ", this url asks for another one"); return ""; }
 
-        // Слот 0 - тело, слот 1 - отправлен ли набор, в котором едет этот адрес, слот 2 - номер
-        // запроса внутри своего vrequest, в ответе которого тело приехало: ответ на сам vrequest
-        // это первый. Слот 3 - во что обошлась ОТПРАВКА адреса: куски сборки с хвостом, либо один
-        // запрос, если адрес назвал прыжок или голова. Слот 4 - тот же ответ, но номером с начала
-        // работы клиента: по нему видно место в общем потоке запросов.
-        //
-        // Новый запрос всегда начинается неотправленным: выпустит его первый же Result по коробке.
-        if (box.Count == 0) { box.Add(""); box.Add(false); }
-        if (box.Count == 2) box.Add(0);
-        if (box.Count == 3) box.Add(0);
-        if (box.Count == 4) box.Add(0);
+        int at = SlotOf(key);
 
-        box.SetValue(1, false);
-        box.SetValue(2, 0);
-        box.SetValue(3, 0);
-        box.SetValue(4, 0);
+        if (at < 0) at = FreeSlot();
 
-        boxes.SetValue(key, box);
+        slotKey[at] = key;
+        slotSent[at] = "";
+        slotLoading[at] = false;
+        slotDelete[at] = false;
+        slotDirect[at] = direct;
+        slotHeaded[at] = false;
+        slotHead[at] = -1;
+        slotQueries[at] = 0;
+        slotAnswer[at] = 0;
+        slotGlobal[at] = 0;
+        slotReleased[at] = TotalQueries;
 
-        if (!Enqueue(url, direct)) return box;
+        KeepBody(key, StatusInit, Stored(key));
 
-        if (!bodies.ContainsKey(key)) bodies.SetValue(key, "");
-
-        flush = true;
-
-        if (!pendingFlush) { pendingFlush = true; SendCustomEventDelayedFrames(nameof(Flush), 1); }
-
-        if (!busy && queued.Length >= RangeMax) Run();
-
-        return box;
+        return key;
     }
 
-    private bool Enqueue(string url, bool direct)
+    // Слот адреса. Сперва живой, а если такого нет - переиспользуемый с тем же ключом: тело уже
+    // приехало, но мир ещё читает по нему счётчики, и ноли вместо них были бы враньём.
+    private int SlotOf(string key)
     {
-        if (string.IsNullOrEmpty(url)) return false;
+        int spare = -1;
 
-        if (queued.Length >= MaxQueued) return false;
+        for (int i = 0; i < slotKey.Length; i++)
+        {
+            if (slotKey[i] != key) continue;
 
-        string[] grown = new string[queued.Length + 1];
-        bool[] grownDirect = new bool[queued.Length + 1];
+            if (!slotDelete[i]) return i;
 
-        for (int i = 0; i < queued.Length; i++) { grown[i] = queued[i]; grownDirect[i] = queuedDirect[i]; }
+            if (spare < 0) spare = i;
+        }
 
-        grown[queued.Length] = url;
-        grownDirect[queued.Length] = direct;
-
-        queued = grown;
-        queuedDirect = grownDirect;
-
-        return true;
+        return spare;
     }
 
-    private void Update()
+    // Слот по печёной ссылке, которой его просили. Живой в приоритете: у переиспользуемого слота
+    // ссылка осталась с прошлой жизни, и отдавать ему чужой ответ нельзя.
+    private int SlotBySent(string link)
     {
-        if (!flush || busy || queued.Length == 0) return;
+        int spare = -1;
 
-        Run();
+        for (int i = 0; i < slotKey.Length; i++)
+        {
+            if (slotSent[i] != link) continue;
+
+            if (!slotDelete[i]) return i;
+
+            if (spare < 0) spare = i;
+        }
+
+        return spare;
     }
 
-    public void Flush()
+    // Первый переиспользуемый слот, а если таких нет - таблица растёт на один.
+    private int FreeSlot()
     {
-        if (!flush || queued.Length == 0) { pendingFlush = false; return; }
+        for (int i = 0; i < slotKey.Length; i++) if (slotDelete[i]) return i;
+        
+        int size = slotKey.Length + 1;
 
-        if (busy) { SendCustomEventDelayedSeconds(nameof(Flush), 0.25f); return; }
+        bool[] loading = new bool[size];
+        bool[] deleted = new bool[size];
+        bool[] direct = new bool[size];
+        bool[] headed = new bool[size];
 
-        pendingFlush = false;
+        int[] head = new int[size];
+        int[] queries = new int[size];
+        int[] answer = new int[size];
+        int[] global = new int[size];
+        int[] released = new int[size];
 
-        Run();
+        string[] key = new string[size];
+        string[] sent = new string[size];
+
+        for (int i = 0; i < slotKey.Length; i++)
+        {
+            key[i] = slotKey[i];
+            sent[i] = slotSent[i];
+            loading[i] = slotLoading[i];
+            deleted[i] = slotDelete[i];
+            direct[i] = slotDirect[i];
+            headed[i] = slotHeaded[i];
+            head[i] = slotHead[i];
+            queries[i] = slotQueries[i];
+            answer[i] = slotAnswer[i];
+            global[i] = slotGlobal[i];
+            released[i] = slotReleased[i];
+        }
+
+        slotKey = key;
+        slotSent = sent;
+        slotLoading = loading;
+        slotDelete = deleted;
+        slotDirect = direct;
+        slotHeaded = headed;
+        slotHead = head;
+        slotQueries = queries;
+        slotAnswer = answer;
+        slotGlobal = global;
+        slotReleased = released;
+
+        slotHead[size - 1] = -1;
+
+        return size - 1;
     }
 
-    // Внутренняя отправка набора. Снаружи её не зовут: у мира есть Require и Result, и выпускает
-    // пачку именно Result.
+    // Выпуск пачки: уходит всё, что набрано и ещё не в полёте, и уходит сразу.
     private void Run()
     {
-        if (busy || queued.Length == 0) return;
+        DataList urls = new DataList();
 
-        flush = false;
+        for (int i = 0; i < slotKey.Length; i++) if (!slotDelete[i] && !slotLoading[i] && slotKey[i] != "") urls.Add(slotKey[i]);
 
-        batch = queued;
-        batchDirect = queuedDirect;
-        BatchQueries = 0;
+        if (urls.Count == 0) return;
+
+        // Мир спрашивает Result каждый кадр, поэтому об отсутствии подключения говорим ОДИН раз,
+        // пока отказ не разобрали. Набранное при этом не теряется - уедет первым же Result после connect.
+        if (!connectOk)
+        {
+            if (LastError == "") Fail("Init has not run - call Init first, then Require");
+
+            return;
+        }
+
         LastSent = "";
+        BatchQueries = 0;
+        batchRequest = OpenRequest(urls);
 
-        queued = new string[0];
-        queuedDirect = new bool[0];
-        done = new bool[batch.Length];
+        for (int i = 0; i < slotKey.Length; i++) if (!slotDelete[i] && !slotLoading[i] && slotKey[i] != "") slotReleased[i] = TotalQueries;
 
-        // Отсчёт номеров запросов идёт с выпуска. Адрес, который ещё ждёт тело с прошлого выпуска
-        // (перезапрос сторожа), отсчёт заново не начинает: его vrequest тот, первый.
-        for (int i = 0; i < batch.Length; i++)
-            if (!releasedAt.ContainsKey(PayloadOf(batch[i]))) releasedAt.SetValue(PayloadOf(batch[i]), TotalQueries);
-
-        NextInBatch();
+        Jumps();
+        Spell();
     }
 
-    private void NextInBatch()
+    // Прыжки: ОДНО окно на пачку.
+    //
+    // Раньше здесь считалось, что окно накрывает соседей по НОМЕРУ, и на каждую дырку в номерах
+    // уходило своё окно: четыре адреса - четыре запроса по пять секунд. Но сервер отдаёт не
+    // соседей по номеру, а СЕМЬЮ узла - тех, кто отличается ровно последним шагом. Номера у них
+    // какие угодно, и заранее эту четвёрку не вычислить.
+    //
+    // Поэтому размечаем окном всех, у кого номер есть, и ждём ответа: он и скажет, кого накрыло.
+    private void Jumps()
     {
-        int start = -1;
+        int anchor = -1, best = 0, last = 0;
 
-        for (int i = 0; i < batch.Length; i++)
+        for (int i = 0; i < slotKey.Length; i++)
         {
-            if (done[i] || batchDirect[i]) continue;
+            if (slotDelete[i] || slotLoading[i] || slotDirect[i] || slotKey[i] == "") continue;
 
-            int first = JumpOf(PayloadOf(batch[i]));
+            int jump = JumpOf(slotKey[i]);
 
-            if (first < 0) continue;
+            if (jump < 0 || jump >= MaxJumps) continue;
 
-            if (start < 0 || first < start) start = first;
+            // Семья отдаётся по возрастанию номера, поэтому якорь - самый младший: с него окно
+            // накрывает больше всего своих. Самый старший нужен, чтобы знать ширину окна.
+            if (anchor < 0 || jump < best) { anchor = i; best = jump; }
+
+            if (jump > last) last = jump;
         }
 
-        if (start >= 0) { SendRange(start, RangeMax); return; }
+        if (anchor < 0) return;
 
-        for (int i = 0; i < batch.Length; i++)
-            if (!done[i]) { Dispatch(batch[i], !batchDirect[i]); return; }
+        // Просим СТОЛЬКО, СКОЛЬКО НАДО, а не максимум. Раньше окно всегда запрашивало RangeMax, и
+        // на пачке из двух адресов сервер послушно шёл наружу за восемью: шесть тел никто не
+        // просил, и каждое стоило ему похода в чужой API.
+        //
+        // Ширину берём по размаху номеров, а не по числу адресов: сервер отдаёт БРАТЬЕВ подряд,
+        // и между нашими могут стоять чужие. Размах их накрывает с запасом и не промахивается,
+        // потому что порядковый номер брата не бывает больше разницы номеров.
+        int count = last - best + 1;
 
-        batch = new string[0];
+        if (count > RangeMax) count = RangeMax;
 
-        Finish();
-    }
+        VRCUrl link = RangePool[(best * RangeMax + count - 1) * JumpSignValues + NextSign()];
+        string sent = link.Get();
 
-    private void Done()
-    {
-        busy = false;
-        phase = PhaseIdle;
-
-        BatchQueries += LastQueries;
-
-        if (batch.Length > 0)
+        for (int i = 0; i < slotKey.Length; i++)
         {
-            TakeBatch();
+            if (slotDelete[i] || slotLoading[i] || slotDirect[i] || slotKey[i] == "") continue;
 
-            if (LastError == "")
-            {
-                NextInBatch();
+            int other = JumpOf(slotKey[i]);
 
-                // Набор закрылся прямо тут, и раньше этот выход уносил с собой планирование добора:
-                // долг оставался у сервера до сторожа мира. NextInBatch либо занял клиент следующим
-                // куском, либо закончил - во втором случае долг забираем сами.
-                if (!busy && LastPending > 0) SendCustomEventDelayedSeconds(nameof(Settle), CreditDelay);
+            if (other < 0 || other >= MaxJumps) continue;
 
-                return;
-            }
-
-            batch = new string[0];
+            Flying(i, true);
+            slotSent[i] = sent;
         }
 
-        Finish();
+        LastJump = best;
+        LastRoad = "hyper";
+        route = "/h";
 
-        if (LastPending > 0) SendCustomEventDelayedSeconds(nameof(Settle), CreditDelay);
+        Load(KindRange, "", link);
     }
 
-    private void TakeBatch()
+    // Остальные адреса диктуются сами: голова или сборка. Тоже сразу, без ожидания чужого ответа.
+    private void Spell()
     {
-        if (pendingUrl == "") return;
+        for (int i = 0; i < slotKey.Length; i++)
+        {
+            if (slotDelete[i] || slotLoading[i] || slotKey[i] == "") continue;
 
-        // Адрес набора отправляли МЫ: его цена - все запросы с Dispatch до этого Done, то есть
-        // голова, прыжок, куски сборки и хвост.
-        Sent(pendingUrl, LastQueries);
+            Flying(i, true);
 
-        if (!bodies.ContainsKey(pendingUrl)) bodies.SetValue(pendingUrl, Take());
-
-        Fill(pendingUrl, Take());
-
-        Mark(pendingUrl);
+            Dispatch(slotKey[i], !slotDirect[i]);
+        }
     }
 
+    // Тело приехало: слот гасит полёт и становится переиспользуемым.
     private void Mark(string payload)
     {
-        for (int i = 0; i < batch.Length; i++)
-            if (!done[i] && PayloadOf(batch[i]) == payload) { done[i] = true; return; }
+        int at = SlotOf(payload);
+
+        if (at < 0) return;
+
+        slotLoading[at] = false;
+        slotDelete[at] = true;
     }
 
-    // Набор закрыт. Наружу об этом никто не сообщает: у мира есть Require и Result, и узнаёт он о
-    // готовности по непустой коробке. Событие-уведомление отсюда убрано - оно требовало подписки
-    // и цели, то есть третьего способа общаться с тулзой помимо этих двух.
-    private void Finish()
+    // Прыжок не узнан: адреса, которые он должен был накрыть, просим заново - сборкой.
+    private void Reopen(string link)
     {
+        for (int i = 0; i < slotKey.Length; i++)
+        {
+            if (slotDelete[i] || slotSent[i] != link) continue;
+
+            Flying(i, false);
+            slotSent[i] = "";
+        }
+
+        Spell();
     }
 
     private void Fail(string reason)
@@ -599,74 +767,68 @@ public class CombineQueries : UdonSharpBehaviour
         Errors++;
 
         Debug.LogError("CombineQueries: " + reason);
-
-        Done();
     }
 
-    // ==== Коробки ====
-
-    // Во что обошлась отправка адреса. Ставим, а не прибавляем: это цена ЭТОЙ отправки.
+    // Во что обошлась отправка адреса.
     private void Sent(string payload, int queries)
     {
-        if (!boxes.TryGetValue(payload, out DataToken had) || had.TokenType != TokenType.DataList) return;
+        int at = SlotOf(payload);
 
-        if (had.DataList.Count > 3) had.DataList.SetValue(3, queries);
+        if (at >= 0) slotQueries[at] = queries;
     }
 
+    // Тело пришло: запоминаем, на каком запросе это случилось.
     private void Fill(string payload, string body)
     {
-        if (!boxes.TryGetValue(payload, out DataToken had) || had.TokenType != TokenType.DataList) return;
+        int at = SlotOf(payload);
 
-        had.DataList.SetValue(0, body);
+        if (at < 0) return;
 
-        // Первое тело после выпуска: в ответе какого запроса оно приехало. Считаем с единицы -
-        // ответ на сам vrequest и есть первый. Load считает запрос до отправки, поэтому разница с
-        // отсечкой уже даёт нужный номер.
-        if (body == "" || !releasedAt.TryGetValue(payload, out DataToken from) || from.TokenType != TokenType.Int) return;
+        // Номер внутри своей пачки - номер ОТВЕТА, а не тела. Два адреса, приехавшие вместе,
+        // делят его честно; порядок внутри одного ответа задаёт очередь долга, и нумеровать по
+        // нему значило бы показывать миру случайность. Пачку узнаём по отсечке выпуска.
+        int same = 0, top = 0;
 
-        if (had.DataList.Count > 2) had.DataList.SetValue(2, TotalQueries - from.Int);
+        for (int i = 0; i < slotKey.Length; i++)
+        {
+            if (i == at || slotAnswer[i] <= 0 || slotReleased[i] != slotReleased[at]) continue;
 
-        // И тот же ответ номером с начала работы клиента.
-        if (had.DataList.Count > 4) had.DataList.SetValue(4, TotalQueries);
+            if (slotGlobal[i] == Answers) same = slotAnswer[i];
 
-        releasedAt.Remove(payload);
+            if (slotAnswer[i] > top) top = slotAnswer[i];
+        }
+
+        slotAnswer[at] = same > 0 ? same : top + 1;
+
+        // Глобальный номер - номер САМОГО ответа, по той же причине.
+        slotGlobal[at] = Answers;
     }
 
     // ==== Отправка ====
 
-    private void Dispatch(string url, bool withFragments)
+    private void Dispatch(string payload, bool withFragments)
     {
-        if (busy || string.IsNullOrEmpty(url)) return;
+        if (string.IsNullOrEmpty(payload)) return;
 
-        if (!connectOk) { Fail("Init has not run - call Init first, then Request"); return; }
+        if (!connectOk) { Fail("Init has not run - call Init first, then Require"); return; }
 
         fragments = withFragments;
 
-        string payload = PayloadOf(url);
-
-        if (payload == "") { Fail("Init fixed the scheme to " + Scheme + ", this url asks for another one"); return; }
-
         string problem = ProblemWith(payload);
 
-        if (problem != "") { Fail(problem + ": " + url); return; }
+        if (problem != "") { Fail(problem + ": " + payload); return; }
 
         int[] symbols = SymbolsOf(payload);
 
-        if (symbols == null) { Fail("character outside the alphabet: " + url); return; }
+        if (symbols == null) { Fail("character outside the alphabet: " + payload); return; }
 
         LastError = "";
         forwarded = "";
         forwardedBody = "";
 
-        if (batch.Length == 0) LastSent = "";
-
         pendingUrl = payload;
-        LastUrl = url;
+        LastUrl = payload;
         LastSymbols = symbols.Length;
-        LastQueries = 0;
-        busy = true;
-
-        headTried = false;
         LastRoad = "";
 
         if (withFragments) SendCombine(payload); else SendDirect(payload);
@@ -675,6 +837,7 @@ public class CombineQueries : UdonSharpBehaviour
     private string PayloadOf(string url)
     {
         if (url.IndexOf(Scheme + "://") == 0) return url.Substring(Scheme.Length + 3);
+        //maybe false
         if (url.IndexOf("http://") == 0 || url.IndexOf("https://") == 0) return "";
 
         return url;
@@ -737,7 +900,8 @@ public class CombineQueries : UdonSharpBehaviour
     private void SendCombine(string payload)
     {
         int[] q = new int[MaxChunks + 1];
-        int[] k = new int[MaxChunks + 1];
+
+        int[] k = q;
         int count = 0;
 
         int acc = 0, accLen = 0, pos = 0;
@@ -809,9 +973,12 @@ public class CombineQueries : UdonSharpBehaviour
         if (tail == 0 && count > 0 && k[count - 1] == 1 && q[count - 1] < CloseLimit) k[count - 1] = 8;
         else { q[count] = tail; k[count] = 2; count++; }
 
-        int jump = JumpOf(payload);
+        int slot = SlotOf(payload);
 
-        if (jump < 0 && !headTried && SendHead(payload)) return;
+        int jump = JumpOf(payload);
+        bool headed = slot >= 0 && slotHeaded[slot];
+
+        if (jump < 0 && !headed && SendHead(payload)) return;
 
         LastJump = -1;
 
@@ -819,7 +986,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (jump >= 0 && jump < MaxJumps) skip = count;
 
-        LastRoad = headTried
+        LastRoad = headed
             ? (skip > 0 ? "head/hyper" : "head/combine")
             : (skip > 0 ? "hyper" : "combine");
 
@@ -831,16 +998,14 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (skip > 0)
         {
-            queue[0] = jump; queueKind[0] = 4; at = 1;
+            queue[0] = jump; queueKind[0] = KindJumpOne; at = 1;
 
             LastJump = jump;
         }
 
         for (int i = skip; i < count; i++) { queue[at] = q[i]; queueKind[at] = k[i]; at++; }
 
-        queuePos = 0;
-
-        SendNext();
+        SendChain(payload);
     }
 
     private int NextSymbol(string url, int pos, out int len)
@@ -886,8 +1051,8 @@ public class CombineQueries : UdonSharpBehaviour
 
             for (int f = 1; f < DirectPieces; f++)
             {
-                if (DirectFragments[f].Length <= pieceLength || at + DirectFragments[f].Length >= payload.Length) continue;
-                if (payload.Substring(at, DirectFragments[f].Length) != DirectFragments[f]) continue;
+                if (DirectFragments[f].Length <= pieceLength || at + DirectFragments[f].Length >= payload.Length 
+                    || payload.Substring(at, DirectFragments[f].Length) != DirectFragments[f]) continue;
 
                 piece = f;
                 pieceLength = DirectFragments[f].Length;
@@ -905,14 +1070,12 @@ public class CombineQueries : UdonSharpBehaviour
         queue = new int[queueLen];
         queueKind = new int[queueLen];
 
-        for (int i = 0; i < queueLen; i++) { queue[i] = buffer[i]; queueKind[i] = 0; }
+        for (int i = 0; i < queueLen; i++) { queue[i] = buffer[i]; queueKind[i] = KindChunk; }
 
         queue[queueLen - 1] /= DirectPieces;
-        queueKind[queueLen - 1] = 2;
+        queueKind[queueLen - 1] = KindTail;
 
-        queuePos = 0;
-
-        SendNext();
+        SendChain(payload);
     }
 
     private bool SendHead(string payload)
@@ -947,103 +1110,98 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (found < 0) return false;
 
-        headTried = true;
+        // Развод, как у дерева: одинаковые сущности не должны получать одинаковый номер.
+        //
+        // Вопрос головы - пара «кусок расхождения, найденный номер». Два адреса с общим началом
+        // задают ОДИН вопрос, и ссылка им печётся одна и та же, а ответ головы своего адреса не
+        // называет и хозяина находит только по ссылке - значит уедет не тому.
+        //
+        // Развести саму ссылку нечем: свободной осью была бы подпись, но на сервере части кольца
+        // идут строго по порядку (stream.Next, Position++), и пропуск одной кладёт поток в 403.
+        // Поэтому разводим не ссылку, а вопрос: второй раз он не задаётся, пока первый в полёте,
+        // и такой адрес едет обычной сборкой.
+        int question = piece * HeadBases + (found % HeadBases);
+
+        for (int i = 0; i < slotKey.Length; i++) if (!slotDelete[i] && slotLoading[i] && slotHead[i] == question) return false;
+
+        int at = SlotOf(payload);
+
+        if (at >= 0) { slotHeaded[at] = true; slotHead[at] = question; }
+
         LastRoad = "head";
+        route = "/hd";
 
-        queueLen = 1;
-        queue = new int[1];
-        queueKind = new int[1];
-        queue[0] = (piece * HeadBases + (found % HeadBases)) * JumpSignValues + NextSign();
-        queueKind[0] = 6;
-        queuePos = 0;
-
-        SendNext();
+        Load(KindHead, payload, HeadPool[question * JumpSignValues + NextSign()]);
 
         return true;
     }
 
-    private void SendRange(int first, int length)
-    {
-        LastError = "";
-        forwarded = "";
-        forwardedBody = "";
-        pendingUrl = "";
-        LastQueries = 0;
-        LastJump = first;
-        busy = true;
-
-        LastRoad = "hyper";
-
-        queueLen = 1;
-        queue = new int[1];
-        queueKind = new int[1];
-        queue[0] = (first * RangeMax + length - 1) * JumpSignValues + NextSign();
-        queueKind[0] = 5;
-        queuePos = 0;
-
-        SendNext();
-    }
-
+    // Добор долга. Занятость его не откладывает: отправку и так выстраивает VRCStringDownloader,
+    // а добор лишь забирает у сервера уже готовые тела.
     public void Settle()
     {
-        // Занятость добор НЕ отменяет, а откладывает. Раньше запланированный добор молча исчезал,
-        // если клиент в этот миг что-то грузил, и долг оставался у сервера до сторожа мира - отсюда
-        // и провалы в десять секунд между телами. Ограничивать отправку нам незачем: её и так
-        // ограничивает VRCStringDownloader, а добор лишь забирает уже готовые ответы.
-        if (busy)
-        {
-            if (LastPending > 0) SendCustomEventDelayedSeconds(nameof(Settle), CreditDelay);
-
-            return;
-        }
+        pendingSettle = false;
 
         LastError = "";
-        forwarded = "";
+        route = "/tc";
 
-        pendingUrl = "";
-        LastQueries = 0;
-        busy = true;
-
-        queueLen = 1;
-        queue = new int[1];
-        queueKind = new int[1];
-        queue[0] = NextSign();
-        queueKind[0] = 7;
-        queuePos = 0;
-
-        SendNext();
+        Load(KindCredit, "", CreditPool[NextSign()]);
     }
 
-    private void SendNext()
+    // Отправляет ВСЮ цепочку адреса разом. Куски ложатся в очередь SDK подряд и приходят на сервер
+    // в том же порядке, а хвост её закрывает. Ждать ответа на кусок было незачем: в нём нет ничего,
+    // что решало бы, каким быть следующему.
+    private void SendChain(string payload)
     {
-        int kind = queueKind[queuePos];
+        for (int at = 0; at < queueLen; at++)
+        {
+            int kind = queueKind[at];
+            int value = queue[at];
 
-        route = kind == 0 || kind == 1 || kind == 3 ? "/c"
-              : kind == 4 || kind == 5 ? "/h"
-              : kind == 6 ? "/hd"
-              : kind == 7 ? "/tc"
-              : kind == 8 ? "/cf"
-              : fragments ? "/t" : "/d";
+            // route ставится ДО Load: Load печатает его в Trace, и переставь их местами - в журнале
+            // поедет дорога предыдущего шага.
+            switch (kind)
+            {
+                case KindChunk:
+                    route = "/c";
+                    Load(kind, payload, ChunkPool[value]);
+                    continue;
 
-        if (kind == 0) { Load(PhaseChunks, ChunkPool[queue[queuePos]]); return; }
+                case KindFragment:
+                    route = "/c";
+                    Load(kind, payload, VfPool[value]);
+                    continue;
 
-        if (kind == 1) { Load(PhaseFragment, VfPool[queue[queuePos]]); return; }
+                case KindHop:
+                    route = "/c";
+                    Load(kind, payload, HopPool[value]);
+                    continue;
 
-        if (kind == 3) { Load(PhaseFragment, HopPool[queue[queuePos]]); return; }
+                case KindJumpOne:
+                    route = "/h";
 
-        if (kind == 4) { Load(PhaseJump, RangePool[(queue[queuePos] * RangeMax + RangeMax - 1) * JumpSignValues + NextSign()]); return; }
+                    // Тут адрес ровно один, и просить у сервера восемь значило бы гонять его
+                    // наружу за семью чужими. Счётчик 1 - это индекс 0 в блоке номера.
+                    Load(KindRange, payload, RangePool[value * RangeMax * JumpSignValues + NextSign()]);
+                    continue;
 
-        if (kind == 5) { Load(PhaseJump, RangePool[queue[queuePos]]); return; }
+                case KindClose:
+                    route = "/cf";
+                    Load(KindTail, payload, ClosePool[value * SignValues + NextSign()]);
+                    continue;
+            }
 
-        if (kind == 6) { Load(PhaseHead, HeadPool[queue[queuePos]]); return; }
+            // Хвост: отдельной ветки ему не нужно, сюда падает всё, что switch не разобрал.
+            //
+            // NextSign() в прямой ветке не зовётся, и это важно: части кольца на сервере идут строго
+            // по порядку, и лишняя съеденная подпись кладёт поток в 403. Держится на том, что тернарник
+            // считает только взятую ветку.
+            route = fragments ? "/t" : "/d";
 
-        if (kind == 7) { Load(PhaseCredit, CreditPool[queue[queuePos]]); return; }
-
-        if (kind == 8) { Load(PhaseTail, ClosePool[queue[queuePos] * SignValues + NextSign()]); return; }
-
-        if (!fragments) { Load(PhaseTail, DirectTailPool[queue[queuePos]]); return; }
-
-        Load(PhaseTail, TailPool[queue[queuePos] * SignValues + NextSign()]);
+            Load(KindTail, payload, fragments
+                ? TailPool[value * SignValues + NextSign()]
+                : DirectTailPool[value]);
+        }
     }
 
     private int NextSign()
@@ -1057,31 +1215,38 @@ public class CombineQueries : UdonSharpBehaviour
         return sign;
     }
 
-    private void Load(int nextPhase, VRCUrl url)
+    // Рукопожатие идёт строго по одному запросу, поэтому у него своя фаза.
+    private void LoadPhase(int nextPhase, VRCUrl url)
     {
         phase = nextPhase;
 
+        route = nextPhase == PhaseConnect ? "/connect" : nextPhase == PhaseCode ? "/k" : "/kf";
+
+        Load(KindCredit, "", url);
+    }
+
+    private void Load(int kind, string payload, VRCUrl url)
+    {
         LastQueries++;
         TotalQueries++;
+        inFlight++;
+
         lastLoadAt = Time.time;
 
-        string at = nextPhase == PhaseConnect ? "/connect"
-                  : nextPhase == PhaseCode ? "/k"
-                  : nextPhase == PhaseVerify ? "/kf"
-                  : route;
-
-        if (nextPhase == PhaseTail && pendingUrl != "")
+        if (payload != "")
         {
-            DataList one = new DataList();
+            int at = SlotOf(payload);
 
-            one.Add(pendingUrl);
+            if (at >= 0)
+            {
+                slotQueries[at] = slotQueries[at] + 1;
 
-            OpenRequest(one);
+                // Решающий запрос адреса запоминаем: по нему ответ головы найдёт свой слот.
+                if (kind == KindHead || kind == KindTail) slotSent[at] = url.Get();
+            }
         }
-        else if (nextPhase != PhaseJump && nextPhase != PhaseHead)
-        {
-            Trace("request: " + TotalQueries + at, true);
-        }
+
+        Trace("request: " + TotalQueries + route, true);
 
         SendCustomEventDelayedSeconds(nameof(OnLoadTimeout), Timeout);
 
@@ -1090,233 +1255,226 @@ public class CombineQueries : UdonSharpBehaviour
 
     public void OnLoadTimeout()
     {
-        if (!busy) return;
+        if (inFlight <= 0) return;
 
         if (Time.time - lastLoadAt < Timeout - 1f) return;
 
-        Fail("no answer in " + Timeout + "s on phase " + phase + ", query " + LastQueries
-            + " of " + queueLen + " for " + LastUrl + " - url blocked by the SDK or server unreachable");
+        Fail("no answer in " + Timeout + "s, for " + LastUrl
+            + " - url blocked by the SDK or server unreachable");
     }
 
     // ==== Ответы ====
 
     public override void OnStringLoadSuccess(IVRCStringDownload response)
     {
-        if (phase == PhaseJump) TakeSent(response.Result);
-        else if (phase == PhaseHead) headTaken = TakeHead(response.Result);
+        if (inFlight > 0) inFlight--;
 
-        TakeDebt(response.Result);
+        Answers++;
 
-        if (phase == PhaseCredit) { LastUrls = 0; Done(); return; }
+        string json = response.Result;
 
-        if (phase == PhaseCode) { queuePos++; SendCode(); return; }
+        // Рукопожатие ведём фазой - оно единственное строго последовательное.
+        if (phase == PhaseCode) { phase = PhaseIdle; queuePos++; SendCode(); return; }
 
         if (phase == PhaseVerify)
         {
-            if (chainInit) { Load(PhaseConnect, connectReset ? ConnectQuery : RememberQuery); return; }
+            phase = PhaseIdle;
 
-            Done();
+            if (chainInit) { LoadPhase(PhaseConnect, connectReset ? ConnectQuery : RememberQuery); return; }
+
             return;
         }
 
         if (phase == PhaseConnect)
         {
+            phase = PhaseIdle;
             connectOk = true;
 
-            SeedFromConnect(response.Result);
+            SeedFromConnect(json);
 
-            Done();
             return;
         }
 
-        if (phase == PhaseChunks || phase == PhaseFragment) { queuePos++; SendNext(); return; }
+        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root) || root.TokenType != TokenType.DataDictionary) return;
 
-        if (phase == PhaseHead)
-        {
-            int taken = headTaken;
+        DataDictionary answer = root.DataDictionary;
 
-            if (forwardedBody != "")
-            {
-                LastChunks = 0;
-                LastL2 = 0;
-                LastL3 = 0;
-                LastInfinite = 0;
-                LastUrls = taken > 0 ? taken : 1;
+        // Долг едет довеском к ЛЮБОМУ ответу - забираем до разбора.
+        TakeDebt(answer);
 
-                forwarded = response.Result;
+        // Чей это ответ, видно по нему самому: прыжок называет адреса, голова находит, хвост закрывает.
+        if (answer.ContainsKey("sent")) TakeSent(answer, response.Url.Get());
+        else if (answer.ContainsKey("found")) TakeHead(answer, response.Url.Get());
+        else if (answer.ContainsKey("leaf")) TakeTail(answer, json);
 
-                Done();
-                return;
-            }
+        Owe();
+    }
 
-            if (taken >= 0 && JumpOf(pendingUrl) >= 0)
-            {
-                SendCombine(pendingUrl);
-                return;
-            }
+    // Просит долг: /tc, когда сервер сказал, что у него для нас ещё что-то лежит.
+    //
+    // Условия ровно два - долг есть и добор ещё не назначен. Третьим стояло "и в полёте пусто", и
+    // ради него inFlight здесь и читался. Рассуждение было такое: долг едет довеском к ЛЮБОМУ
+    // ответу, а SDK шлёт запросы по одному, так что пока что-то летит, оно привезёт готовое само, и
+    // отдельный /tc за ним - лишняя загрузка, лишние пять секунд на ровном месте. Верно ровно до
+    // тех пор, пока полёт когда-нибудь пустеет.
+    //
+    // Он не пустеет. Адрес, которого в дереве нет, идёт сборкой (/c и /t), тело возвращается
+    // долгом, риг его не дожидается и через Patience просит заново - а переспрос снова кладёт в
+    // полёт куски. Полёт не пустел ни разу, /tc не заводился ни разу, готовое тело так и лежало в
+    // ящике: на доске это была "пачка 4: частичная 3/4" при бесконечных vrequest на один адрес.
+    //
+    // Лишняя загрузка дешевле застрявшей пачки, тем более что прыжковой пачке /tc не нужен вовсе -
+    // сервер отдаёт тела прямо ответом на /h. Платит за добор только тот, кто и так пошёл длинной
+    // дорогой. inFlight остаётся: занятость наружу и сторож молчания считаются по нему, и только
+    // здесь ему не место.
+    private void Owe()
+    {
+        if (LastPending <= 0 || pendingSettle) return;
 
-            if (taken >= 0)
-            {
-                LastChunks = 0;
-                LastL2 = 0;
-                LastL3 = 0;
-                LastInfinite = 0;
-                LastUrls = taken;
+        pendingSettle = true;
 
-                forwarded = response.Result;
-
-                Done();
-                return;
-            }
-
-            string kept = StringField(response.Result, "kept");
-
-            SendCombine(kept == "" ? pendingUrl : pendingUrl.Substring(0, pendingUrl.Length - kept.Length));
-            return;
-        }
-
-        if (phase == PhaseJump)
-        {
-            if (!BoolField(response.Result, "known"))
-            {
-                jumps.Remove(pendingUrl);
-
-                LastJump = -1;
-
-                SendCombine(pendingUrl);
-                return;
-            }
-
-            LastChunks = 0;
-            LastL2 = 0;
-            LastL3 = 0;
-            LastInfinite = 0;
-
-            LastUrls = IntField(response.Result, "urls");
-            forwarded = response.Result;
-
-            Done();
-            return;
-        }
-
-        if (phase == PhaseTail)
-        {
-            RememberChain(IntField(response.Result, "leaf"));
-
-            LastChunks = IntField(response.Result, "chunks");
-            LastL2 = IntField(response.Result, "l2");
-            LastL3 = IntField(response.Result, "l3");
-            LastInfinite = IntField(response.Result, "infinite");
-
-            LearnFragments(response.Result);
-
-            LastUrls = 1;
-            forwardedBody = "";
-            forwarded = response.Result;
-
-            Named(pendingUrl, "vrequest[" + TotalQueries + "] " + LastRoad);
-
-            Done();
-            return;
-        }
-
-        Done();
+        SendCustomEventDelayedSeconds(nameof(Settle), CreditDelay);
     }
 
     public override void OnStringLoadError(IVRCStringDownload result)
     {
-        if (phase == PhaseConnect) connectOk = false;
+        if (inFlight > 0) inFlight--;
 
-        if (phase == PhaseVerify) { Fail("codeword rejected"); return; }
+        // if conditionals up to 3-4, you should mutate you switch
+        if (phase == PhaseConnect) { phase = PhaseIdle; connectOk = false; }
+        if (phase == PhaseVerify) { phase = PhaseIdle; Fail("codeword rejected"); return; }
 
         Fail((result.ErrorCode == 0 ? "host unreachable (server not running?), " : "") + result.Error);
+
+        // Упавший запрос долг не привёз - идём за ним сами.
+        Owe();
     }
 
-    private void TakeSent(string json)
+    // Прыжок назвал адреса: у каждого теперь есть номер, и каждому он стоил ровно один запрос.
+    private void TakeSent(DataDictionary answer, string link)
     {
-        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
-        if (root.TokenType != TokenType.DataDictionary) return;
-        if (!root.DataDictionary.TryGetValue("sent", out DataToken list) || list.TokenType != TokenType.DataList) return;
+        DataDictionary named = new DataDictionary();
 
-        DataList sent = list.DataList;
-
-        DataList asked = new DataList();
-
-        for (int i = 0; i < sent.Count; i++)
+        if (answer.TryGetValue("sent", out DataToken list) && list.TokenType == TokenType.DataList)
         {
-            if (!sent.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+            DataList sent = list.DataList;
 
-            string url = DictString(item.DataDictionary, "url");
-            int jump = DictInt(item.DataDictionary, "jump");
+            for (int i = 0; i < sent.Count; i++)
+            {
+                if (!sent.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
 
-            if (url == "" || jump < 0) continue;
+                int jump = DictInt(item.DataDictionary, "jump");
+                string url = DictString(item.DataDictionary, "url");
 
-            KeepJump(PayloadOf(url), jump);
+                if (url == "" || jump < 0) continue;
 
-            Mark(PayloadOf(url));
+                string payload = PayloadOf(url);
 
-            // Прыжок назвал чужой адрес одним запросом - столько его отправка и стоила.
-            if (PayloadOf(url) != pendingUrl) Sent(PayloadOf(url), 1);
+                KeepJump(payload, jump);
 
-            Named(url, "vrequest[" + TotalQueries + "] hyper");
+                named.SetValue(payload, true);
 
-            asked.Add(PayloadOf(url));
+                if (SlotOf(payload) >= 0 && QueriesOf(payload) == 0) Sent(payload, 1);
+
+                Named(url, "vrequest[" + TotalQueries + "] hyper");
+            }
+
+            LastUrls = sent.Count;
         }
 
-        OpenRequest(asked);
-    }
+        // Номер протух: адреса, которые окно должно было накрыть, просим заново - сборкой.
+        if (!DictBool(answer, "known")) { Reopen(link); return; }
 
-    private int TakeHead(string json)
-    {
-        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return -1;
-        if (root.TokenType != TokenType.DataDictionary) return -1;
-        if (!root.DataDictionary.TryGetValue("found", out DataToken list) || list.TokenType != TokenType.DataList) return -1;
+        // Кого окно накрыло - решил сервер, и вот его ответ. Кого не назвал, отпускаем сразу:
+        // ждать по ним нечего, а следующий проход даст им своё окно.
+        int at = -1, smallest = 0;
+        bool left = false, ours = false;
 
-        DataList found = list.DataList;
-
-        string mine = Scheme + "://" + pendingUrl;
-        int ours = -1;
-
-        DataList asked = new DataList();
-
-        for (int i = 0; i < found.Count; i++)
+        for (int i = 0; i < slotKey.Length; i++)
         {
-            if (!found.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+            if (slotDelete[i] || slotSent[i] != link) continue;
 
-            string url = DictString(item.DataDictionary, "url");
-            int jump = DictInt(item.DataDictionary, "jump");
+            int jump = JumpOf(slotKey[i]);
 
-            if (url == "" || jump < 0) continue;
+            if (jump >= 0 && (at < 0 || jump < smallest)) { at = i; smallest = jump; }
 
-            KeepJump(PayloadOf(url), jump);
+            if (named.ContainsKey(slotKey[i])) { ours = true; continue; }
 
-            // То же у головы: назвала адрес одним запросом.
-            if (PayloadOf(url) != pendingUrl) Sent(PayloadOf(url), 1);
-
-            Named(url, "head[" + TotalQueries + "]");
-
-            asked.Add(PayloadOf(url));
-
-            if (url == mine) ours = found.Count;
+            Flying(i, false);
+            slotSent[i] = "";
+            left = true;
         }
 
-        int head = OpenRequest(asked);
+        if (!left) return;
 
-        for (int i = 0; i < asked.Count; i++)
-            if (asked.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String) SettleUrl(url.String);
+        // Окно не назвало даже собственный якорь: его номер бесполезен, и без этого следующий
+        // проход выбрал бы тот же якорь и встал. Такой адрес едет сборкой.
+        if (!ours && at >= 0) jumps.Remove(slotKey[at]);
 
-        if (head > 0) Report(head, "имена", "");
-
-        return ours;
+        Jumps();
+        Spell();
     }
 
-    private void TakeDebt(string json)
+    // Голова нашла адреса по куску расхождения. Свой слот находим по печёной ссылке: в ответе его нет.
+    private void TakeHead(DataDictionary answer, string link)
     {
-        if (!VRCJson.TryDeserializeFromJson(json, out DataToken root)) return;
-        if (root.TokenType != TokenType.DataDictionary) return;
+        int at = SlotBySent(link);
+        string payload = at < 0 ? "" : slotKey[at];
 
-        DataDictionary answer = root.DataDictionary;
+        if (answer.TryGetValue("found", out DataToken list) && list.TokenType == TokenType.DataList)
+        {
+            DataList found = list.DataList;
 
+            for (int i = 0; i < found.Count; i++)
+            {
+                if (!found.TryGetValue(i, out DataToken item) || item.TokenType != TokenType.DataDictionary) continue;
+
+                string url = DictString(item.DataDictionary, "url");
+                int jump = DictInt(item.DataDictionary, "jump");
+
+                if (url == "" || jump < 0) continue;
+
+                KeepJump(PayloadOf(url), jump);
+
+                Named(url, "head[" + TotalQueries + "]");
+            }
+
+            LastUrls = found.Count;
+        }
+
+        if (payload == "" || Loaded(payload)) return;
+
+        // Наш адрес голова назвала - дальше он уедет прыжком. Не назвала - диктуем остаток сами.
+        if (JumpOf(payload) >= 0) { SendCombine(payload); return; }
+
+        string kept = DictString(answer, "kept");
+
+        SendCombine(kept == "" ? payload : payload.Substring(0, payload.Length - kept.Length));
+    }
+
+    // Хвост закрыл адрес. Какой именно - сказано в самом ответе, поэтому помнить «текущий» не нужно.
+    private void TakeTail(DataDictionary answer, string json)
+    {
+        string payload = PayloadOf(DictString(answer, "forwardedUrl"));
+        int leaf = DictInt(answer, "leaf");
+
+        if (payload != "" && leaf >= 0) KeepJump(payload, leaf);
+
+        LastChunks = DictInt(answer, "chunks");
+        LastL2 = DictInt(answer, "l2");
+        LastL3 = DictInt(answer, "l3");
+        LastInfinite = DictInt(answer, "infinite");
+        LastUrls = 1;
+
+        LearnFragmentList(answer);
+
+        forwarded = json;
+
+        if (payload != "") Named(payload, "vrequest[" + TotalQueries + "] " + LastRoad);
+    }
+
+    private void TakeDebt(DataDictionary answer)
+    {
         // Старое кольцо частей кончилось - сервер прислал новое тем же ответом, в котором мы
         // потратили последнюю часть. Ту часть он уже зачёл, поэтому новое кольцо начинаем с начала.
         string fresh = DictString(answer, "signs");
@@ -1345,7 +1503,7 @@ public class CombineQueries : UdonSharpBehaviour
 
             string body = DictString(item.DataDictionary, "response");
 
-            bodies.SetValue(url, body);
+            KeepBody(url, StatusLoaded, body);
 
             Fill(url, body);
 
@@ -1540,11 +1698,19 @@ public class CombineQueries : UdonSharpBehaviour
 
         DataList record = new DataList();
 
-        record.Add(route);
+        // Дороги у пачки ещё нет: OpenRequest зовётся ДО первой отправки, и route здесь - дорога
+        // предыдущей пачки. Из-за этого в журнале стояло "vrequest: 2/tc" у пачки, которая ушла
+        // прыжками. Вместо вранья кладём метку просящего - она-то как раз известна.
+        string mark = who == "" ? "" : "/" + who;
+
+        record.Add(mark);
         record.Add(urls);
         record.Add(settled);
 
-        record.Add(lastLoadAt);
+        // Часы vrequest идут с ЭТОГО мгновения. Было lastLoadAt - время ПРЕДЫДУЩЕГО запроса, и
+        // пачка наследовала чужой отсчёт: между нажатиями мир стоит сколько угодно, и в журнал
+        // уезжали десятки секунд простоя вместо настоящих секунд работы.
+        record.Add(Time.time);
 
         record.Add("");
         record.Add("");
@@ -1556,7 +1722,7 @@ public class CombineQueries : UdonSharpBehaviour
             if (urls.TryGetValue(i, out DataToken url) && url.TokenType == TokenType.String)
                 asking.SetValue(url.String, id);
 
-        Trace("vrequest: " + id + route + " " + Joined(urls), true);
+        Trace("vrequest: " + id + mark + " " + Joined(urls), true);
 
         return id;
     }
@@ -1636,6 +1802,13 @@ public class CombineQueries : UdonSharpBehaviour
     }
 
     // ==== JSON ====
+
+    private bool DictBool(DataDictionary dict, string field)
+    {
+        if (!dict.TryGetValue(field, out DataToken value)) return false;
+
+        return value.TokenType == TokenType.Boolean && value.Boolean;
+    }
 
     private int DictInt(DataDictionary dict, string field)
     {
