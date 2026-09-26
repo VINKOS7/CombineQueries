@@ -10,15 +10,16 @@ namespace CombineQueries.Api.Services.Outbox;
 // в котором её завели, - брать его зависимости оттуда нельзя.
 public class Outbox(IServiceScopeFactory scopes, ILogger<Outbox> logger) : IOutbox
 {
-    private readonly ConcurrentQueue<Delivery> _ready = new();
+    // Очередь и счётчик - на каждый поток: тела ждёт тот, кто за ними послал.
+    private readonly ConcurrentDictionary<int, ConcurrentQueue<Delivery>> _ready = new();
 
-    private int _pending;
+    private readonly ConcurrentDictionary<int, int> _pending = new();
 
-    public int Pending => Volatile.Read(ref _pending);
+    public int Pending(int stream) => _pending.TryGetValue(stream, out int flying) ? flying : 0;
 
-    public void Fetch(string url)
+    public void Fetch(string url, int stream)
     {
-        Interlocked.Increment(ref _pending);
+        _pending.AddOrUpdate(stream, 1, (_, flying) => flying + 1);
 
         _ = Task.Run(async () =>
         {
@@ -29,7 +30,7 @@ public class Outbox(IServiceScopeFactory scopes, ILogger<Outbox> logger) : IOutb
                 var forwarder = scope.ServiceProvider.GetRequiredService<IForward>();
                 var result = await forwarder.GetAsync(url, CancellationToken.None);
 
-                _ready.Enqueue(new Delivery(url, result.Body, result.ElapsedMs));
+                Keep(stream, new Delivery(url, result.Body, result.ElapsedMs));
             }
             catch (Exception error)
             {
@@ -37,22 +38,25 @@ public class Outbox(IServiceScopeFactory scopes, ILogger<Outbox> logger) : IOutb
                 // Пустое тело - честный ответ «сходили, не принесли».
                 logger.LogWarning("outbox: {Url} failed ({Kind}: {Message})", url, error.GetType().Name, error.Message);
 
-                _ready.Enqueue(new Delivery(url, "", 0));
+                Keep(stream, new Delivery(url, "", 0));
             }
             finally
             {
-                Interlocked.Decrement(ref _pending);
+                _pending.AddOrUpdate(stream, 0, (_, flying) => flying > 0 ? flying - 1 : 0);
             }
         });
     }
 
-    public IReadOnlyList<Delivery> Take()
+    private void Keep(int stream, Delivery delivery) =>
+        _ready.GetOrAdd(stream, _ => new ConcurrentQueue<Delivery>()).Enqueue(delivery);
+
+    public IReadOnlyList<Delivery> Take(int stream)
     {
-        if (_ready.IsEmpty) return [];
+        if (!_ready.TryGetValue(stream, out var ready) || ready.IsEmpty) return [];
 
         var taken = new List<Delivery>();
 
-        while (_ready.TryDequeue(out var delivery)) taken.Add(delivery);
+        while (ready.TryDequeue(out var delivery)) taken.Add(delivery);
 
         return taken;
     }

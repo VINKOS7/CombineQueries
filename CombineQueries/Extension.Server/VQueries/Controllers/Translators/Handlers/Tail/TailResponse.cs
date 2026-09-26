@@ -3,11 +3,15 @@ using Newtonsoft.Json;
 using CombineQueries.Api.Services.Outbox;
 
 using CombineQueries.Api.Services.Speech;
+using CombineQueries.Api.Controllers.Accounts;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 
-public record TailResponse
+public record TailResponse : ISigned
 {
+    // Новое кольцо частей токена, если старое кончилось на этом запросе.
+    [JsonProperty("signs")] public string? Signs { get; set; }
+
     [JsonProperty("runes")] public int Runes { get; set; }
     [JsonProperty("forwardedUrl")] public string? ForwardedUrl { get; set; }
     // Тело больше не едет здесь: наружу сервер ходит в фон, а результат приезжает ДОЛГОМ.

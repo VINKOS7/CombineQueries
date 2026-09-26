@@ -1,4 +1,4 @@
-namespace CombineQueries.Domain.Aggregates.Translator;
+namespace CombineQueries.Domain.Aggregates.Translator.types;
 
 // Уровень адресации строки словаря = СКОЛЬКО РАЗВЯЗОК нужно, чтобы её назвать.
 // Ноль стоит особняком: финитного адреса нет вовсе.

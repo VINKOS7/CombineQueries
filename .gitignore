@@ -86,3 +86,25 @@ appsettings.Alpha.json
 appsettings.Production.json
 appsettings.Prod.json
 appsettings.Release.json
+
+### Переключатель контура. Секретов не содержит, но привязан к ПРИВАТНОМУ CombineQueries.prod.fly.cs:
+### он ставит CQ_PROD + CQ_FLY, а под этой парой публичный CombineQueries.prod.cs выключается. У того,
+### кто взял тулзу, приватного файла нет - и проект просто не соберётся, класса окружения не окажется
+### вовсе. Поэтому переключатель личный и в репозиторий не едет.
+HostMode.cs
+HostMode.cs.meta
+
+### Бэкапы хоста: дамп прод-базы, код и собранное приложение на момент обновления. В базе токены
+### аккаунтов, поэтому только на диске.
+/CombineQueries/Extension.Server/backups/
+
+### Архив: всё, что вышло из работы, но выбрасывать жалко. Лежит на диске, в репозиторий не едет.
+### Там и старые конфиги с настоящими токеном и кодовым словом - из-за них архив и утёк на dev.
+### Тильда в конце - чтобы Unity не импортировал старые .cs: Udon/ он видит через Assets/Src.
+Udon/Archive/
+Udon/Archive~/
+
+### Клиент живёт ОДНИМ экземпляром в Udon/. Unity компилирует только внутри Assets/, поэтому
+### Assets/Src - junction на Udon/, а не папка. После клонирования создать его заново:
+###   New-Item -ItemType Junction -Path CombineQueries\Assets\Src -Target Udon
+/CombineQueries/Assets/Src

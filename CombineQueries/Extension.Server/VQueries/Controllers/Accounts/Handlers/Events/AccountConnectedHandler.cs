@@ -1,12 +1,13 @@
-using System.Data.Common;
-
-using MediatR;
-using Microsoft.EntityFrameworkCore;
-
+using CombineQueries.Api.Controllers.Accounts.Handlers.Code;
 using CombineQueries.Api.Services.Persist;
 using CombineQueries.Api.Services.Speech;
 using CombineQueries.Domain.Aggregates.Account.Events;
 using CombineQueries.Domain.Aggregates.Translator;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using System.Data.Common;
 
 namespace CombineQueries.Api.Controllers.Accounts.Handlers.Events;
 
@@ -35,7 +36,7 @@ public class AccountConnectedHandler(IServiceProvider provider, ISpeech speech, 
         // Сброс идёт ДО заливки: иначе Warm тут же вернул бы забытое обратно из персиста.
         await ForgetHypers(repo, translator, cancellationToken);
 
-        Warm(translator);
+        await Warm(repo, translator, cancellationToken);
 
         // Прогрев идёт последним: Warm поднимает дерево из БД через Forget, и нагретое до него
         // просто исчезло бы. Греем один раз на мастера - отметку снимает его авторизация.
@@ -94,7 +95,7 @@ public class AccountConnectedHandler(IServiceProvider provider, ISpeech speech, 
 
     // Тёплый словарь из персиста в рантайм. Адрес и handle - это индексы, поэтому строго по
     // возрастанию, дырки Restore добьёт сам.
-    private void Warm(Translator? translator)
+    private async Task Warm(ITranslatorRepo repo, Translator? translator, CancellationToken cancellationToken)
     {
         if (translator is null) return;
 
@@ -109,14 +110,46 @@ public class AccountConnectedHandler(IServiceProvider provider, ISpeech speech, 
 
         foreach (var (handle, url) in remembered) hypers.Add(new HyperSeed(handle, url));
 
+        // Словарь первым: по нему отбор видит обрубки. Дерево он не трогает, так что порядок
+        // между ними свободен.
+        speech.Restore(fragments, hypers);
+
+        await Prune(repo, translator, cancellationToken);
+
         // Дерево цепочек из персиста: номера узлов сохраняются, иначе выданные прыжки протухнут.
         // Поднимаем ВСЕГДА - hypers=off гасит появление новых цепочек, а не чтение накопленных.
         var chains = translator.Grown();
 
         speech.RestoreChains(chains);
 
-        speech.Restore(fragments, hypers);
-
         logger.LogInformation("connect: restored {Fragments} fragments, {Hypers} hypers, {Chains} chain nodes", fragments.Count, hypers.Count, chains.Count);
+    }
+
+    // Мусор, который прогрев записал в персист, пока отбор был мягче: "site.co", "site.com/pro",
+    // голый "site.com". Сам он оттуда не уходит - каждый connect поднимал его обратно, голова и
+    // диапазоны отдавали его в семьях, и клиент платил за холостые походы наружу. Выпалываем тем же
+    // отбором, что и прогрев, до подъёма дерева - в рантайм мусор не попадает вовсе.
+    //
+    // Тем же проходом уходят цепочки, разобранные НЕ по канону: лист вне своей семьи прыжок
+    // отдаёт по одному. Прогрев заведёт их заново уже в семье.
+    //
+    // Не только в Development: на релизе этот мусор лежит ровно так же, он приехал сид-миграцией.
+    private async Task Prune(ITranslatorRepo repo, Translator translator, CancellationToken cancellationToken)
+    {
+        int pruned = translator.Prune((url, path) => speech.Jumpable(url) && path.SequenceEqual(speech.Canonical(url)));
+
+        if (pruned == 0) return;
+
+        try
+        {
+            await repo.UnitOfWork.SaveEntitiesAsync(cancellationToken);
+
+            logger.LogInformation("connect: pruned {Pruned} junk chains", pruned);
+        }
+        // Отказ БД не роняет connect: в рантайм мусор всё равно не пойдёт, выполем на следующем.
+        catch (Exception ex) when (PersistFailure.Unavailable(ex))
+        {
+            logger.LogWarning("connect: junk chains pruned in memory only ({Kind}: {Message})", ex.GetType().Name, ex.Message);
+        }
     }
 }

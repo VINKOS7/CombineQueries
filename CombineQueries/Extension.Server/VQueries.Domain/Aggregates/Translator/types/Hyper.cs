@@ -1,6 +1,6 @@
 using Dotseed.Domain;
 
-namespace CombineQueries.Domain.Aggregates.Translator;
+namespace CombineQueries.Domain.Aggregates.Translator.types;
 
 // Хайпер: handle -> уже собранный URL. Собрав URL по рунам один раз, клиент дальше зовёт его одним
 // запросом /h/<handle> - это самый дешёвый путь, дешевле любого фрагмента.

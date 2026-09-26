@@ -70,6 +70,49 @@ public class Translator : Entity, IAggregateRoot
         return forgotten;
     }
 
+    // Выпалывает цепочки, чей адрес не прошёл отбор (keep == false). Возвращает сколько задело.
+    //
+    // Узел с детьми остаётся - через него идут чужие пути - и теряет только адрес; бездетный уходит
+    // целиком. Номера остальных не трогаем: дерево держит дыры, а выданные клиенту прыжки обязаны
+    // остаться верными.
+    public int Prune(Func<string, IReadOnlyList<string>, bool> keep)
+    {
+        var byId = new Dictionary<int, Chain>();
+        var parents = new HashSet<int>();
+
+        foreach (var chain in Chains)
+        {
+            byId[chain.Id] = chain;
+
+            if (chain.ParentId is int parent) parents.Add(parent);
+        }
+
+        var weeds = new List<Chain>();
+
+        foreach (var chain in Chains) if (chain.Url is not null && !keep(chain.Url, PathOf(chain, byId))) weeds.Add(chain);
+
+        foreach (var weed in weeds)
+        {
+            if (parents.Contains(weed.Id)) weed.Url = null;
+            else Chains.Remove(weed);
+        }
+
+        return weeds.Count;
+    }
+
+    // Шаги от корня до узла. Счётчик отсекает кольцо в битых данных: глубже числа узлов пути нет.
+    private static IReadOnlyList<string> PathOf(Chain chain, Dictionary<int, Chain> byId)
+    {
+        var steps = new List<string>();
+
+        for (Chain? at = chain; at is not null && steps.Count <= byId.Count; at = at.ParentId is int parent ? byId.GetValueOrDefault(parent) : null)
+            steps.Add(at.Step);
+
+        steps.Reverse();
+
+        return steps;
+    }
+
     // Кладёт узел дерева. Дубль по номеру отбиваем - номера назначает дерево в рантайме.
     public Chain? Grow(int id, int? parentId, string step, string? url)
     {

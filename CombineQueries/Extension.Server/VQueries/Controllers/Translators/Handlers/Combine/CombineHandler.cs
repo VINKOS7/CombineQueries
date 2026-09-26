@@ -5,11 +5,6 @@ using CombineQueries.Api.Services.Speech;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 
-// Объединённый combine, роут /c/{runes}/{id}/{page}/{hop}/{q}: q = сколько юнитов с конца - фрагменты.
-// single-unit: q=0 -> чанк (Accept руны, в т.ч. с L1-корнями); q=1 -> один VF по id
-// (AcceptVirtualFragment сам решает L2/L3). Паковка (q>1: n рун + k фрагментов) - второй коммит.
-//
-// hop - отдельная Развязка-3, а НЕ значение q: q считает фрагменты, занимать его признаком нельзя.
 public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech, IOutbox outbox) : IRequestHandler<CombineRequest, CombineResponse>
 {
     public Task<CombineResponse> Handle(CombineRequest request, CancellationToken cancellationToken)
@@ -67,8 +62,8 @@ public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech, IOut
 
         // Долг цепляем и сюда: он копится между запросами, а комбайнов в сборке больше всего -
         // значит через них он и доедет раньше всего.
-        var ready = outbox.Take();
+        var ready = outbox.Take(speech.Stream);
 
-        return Task.FromResult(new CombineResponse { Received = received, Ready = ready, Pending = outbox.Pending });
+        return Task.FromResult(new CombineResponse { Received = received, Ready = ready, Pending = outbox.Pending(speech.Stream) });
     }
 }

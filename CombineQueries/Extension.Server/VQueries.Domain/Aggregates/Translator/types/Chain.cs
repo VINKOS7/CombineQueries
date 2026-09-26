@@ -1,6 +1,6 @@
 using Dotseed.Domain;
 
-namespace CombineQueries.Domain.Aggregates.Translator;
+namespace CombineQueries.Domain.Aggregates.Translator.types;
 
 // Узел дерева цепочек: одна позиция в потоке combine-запросов.
 //

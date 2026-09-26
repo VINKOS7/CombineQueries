@@ -1,6 +1,6 @@
 using Newtonsoft.Json;
 
-namespace CombineQueries.Api.Controllers.Translators.Handlers.Code;
+namespace CombineQueries.Api.Controllers.Accounts.Handlers.Code;
 
 public record CodeVerifyResponse
 {

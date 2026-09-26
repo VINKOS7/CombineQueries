@@ -218,7 +218,49 @@ public class Speech : ISpeech
     // В /c/ то же самое стоило бы 830 584 * SignValues.
     public string Signs { get; private set; } = "";
 
-    private int _signPos;
+    // Поток одного клиента: его кольцо, позиция в нём и когда по нему в последний раз приходили.
+    // Клиентов много, поэтому и потоков много: сервер держит по одному на каждое подключение.
+    private sealed class SignStream
+    {
+        // Номер потока: по нему ящик долгов отличает, чьи тела он держит.
+        public int Id;
+
+        public string Ring = "";
+        public int Position;
+        public DateTime Seen;
+
+        // Набор частей этого клиента: [Lane, Lane + Size). Наборы не пересекаются, поэтому по любой
+        // части видно, чей запрос - без этого сервер путал клиентов и клал тело в чужой ящик.
+        public int Lane;
+        public int Size = SignValues;
+
+
+
+        public int Next => Ring[Position] - '0';
+
+        public bool Owns(int part) => part >= Lane && part < Lane + Size;
+    }
+
+    private readonly List<SignStream> _streams = [];
+
+    // Список правят разные запросы сразу: поиск, сдвиг и выдача нового кольца обязаны идти целиком,
+    // иначе двое разберут один поток пополам.
+    private readonly object _signLock = new();
+
+    // Части делятся на наборы ПОСТОЯННОГО размера, и набор закрепляется за клиентом до конца его
+    // жизни. Переразбирать на лету нельзя: старое кольцо клиента попало бы в чужой набор, и его
+    // запросы засчитывались бы соседу.
+    //
+    // Одна часть на клиента - восемь клиентов разом, столько мастер и держит инстансов. Кольцо при
+    // этом вырождается в постоянную строку: часть становится просто номером клиента, и очерёдность
+    // уже ничего не стережёт. Поставить 2 - вернутся четыре клиента и проверка чередования.
+    private const int LaneSize = 1;
+
+    private const int MaxStreams = SignValues / LaneSize;
+
+    // Сколько поток живёт без запросов. Переживший этот срок считается ушедшим, и его набор забирает
+    // новый клиент: иначе восемь реконнектов заперли бы сервер навсегда.
+    private static readonly TimeSpan SignLife = TimeSpan.FromMinutes(10);
 
     public const int SignValues = 8;
 
@@ -235,25 +277,141 @@ public class Speech : ISpeech
     // прыжков на SignValues (4096 -> 32768 ссылок), а бит удваивает (4096 -> 8192).
     public bool CheckSign(int sign) => CheckSign(sign, SignValues);
 
+    // Пришедшую часть ищем среди ОЖИДАЕМЫХ - по одной на подключённого клиента. Нашлась - поток
+    // известный, сдвигаем его на следующую; не нашлась - часть чужая, и запрос отбивается.
+    //
+    // Части всего SignValues, поэтому двое могут ждать одну и ту же. Тогда берём поток, по которому
+    // приходили позже: клиент шлёт запросы очередью, и свежий поток куда вероятнее.
     public bool CheckSign(int sign, int values)
     {
-        if (Signs.Length == 0) return true;
+        if (sign < 0 || sign >= values) return false;
 
-        bool ok = sign >= 0 && sign < values && (Signs[_signPos] - '0') % values == sign;
+        lock (_signLock)
+        {
+            if (_streams.Count == 0) return true;
 
-        _signPos = (_signPos + 1) % Signs.Length;
+            SignStream? mine = null;
 
-        return ok;
+            // Часть ждут несколько - берём того, чей это НАБОР: наборы не пересекаются, и хозяин
+            // ровно один. Такое бывает сразу после переразбиения, пока кто-то ещё на старом кольце.
+            // Хозяина нет вовсе - берём того, по кому приходили позже.
+            foreach (var stream in _streams)
+            {
+                if (stream.Next % values != sign) continue;
+
+                if (mine is null || stream.Owns(sign) || (!mine.Owns(sign) && stream.Seen > mine.Seen)) mine = stream;
+            }
+
+            if (mine is null) return false;
+
+            mine.Position++;
+            mine.Seen = DateTime.UtcNow;
+
+            _stream.Value = mine.Id;
+
+            // Кольцо кончилось - на его место рождается новое, и уезжает тем же ответом, в котором
+            // клиент потратил последнюю часть. Тот, кто подслушал кольцо целиком, получает его мёртвым:
+            // следующая часть придёт уже из того, которого он не видел.
+            if (mine.Position < mine.Ring.Length) return true;
+
+            mine.Ring = NewSigns(mine.Lane, mine.Size);
+            mine.Position = 0;
+
+            _fresh.Value = mine.Ring;
+
+            return true;
+        }
+    }
+
+    // Новый поток на connect: кольцо рождается здесь и уезжает клиенту, сервер оставляет себе
+    // позицию в нём. Своё кольцо у каждого - по нему клиенты и различаются.
+    private string OpenSigns()
+    {
+        lock (_signLock)
+        {
+            // Ушедшие освобождают свой набор: по ним давно не приходили.
+            _streams.RemoveAll(stream => DateTime.UtcNow - stream.Seen > SignLife);
+
+            // Свободных наборов нет - забираем самый залежавшийся вместе с его набором. Отказывать
+            // нельзя: подключаются и заново, и каждый отказ запирал бы сервер до конца чужого срока
+            // жизни. Вытесненный получит отказ на своём следующем запросе и подключится сам.
+            while (_streams.Count >= MaxStreams)
+            {
+                var oldest = _streams[0];
+
+                foreach (var stream in _streams) if (stream.Seen < oldest.Seen) oldest = stream;
+
+                _streams.Remove(oldest);
+            }
+
+            int lane = FreeLane();
+
+            var mine = new SignStream
+            {
+                Id = ++_lastStream,
+                Lane = lane,
+                Size = LaneSize,
+                Ring = NewSigns(lane, LaneSize),
+                Seen = DateTime.UtcNow
+            };
+
+            _streams.Add(mine);
+
+            _stream.Value = mine.Id;
+
+            return mine.Ring;
+        }
+    }
+
+    // Первый набор, который никем не занят. Занятых всегда меньше, чем наборов: место освобождает
+    // вытеснение выше.
+    private int FreeLane()
+    {
+        for (int lane = 0; lane < SignValues; lane += LaneSize)
+        {
+            bool taken = false;
+
+            foreach (var stream in _streams) if (stream.Lane == lane) { taken = true; break; }
+
+            if (!taken) return lane;
+        }
+
+        return 0;
+    }
+
+    public int Streams { get { lock (_signLock) return _streams.Count; } }
+
+    private int _lastStream;
+
+    // Чей запрос сейчас обрабатывается. Как и свежее кольцо, привязано к запросу: сервер один на всех,
+    // а поток у каждого свой. 0 - части в запросе не было (/c, /d), и общий ящик тут единственный.
+    private static readonly AsyncLocal<int> _stream = new();
+
+    public int Stream => _stream.Value;
+
+    // Привязано к ЗАПРОСУ, а не к серверу: сервер один на всех, и общее поле отдало бы новое кольцо
+    // тому, чей ответ собрался первым. AsyncLocal живёт внутри той же цепочки вызовов, что и проверка.
+    private static readonly AsyncLocal<string> _fresh = new();
+
+    // Кольцо, выданное взамен кончившегося. Забирает его ОДИН ответ - тот, что его и увезёт клиенту.
+    public string TakeFreshSigns()
+    {
+        string fresh = _fresh.Value ?? "";
+
+        _fresh.Value = "";
+
+        return fresh;
     }
 
     // Сколько значений у подписи прыжка: один бит.
     public const int JumpSignValues = 2;
 
-    private static string NewSigns()
+    // Кольцо из частей ОДНОГО набора: [from, from + size).
+    private static string NewSigns(int from, int size)
     {
         var signs = new char[SignLength];
 
-        for (int i = 0; i < SignLength; i++) signs[i] = (char)('0' + System.Security.Cryptography.RandomNumberGenerator.GetInt32(SignValues));
+        for (int i = 0; i < SignLength; i++) signs[i] = (char)('0' + from + System.Security.Cryptography.RandomNumberGenerator.GetInt32(size));
 
         return new string(signs);
     }
@@ -289,7 +447,7 @@ public class Speech : ISpeech
         {
             string text = _fragments[id];
 
-            if (!IsUrlRequest(text)) continue;
+            if (!Jumpable(text)) continue;
 
             // Путь считаем тем же разбором, что и на записи: прогретая цепочка обязана совпасть
             // с той, которую построит живой проход, иначе адрес заведётся дважды.
@@ -301,18 +459,30 @@ public class Speech : ISpeech
         return warmed;
     }
 
+    // Можно ли по строке заводить прыжок: она цельный запрос и не обрубок более длинного слова.
+    //
+    // Смотрит в словарь, поэтому звать ПОСЛЕ его заливки. Тем же отбором connect выпалывает из
+    // персиста цепочки, которые прогрев успел туда записать, пока фильтр был мягче.
+    public bool Jumpable(string url) => IsUrlRequest(url) && !IsStub(url);
+
     // urlRequest - строка словаря, которая сама по себе цельный запрос, а не обрубок.
     //
     // Отбор строгий намеренно: прогретый адрес попадает в дерево, а оттуда его начинает отдавать
     // голова - и каждый обрубок стоит холостого похода наружу за чужой счёт. Раньше сюда пролезали
-    // ".com/comments" (хост начинается с точки) и "…/search?q" (параметр без значения).
+    // ".com/comments" (хост начинается с точки), "…/search?q" (параметр без значения), голый
+    // "site.com" (корень сайта отдаёт HTML-страницу, а не ответ API) и "…?limit=10&skip" (второй
+    // параметр без значения - проверялся только первый).
     private static bool IsUrlRequest(string text)
     {
         if (text.Length < 5) return false;
 
         int slash = text.IndexOf('/');
-        string host = slash < 0 ? text : text[..slash];
-        string rest = slash < 0 ? "" : text[slash..];
+
+        // Без пути это корень сайта. Базовый адрес - кусок словаря, но не адрес для прыжка.
+        if (slash < 0) return false;
+
+        string host = text[..slash];
+        string rest = text[slash..];
 
         if (!Host(host)) return false;
 
@@ -321,20 +491,65 @@ public class Speech : ISpeech
 
         int query = rest.IndexOf('?');
 
-        // Есть вопрос - значит должен быть и параметр со значением: "?limit" сам по себе обрубок.
+        // Есть вопрос - значит у КАЖДОГО параметра должно быть значение: "?limit" и "&skip" обрубки.
         if (query >= 0)
-        {
-            string parameters = rest[(query + 1)..];
+            foreach (string pair in rest[(query + 1)..].Split('&'))
+            {
+                int equals = pair.IndexOf('=');
 
-            int equals = parameters.IndexOf('=');
-
-            if (equals <= 0 || equals + 1 >= parameters.Length) return false;
-        }
+                if (equals <= 0 || equals + 1 >= pair.Length) return false;
+            }
 
         char last = text[^1];
 
         return last != '/' && last != '?' && last != '&' && last != '=' && last != '.' && last != '-';
     }
+
+    // Обрубок: словарь знает то же слово длиннее. LZW растит фразу по символу, поэтому рядом с
+    // "site.com/products" в нём лежат "site.com/p", "/pro", "/product", а рядом с хостом - "site.co",
+    // и каждый такой снаружи это 404 или вовсе чужой домен.
+    //
+    // Слово продолжается буквой после буквы или связкой '-', '_'. Цифра после цифры обрубком не
+    // считается: "products/1" и "products/12" - два разных адреса. Запросы с '?' здесь не судим:
+    // обрубок параметра уже отсёк IsUrlRequest, а значение "q=Jo" рядом с "q=John" - такой же
+    // настоящий запрос, как и длинный.
+    private bool IsStub(string text)
+    {
+        if (text.Contains('?')) return false;
+
+        var sorted = SortedFragments();
+
+        int at = Array.BinarySearch(sorted, text, StringComparer.Ordinal);
+
+        // Все продолжения строки лежат в сортировке подряд сразу за ней.
+        for (int i = at < 0 ? ~at : at + 1; i < sorted.Length && sorted[i].StartsWith(text, StringComparison.Ordinal); i++)
+        {
+            if (sorted[i].Length == text.Length) continue;
+
+            char next = sorted[i][text.Length];
+
+            if (next == '-' || next == '_') return true;
+            if (char.IsAsciiLetter(next) && char.IsAsciiLetterOrDigit(text[^1])) return true;
+            if (char.IsAsciiDigit(next) && char.IsAsciiLetter(text[^1])) return true;
+        }
+
+        return false;
+    }
+
+    // Словарь по возрастанию текста - для поиска продолжений. Словарь только растёт, поэтому
+    // устаревание видно по размеру; Restore подменяет его целиком и сбрасывает явно.
+    private string[] SortedFragments()
+    {
+        if (_sorted.Length == _fragments.Count) return _sorted;
+
+        _sorted = [.. _fragments];
+
+        Array.Sort(_sorted, StringComparer.Ordinal);
+
+        return _sorted;
+    }
+
+    private string[] _sorted = [];
 
     // Хост: непустое имя, точка внутри (не с краю) и буквенная зона длиной от двух символов.
     private static bool Host(string host)
@@ -404,8 +619,7 @@ public class Speech : ISpeech
         Broken = false;
         LastFault = "";
 
-        Signs = NewSigns();
-        _signPos = 0;
+        Signs = OpenSigns();
     }
 
     // Заливка тёплого словаря из персиста (вызывается на connect, после SetContext). Индекс списка
@@ -416,6 +630,8 @@ public class Speech : ISpeech
         _fragments.Clear();
         _fragIndex.Clear();
         _phrases.Clear();
+
+        _sorted = [];
 
         foreach (var seed in fragments)
         {
@@ -577,6 +793,25 @@ public class Speech : ISpeech
     // Шаг руны хранится РАЗЖАТЫМ: сравнивать надо содержимое, а не форму передачи, и тогда
     // неважно, чем кусок приехал - руной или фрагментом.
     public List<string> Canonical(string url)
+    {
+        // Последний сегмент пути - всегда ОТДЕЛЬНЫЙ шаг, каким бы длинным фрагментом словарь ни
+        // накрывал его вместе с началом. Иначе семья распадается: "site.com/products/1" лежит в
+        // словаре целиком и становится шагом от корня, а "site.com/products/7" разбирается как
+        // "site.com/products/" + "7" - два брата у разных родителей. Прыжок отдаёт семью по
+        // родителю, и четыре таких адреса уезжали четырьмя запросами вместо одного.
+        int cut = url.LastIndexOf('/');
+
+        if (cut <= 0 || cut + 1 >= url.Length) return Cover(url);
+
+        var steps = Cover(url[..(cut + 1)]);
+
+        steps.Add(HyperTree.StepOf(false, url[(cut + 1)..], 0));
+
+        return steps;
+    }
+
+    // Разбор текста словарём: самый длинный фрагмент на каждой позиции, непокрытое - одним рунным шагом.
+    private List<string> Cover(string url)
     {
         var steps = new List<string>();
         var runes = new System.Text.StringBuilder();

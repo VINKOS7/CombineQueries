@@ -1,4 +1,4 @@
-using MediatR;
+﻿using MediatR;
 
 using CombineQueries.Api.Services.Outbox;
 using CombineQueries.Api.Services.Speech;
@@ -15,7 +15,14 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
     // Докуда идём вперёд в поисках этих адресов. Потолок нужен: за концом дерева искать нечего.
     private const int Window = 64;
 
-    public Task<HyperResponse> Handle(HyperRequest request, CancellationToken cancellationToken)
+    // Сколько ждать выдачу перед ответом и с каким шагом её опрашивать, в миллисекундах.
+    //
+    // Полсекунды выбраны не на глаз: наружу ходится около 120 мс, то есть запас четырёхкратный, а
+    // цена промаха - лишняя загрузка у клиента, и вот она стоит ПЯТЬ секунд.
+    private const int Grace = 500;
+    private const int Step = 25;
+
+    public async Task<HyperResponse> Handle(HyperRequest request, CancellationToken cancellationToken)
     {
         if (speech.Alphabet is null) throw new Exception("CRIT: /connect was not called");
 
@@ -23,9 +30,10 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
         // равен хвосту - и подпись у него такая же полная. Попытка ровно одна.
         if (!speech.CheckSign(request.Sign))
         {
-            speech.Fault($"hyper sign {request.Sign} rejected");
+            // Приём НЕ роняем: часть чужая, а не поток разъехался. У остальных клиентов свои
+            // кольца, и падать им из-за чужого запроса незачем.
 
-            logger.LogWarning("hyper: sign {Sign} rejected, stream dropped until connect", request.Sign);
+            logger.LogWarning("hyper: sign {Sign} rejected, not in the expected parts", request.Sign);
 
             throw new Exception("auth error: hyper sign rejected");
         }
@@ -41,11 +49,11 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
 
         if (count == 0)
         {
-            var settled = outbox.Take();
+            var settled = outbox.Take(speech.Stream);
 
-            logger.LogInformation("hyper: debt asked, {Ready} ready now, {Pending} in flight", settled.Count, outbox.Pending);
+            logger.LogInformation("hyper: debt asked, {Ready} ready now, {Pending} in flight", settled.Count, outbox.Pending(speech.Stream));
 
-            return Task.FromResult(new HyperResponse { Known = true, Urls = 0, Ready = settled, Pending = outbox.Pending });
+            return new HyperResponse { Known = true, Urls = 0, Ready = settled, Pending = outbox.Pending(speech.Stream) };
         }
 
         // Просили count адресов - значит и отдать надо count РАЗНЫХ адресов, а не count номеров.
@@ -73,25 +81,46 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
 
             urls.Add(new SentUrl(full, jump));
 
-            outbox.Fetch(full);
+            outbox.Fetch(full, speech.Stream);
         }
 
         if (urls.Count > 0)
         {
-            var ready = outbox.Take();
+            // Ждём поход наружу, но КОРОТКО - и это единственное место, где сервер вообще ждёт.
+            //
+            // Раньше ответ уходил мгновенно и тел в нём не было: форвард только начался. Клиент
+            // забирал их следующим запросом, отдельным /tc, и для него это не «ещё один запрос», а
+            // ещё пять секунд - VRCStringDownloader разносит загрузки шлюзом. Пачка из двух адресов
+            // стоила десять секунд при четверти секунды настоящей работы.
+            //
+            // Выходим сразу, как только ждать стало нечего: либо всё доспело, либо в полёте пусто.
+            // Не успели за Grace - отдаём что есть, остаток приедет довеском к любому следующему
+            // запросу, ровно как и раньше. То есть хуже не становится ни в одном случае.
+            var ready = new List<Delivery>(outbox.Take(speech.Stream));
 
-            logger.LogInformation("hyper: jump {Jump}{Range} -> {Urls} urls sent ({Sent}), {Ready} ready now, {Pending} in flight",
-                request.Value, count > 1 ? "+" + count : "", urls.Count, string.Join(", ", urls.Select(sent => sent.Url)), ready.Count, outbox.Pending);
+            int waited = 0;
 
-            return Task.FromResult(new HyperResponse
+            while (ready.Count < urls.Count && waited < Grace && outbox.Pending(speech.Stream) > 0)
+            {
+                await Task.Delay(Step, cancellationToken);
+
+                waited += Step;
+
+                ready.AddRange(outbox.Take(speech.Stream));
+            }
+
+            logger.LogInformation("hyper: jump {Jump}{Range} -> {Urls} urls sent ({Sent}), {Ready} ready after {Waited} ms, {Pending} in flight",
+                request.Value, count > 1 ? "+" + count : "", urls.Count, string.Join(", ", urls.Select(sent => sent.Url)), ready.Count, waited, outbox.Pending(speech.Stream));
+
+            return new HyperResponse
             {
                 Known = true,
                 Urls = urls.Count,
                 ForwardedUrl = urls[0].Url,
                 Sent = urls,
                 Ready = ready,
-                Pending = outbox.Pending
-            });
+                Pending = outbox.Pending(speech.Stream)
+            };
         }
 
         // Промежуточный узел: адреса у него нет, отдать нечего. Поднимаем куски и ждём, что клиент
@@ -104,12 +133,12 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
             // Причина неважна - ответ один: собрать адрес фрагментами, а хвост его проиндексирует.
             logger.LogWarning("hyper: jump {Jump} is unknown - assemble instead, tail will index it", request.Value);
 
-            return Task.FromResult(new HyperResponse { Known = false, Note = "unsaved hyper, saved for next hyper" });
+            return new HyperResponse { Known = false, Note = "unsaved hyper, saved for next hyper" };
         }
 
         logger.LogInformation("hyper: jump {Jump} resumed {Restored} combine steps", request.Value, restored);
 
-        return Task.FromResult(new HyperResponse { Known = true, Resumed = restored });
+        return new HyperResponse { Known = true, Resumed = restored };
     }
 
 }

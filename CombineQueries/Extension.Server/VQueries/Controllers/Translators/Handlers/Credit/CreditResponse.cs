@@ -1,11 +1,15 @@
 using Newtonsoft.Json;
 
 using CombineQueries.Api.Services.Outbox;
+using CombineQueries.Api.Controllers.Accounts;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Credit;
 
-public record CreditResponse
+public record CreditResponse : ISigned
 {
+    // Новое кольцо частей токена, если старое кончилось на этом запросе.
+    [JsonProperty("signs")] public string? Signs { get; set; }
+
     // Доспевшее к этому мгновению. Формат тот же, что у довеска к любому другому ответу: клиент
     // разбирает долг одним и тем же кодом, каким бы эндпоинтом он ни приехал.
     [JsonProperty("ready")] public IReadOnlyList<Delivery>? Ready { get; set; }

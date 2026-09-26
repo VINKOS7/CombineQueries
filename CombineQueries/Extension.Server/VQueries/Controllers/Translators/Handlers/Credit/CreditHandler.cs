@@ -5,10 +5,6 @@ using CombineQueries.Api.Services.Speech;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Credit;
 
-// Погашение долга. Ничего не запрашивает и ничего не собирает - только отдаёт доспевшее.
-//
-// Подпись сверяем как везде: долг это чужие тела, отдавать их кому попало нельзя, и позиция кольца
-// обязана двигаться в ногу с клиентом - иначе следующий хвост уедет с чужим номером.
 public class CreditHandler(ILogger<CreditHandler> logger, IOutbox outbox, ISpeech speech) : IRequestHandler<CreditRequest, CreditResponse>
 {
     public Task<CreditResponse> Handle(CreditRequest request, CancellationToken cancellationToken)
@@ -17,17 +13,18 @@ public class CreditHandler(ILogger<CreditHandler> logger, IOutbox outbox, ISpeec
 
         if (!speech.CheckSign(request.Sign))
         {
-            speech.Fault($"credit sign {request.Sign} rejected");
+            // Приём НЕ роняем: часть чужая, а не поток разъехался. У остальных клиентов свои
+            // кольца, и падать им из-за чужого запроса незачем.
 
-            logger.LogWarning("credit: sign {Sign} rejected, stream dropped until connect", request.Sign);
+            logger.LogWarning("credit: sign {Sign} rejected, not in the expected parts", request.Sign);
 
             throw new Exception("auth error: credit sign rejected");
         }
 
-        var ready = outbox.Take();
+        var ready = outbox.Take(speech.Stream);
 
-        logger.LogInformation("credit: {Ready} paid now, {Pending} still in flight", ready.Count, outbox.Pending);
+        logger.LogInformation("credit: {Ready} paid now, {Pending} still in flight", ready.Count, outbox.Pending(speech.Stream));
 
-        return Task.FromResult(new CreditResponse { Ready = ready, Pending = outbox.Pending });
+        return Task.FromResult(new CreditResponse { Ready = ready, Pending = outbox.Pending(speech.Stream) });
     }
 }
