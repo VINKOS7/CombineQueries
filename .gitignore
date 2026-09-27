@@ -62,9 +62,9 @@ Thumbs.db
 !/CombineQueries/Packages/packages-lock.json
 
 ### Настройки окружений - в них строки подключения и токены
-/CombineQueries/Extension.Server/VQueries/appsettings.Alpha.json
-/CombineQueries/Extension.Server/VQueries/appsettings.Production.json
-/CombineQueries/Extension.Server/VQueries/appsettings.Prod.json
+/CombineQueries/Src/Back/VQueries/appsettings.Alpha.json
+/CombineQueries/Src/Back/VQueries/appsettings.Production.json
+/CombineQueries/Src/Back/VQueries/appsettings.Prod.json
 
 ### Окружение клиента.
 ###
@@ -96,15 +96,16 @@ HostMode.cs.meta
 
 ### Бэкапы хоста: дамп прод-базы, код и собранное приложение на момент обновления. В базе токены
 ### аккаунтов, поэтому только на диске.
-/CombineQueries/Extension.Server/backups/
+/CombineQueries/Src/Back/backups/
 
 ### Архив: всё, что вышло из работы, но выбрасывать жалко. Лежит на диске, в репозиторий не едет.
 ### Там и старые конфиги с настоящими токеном и кодовым словом - из-за них архив и утёк на dev.
-### Тильда в конце - чтобы Unity не импортировал старые .cs: Udon/ он видит через Assets/Src.
-Udon/Archive/
-Udon/Archive~/
+### Тильда в конце - чтобы Unity не импортировал старые .cs: клиент он видит через Assets/Junction/Front.
+/CombineQueries/Src/Front/Archive/
+/CombineQueries/Src/Front/Archive~/
 
-### Клиент живёт ОДНИМ экземпляром в Udon/. Unity компилирует только внутри Assets/, поэтому
-### Assets/Src - junction на Udon/, а не папка. После клонирования создать его заново:
-###   New-Item -ItemType Junction -Path CombineQueries\Assets\Src -Target Udon
-/CombineQueries/Assets/Src
+### Тулза - в CombineQueries/Src: клиент Udon в Src/Front, сервер в Src/Back. Unity компилирует только
+### внутри Assets/, поэтому клиент попадает туда junction'ом Assets/Junction/Front на Src/Front (сервер
+### Unity видеть не должен). После клонирования создать его заново:
+###   New-Item -ItemType Junction -Path CombineQueries\Assets\Junction\Front -Target CombineQueries\Src\Front
+/CombineQueries/Assets/Junction/Front
