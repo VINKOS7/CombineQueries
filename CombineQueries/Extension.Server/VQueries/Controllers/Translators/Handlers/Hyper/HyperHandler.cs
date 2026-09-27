@@ -2,6 +2,7 @@
 
 using CombineQueries.Api.Services.Outbox;
 using CombineQueries.Api.Services.Speech;
+using CombineQueries.Api.Controllers.Accounts;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Hyper;
 
@@ -22,7 +23,9 @@ public class HyperHandler(ILogger<HyperHandler> logger, IOutbox outbox, ISpeech 
     private const int Grace = 500;
     private const int Step = 25;
 
-    public async Task<HyperResponse> Handle(HyperRequest request, CancellationToken cancellationToken)
+    public async Task<HyperResponse> Handle(HyperRequest request, CancellationToken cancellationToken) => (await Answer(request, cancellationToken)).Signed(speech);
+
+    private async Task<HyperResponse> Answer(HyperRequest request, CancellationToken cancellationToken)
     {
         if (speech.Alphabet is null) throw new Exception("CRIT: /connect was not called");
 

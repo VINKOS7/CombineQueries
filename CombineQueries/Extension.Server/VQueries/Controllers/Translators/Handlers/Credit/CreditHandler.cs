@@ -2,6 +2,7 @@ using MediatR;
 
 using CombineQueries.Api.Services.Outbox;
 using CombineQueries.Api.Services.Speech;
+using CombineQueries.Api.Controllers.Accounts;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Credit;
 
@@ -25,6 +26,6 @@ public class CreditHandler(ILogger<CreditHandler> logger, IOutbox outbox, ISpeec
 
         logger.LogInformation("credit: {Ready} paid now, {Pending} still in flight", ready.Count, outbox.Pending(speech.Stream));
 
-        return Task.FromResult(new CreditResponse { Ready = ready, Pending = outbox.Pending(speech.Stream) });
+        return Task.FromResult(new CreditResponse { Ready = ready, Pending = outbox.Pending(speech.Stream) }.Signed(speech));
     }
 }

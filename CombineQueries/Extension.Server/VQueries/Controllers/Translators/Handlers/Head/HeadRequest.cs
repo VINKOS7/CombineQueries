@@ -9,5 +9,8 @@ public record HeadRequest : IRequest<HeadResponse>
 
     [JsonProperty("base")] public int Base { get; set; } = -1;
 
+    // Полон ли последний адрес головы. Нет - это начало, остаток дошлёт следующий запрос.
+    [JsonProperty("complete")] public bool Complete { get; set; } = true;
+
     [JsonProperty("sign")] public int Sign { get; set; }
 }

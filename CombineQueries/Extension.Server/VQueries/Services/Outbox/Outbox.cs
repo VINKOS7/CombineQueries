@@ -6,7 +6,7 @@ namespace CombineQueries.Api.Services.Outbox;
 
 // Ящик живёт синглтоном: он общий для всех запросов, ведь довесок цепляется к любому ответу.
 //
-// Форвард гоняем в своём scope: IForward это typed HttpClient, а фоновая задача переживает запрос,
+// Форвард гоняем в своём scope: ISpeak это typed HttpClient, а фоновая задача переживает запрос,
 // в котором её завели, - брать его зависимости оттуда нельзя.
 public class Outbox(IServiceScopeFactory scopes, ILogger<Outbox> logger) : IOutbox
 {
@@ -27,8 +27,8 @@ public class Outbox(IServiceScopeFactory scopes, ILogger<Outbox> logger) : IOutb
             {
                 using var scope = scopes.CreateScope();
 
-                var forwarder = scope.ServiceProvider.GetRequiredService<IForward>();
-                var result = await forwarder.GetAsync(url, CancellationToken.None);
+                var speak = scope.ServiceProvider.GetRequiredService<ISpeak>();
+                var result = await speak.GetAsync(url, CancellationToken.None);
 
                 Keep(stream, new Delivery(url, result.Body, result.ElapsedMs));
             }

@@ -2,12 +2,12 @@ using System.Diagnostics;
 
 namespace CombineQueries.Api.Services.Forwarder;
 
-public class Forwarder : IForward
+public class Speak : ISpeak
 {
-    private readonly ILogger<Forwarder> _logger;
+    private readonly ILogger<Speak> _logger;
     private readonly HttpClient _httpClient;
 
-    public Forwarder(ILogger<Forwarder> logger, HttpClient httpClient)
+    public Speak(ILogger<Speak> logger, HttpClient httpClient)
     {
         _logger = logger;
         _httpClient = httpClient;

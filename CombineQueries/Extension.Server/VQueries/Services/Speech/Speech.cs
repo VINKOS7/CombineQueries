@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using CombineQueries.Domain.Aggregates.Translator;
@@ -26,10 +27,41 @@ public class Speech : ISpeech
     public string DirectUnruned { get; set; } = string.Empty;
     public bool Authorized { get; private set; }
 
-    // Поток сборки - упорядоченный: между рун-кусками (чанк) вклиниваются виртуальные фрагменты (VF).
-    // Кусок либо руна (декод в Close по типу хвоста), либо VF (готовый текст по id). Запросы Udon
-    // последовательны, порядок прихода = порядок в URL.
-    private readonly List<Piece> _pieces = [];
+    // Сборка - упорядоченный поток кусков: между рун-кусками (чанк) вклиниваются виртуальные
+    // фрагменты (VF). Кусок либо руна (декод в Close по типу хвоста), либо VF (готовый текст по id).
+    //
+    // Сборка СВОЯ у каждого потока. Общая на всех склеивала куски двух клиентов, собирающих разом, в
+    // один чужой адрес: /c без хозяина ложился туда, где уже лежало. Теперь VF и hop несут подпись и
+    // идут в сборку своего потока. Руна подписи не несёт - пул рун x8 не запечь, - её забирает
+    // поток, подписывавший последним (Adopt): два клиента, собирающие РУНАМИ разом, всё ещё могут
+    // смешаться, фрагменты - уже нет.
+    private sealed class Assembly
+    {
+        public readonly List<Piece> Pieces = [];
+
+        // Регистр страницы L3: ставится перед VF (id = page*DfaSize + offset) и им же сбрасывается.
+        public int PendingPage;
+
+        // Кусок промахнувшейся головы: приклеивается концом адреса при закрытии.
+        public string Trailing = "";
+
+        public readonly Stopwatch Clock = new();
+    }
+
+    private readonly ConcurrentDictionary<int, Assembly> _assemblies = new();
+
+    private Assembly Mine => _assemblies.GetOrAdd(Stream, _ => new Assembly());
+
+    // Поток, подписывавший последним: ему достаётся неподписанная руна.
+    private int _recent;
+
+    public void Adopt() => _stream.Value = _recent;
+
+    // Одноразовые сборки самостоятельных запросов - под отрицательными номерами, чтобы не встретиться
+    // с настоящими потоками. Close её и уберёт.
+    private int _scratch;
+
+    public void Isolate() => _stream.Value = Interlocked.Decrement(ref _scratch);
 
     // Хайпер-дерево: цепочки запросов по слоям. Пока без персиста - копим и меряем.
     private readonly HyperTree _tree = new();
@@ -129,9 +161,11 @@ public class Speech : ISpeech
 
         if (path is null) return -1;
 
-        _pieces.Clear();
-        _pendingPage = 0;
-        _assembly.Restart();
+        var mine = Mine;
+
+        mine.Pieces.Clear();
+        mine.PendingPage = 0;
+        mine.Clock.Restart();
 
         foreach (string step in path)
         {
@@ -141,18 +175,59 @@ public class Speech : ISpeech
             // Рунный шаг хранится разжатым, поэтому кладём его готовым текстом, а не декодируем.
             // "t<текст>" - формат старых записей, до канонизации; читаем как текст, чтобы поднятое
             // из персиста дерево не рассыпалось.
-            if (step[0] == 'f' && int.TryParse(step[1..], out int id)) _pieces.Add(new Piece(true, "", id));
-            else _pieces.Add(new Piece(false, "", 0, step[1..]));
+            if (step[0] == 'f' && int.TryParse(step[1..], out int id)) mine.Pieces.Add(new Piece(true, "", id));
+            else mine.Pieces.Add(new Piece(false, "", 0, step[1..]));
         }
 
-        return _pieces.Count;
+        return mine.Pieces.Count;
     }
 
     // Кусок промахнувшейся головы: она его уже получила, значит запрос за ним оплачен. Держим до
     // закрытия и приклеиваем концом адреса - клиенту остаётся досказать только начало.
-    private string _trailing = "";
+    public void Keep(string text) => Mine.Trailing = text;
 
-    public void Keep(string text) => _trailing = text;
+    // Начало адреса от неполной головы: закрытие ставит его ПЕРВЫМ, остальное досказывает следующий
+    // запрос. Держится по потоку - это состояние между запросами, и общее поле приклеило бы начало
+    // одного клиента к адресу другого.
+    private readonly ConcurrentDictionary<int, string> _carried = new();
+
+    public void Carry(string start) => _carried[Stream] = start;
+
+    // Только куски сборки. Начало от головы и её конец (Trailing) не трогаем: их кладёт голова
+    // этого же адреса, и за ней вполне может идти одиночный /sf или /t.
+    public void Drop()
+    {
+        var mine = Mine;
+
+        mine.Pieces.Clear();
+        mine.PendingPage = 0;
+    }
+
+    // Адреса в тексте: каждый начинается с хоста, значит новое вхождение хоста - начало следующего.
+    // Хост берётся из самого текста, до первого "/". Ложный раздел возможен, только если хост
+    // встретится внутри пути или query.
+    public IReadOnlyList<string> Split(string text)
+    {
+        int slash = text.IndexOf('/');
+
+        if (slash <= 0) return [text];
+
+        string host = text[..slash];
+        var urls = new List<string>();
+
+        int from = 0;
+
+        for (int at = text.IndexOf(host, slash, StringComparison.Ordinal); at > 0; at = text.IndexOf(host, at + host.Length, StringComparison.Ordinal))
+        {
+            urls.Add(text[from..at]);
+
+            from = at;
+        }
+
+        urls.Add(text[from..]);
+
+        return urls;
+    }
 
     public string? UrlOf(int handle) => _tree.UrlOf(handle);
 
@@ -160,9 +235,10 @@ public class Speech : ISpeech
 
     private List<string> StepsOf()
     {
-        var steps = new List<string>(_pieces.Count);
+        var pieces = Mine.Pieces;
+        var steps = new List<string>(pieces.Count);
 
-        foreach (var piece in _pieces) steps.Add(HyperTree.StepOf(piece.IsFragment, piece.Rune, piece.FragmentId));
+        foreach (var piece in pieces) steps.Add(HyperTree.StepOf(piece.IsFragment, piece.Rune, piece.FragmentId));
 
         return steps;
     }
@@ -178,9 +254,12 @@ public class Speech : ISpeech
     private readonly List<string> _fragments = [];
     private readonly Dictionary<string, int> _fragIndex = [];
 
-    // Регистр страницы L3: /g/<page> ставит его, следующий /f/<offset> берёт id = page*DfaSize+offset
-    // и сбрасывает в 0 (без /g/ это L2: id = offset).
-    private int _pendingPage;
+    // Адрес Infinite - по дереву, а не сквозной: предок (самый длинный финитный фрагмент, которым
+    // строка начинается) едет обычным VF, номер строки среди Inf-потомков предка - hop. Номер с 1:
+    // hop 0 в ссылке значит «это VF». Потолок на предка - HopCount-1; все предки полны - адреса нет,
+    // строка едет буквами.
+    private readonly Dictionary<int, List<int>> _infOf = [];
+    private readonly Dictionary<int, (int Base, int Hop)> _infAt = [];
 
     private const int FragmentMinLength = 6;
 
@@ -192,7 +271,6 @@ public class Speech : ISpeech
     // Хоп не разрешился: цепь оборвалась (звена нет). Клиент дошлёт строку буквами.
     public const int VFBroken = -7;
 
-    private readonly Stopwatch _assembly = new();
     private readonly StringBuilder sb = new();
     private readonly StringBuilder direct = new();
     private readonly StringBuilder unruned = new();
@@ -308,6 +386,7 @@ public class Speech : ISpeech
             mine.Seen = DateTime.UtcNow;
 
             _stream.Value = mine.Id;
+            _recent = mine.Id;
 
             // Кольцо кончилось - на его место рождается новое, и уезжает тем же ответом, в котором
             // клиент потратил последнюю часть. Тот, кто подслушал кольцо целиком, получает его мёртвым:
@@ -329,20 +408,17 @@ public class Speech : ISpeech
     {
         lock (_signLock)
         {
-            // Ушедшие освобождают свой набор: по ним давно не приходили.
-            _streams.RemoveAll(stream => DateTime.UtcNow - stream.Seen > SignLife);
+            // Ушедшие освобождают свой набор, а с ним и свою сборку: по ним давно не приходили.
+            var now = DateTime.UtcNow;
 
-            // Свободных наборов нет - забираем самый залежавшийся вместе с его набором. Отказывать
-            // нельзя: подключаются и заново, и каждый отказ запирал бы сервер до конца чужого срока
-            // жизни. Вытесненный получит отказ на своём следующем запросе и подключится сам.
-            while (_streams.Count >= MaxStreams)
-            {
-                var oldest = _streams[0];
+            foreach (var stream in _streams) if (now - stream.Seen > SignLife) Forget(stream.Id);
 
-                foreach (var stream in _streams) if (stream.Seen < oldest.Seen) oldest = stream;
+            _streams.RemoveAll(stream => now - stream.Seen > SignLife);
 
-                _streams.Remove(oldest);
-            }
+            // Места нет - отказ, живых не вытесняем. Набор на клиента один, кольцо постоянное: вытесненный
+            // ничем не отличался бы от новичка, занявшего его набор, отказа не получал, и сервер тихо
+            // смешивал бы их сборки и тела. Место освобождает только ушедший - молчащий дольше SignLife.
+            if (_streams.Count >= MaxStreams) throw new Exception("auth error: You should await when some master instance be closed");
 
             int lane = FreeLane();
 
@@ -358,9 +434,17 @@ public class Speech : ISpeech
             _streams.Add(mine);
 
             _stream.Value = mine.Id;
+            _recent = mine.Id;
 
             return mine.Ring;
         }
+    }
+
+    // Поток ушёл: его сборка и начало от головы больше никому не нужны.
+    private void Forget(int stream)
+    {
+        _assemblies.TryRemove(stream, out _);
+        _carried.TryRemove(stream, out _);
     }
 
     // Первый набор, который никем не занят. Занятых всегда меньше, чем наборов: место освобождает
@@ -572,8 +656,10 @@ public class Speech : ISpeech
     {
         Broken = true;
 
-        _pieces.Clear();
-        _pendingPage = 0;
+        var mine = Mine;
+
+        mine.Pieces.Clear();
+        mine.PendingPage = 0;
 
         LastFault = reason;
     }
@@ -598,6 +684,10 @@ public class Speech : ISpeech
 
     public void SetContext(ISetContextCommand<char> command)
     {
+        // Место под поток - первым: все наборы заняты живыми - connect отбит, и контекст сервера,
+        // которым живут остальные, не тронут.
+        string signs = OpenSigns();
+
         Alphabet = command.Alphabet;
         RuneAlphabet = Translator.RuneAlphabetOf(command.Alphabet);
         RuneSize = command.RuneSize;
@@ -609,17 +699,18 @@ public class Speech : ISpeech
         BaseForwardUrl = command.BaseForwardUrl;
         ResetHypers = command.ResetHypers;
 
-        // Чистим только незавершённую сборку. Хайперы и фрагменты НЕ трогаем: при реконнекте
-        // (повторный connect) они остаются тёплыми и уезжают сидом.
-        _pieces.Clear();
-        _pendingPage = 0;
+        // Незавершённую сборку чистить незачем: OpenSigns выше завёл клиенту новый поток, а сборка
+        // у потока своя и рождается пустой. Хайперы и фрагменты НЕ трогаем: при реконнекте они
+        // остаются тёплыми и уезжают сидом.
 
         // Connect - единственный способ снять срыв приёма. Заодно рождается новая последовательность
         // подписей: старая после сбоя могла быть подсмотрена.
         Broken = false;
         LastFault = "";
 
-        Signs = OpenSigns();
+        Signs = signs;
+
+        ReaddressInfinite();
     }
 
     // Заливка тёплого словаря из персиста (вызывается на connect, после SetContext). Индекс списка
@@ -646,6 +737,8 @@ public class Speech : ISpeech
             _phrases.Add(seed.Text);
         }
 
+        ReaddressInfinite();
+
         _handles.Clear();
         _byUrl.Clear();
         _firstSendMs.Clear();
@@ -662,19 +755,44 @@ public class Speech : ISpeech
     }
 
     // Обычный чанк-руна (в т.ч. с L1-корнями): декодится в Close. received = число кусков (>0).
+    // Первая руна адреса несёт в хвосте «:» - метку «будет ещё» или полосу, добивающую одиночку до
+    // полной руны. И то и другое мусор: кусок ложится готовым текстом без них.
     public int Accept(string rune)
     {
         if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /connect was not called");
 
-        if (_pieces.Count == 0) _assembly.Restart();
+        var mine = Mine;
 
-        _pieces.Add(new Piece(false, rune, 0));
+        if (mine.Pieces.Count == 0)
+        {
+            mine.Clock.Restart();
 
-        return _pieces.Count;
+            int[] symbols = Symbols(rune);
+
+            mine.Pieces.Add(new Piece(false, rune, 0, string.Concat(symbols[..^Pads(symbols)].Select(symbol => Translator.SymbolOf(Alphabet, symbol)))));
+        }
+        else mine.Pieces.Add(new Piece(false, rune, 0));
+
+        return mine.Pieces.Count;
+    }
+
+    // Первая руна адреса решает сама по «:» в хвосте: одна - метка «будет ещё». Ни одной - адрес
+    // ровно в руну, полоса - адрес короче руны: в обоих случаях он весь здесь, хвоста не будет.
+    public bool Single(string rune) => Alphabet is not null && RuneAlphabet is not null && Mine.Pieces.Count == 0 && Pads(Symbols(rune)) != 1;
+
+    private int[] Symbols(string rune) => Translator.IndexesOf(rune, RuneAlphabet!, RuneSize, SymbolsOf(TypeQuery.Fragmentate));
+
+    private int Pads(int[] symbols)
+    {
+        int pads = 0;
+
+        while (pads < symbols.Length && symbols[^(pads + 1)] == Alphabet!.IndexOf(Translator.Pad)) pads++;
+
+        return pads;
     }
 
     // Развязка-2: /g/<page> ставит страницу для следующего VF (адрес L3).
-    public void SetFragmentPage(int page) => _pendingPage = page < 0 ? 0 : page;
+    public void SetFragmentPage(int page) => Mine.PendingPage = page < 0 ? 0 : page;
 
     // VF по Развязке-1: /f/<offset>. Глобальный id = pendingPage*DfaSize + offset (для L2 pendingPage=0).
     // received = уровень: VFL2 (id<DfaSize) или VFL3 (id>=DfaSize).
@@ -682,42 +800,69 @@ public class Speech : ISpeech
     {
         if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /connect was not called");
 
-        if (_pieces.Count == 0) _assembly.Restart();
+        var mine = Mine;
 
-        int id = _pendingPage * DfaSize + offset;
-        _pendingPage = 0;
+        if (mine.Pieces.Count == 0) mine.Clock.Restart();
 
-        _pieces.Add(new Piece(true, "", id));
+        int id = mine.PendingPage * DfaSize + offset;
+        mine.PendingPage = 0;
+
+        mine.Pieces.Add(new Piece(true, "", id));
 
         return id < DfaSize ? VFL2 : VFL3;
     }
 
-    // Развязка-3: сдвигает ПОСЛЕДНИЙ принятый VF на hops ёмкостей вперёд (id += hops*capacity).
-    // Бесконечная строка своего печёного адреса не имеет и занимает его у финитной: клиент шлёт
-    // якорь (id % capacity) обычным VF, а старший разряд (id / capacity) - этой развязкой.
-    //
-    // Цепь считаем, а не храним: звенья идут строго через ёмкость, так что Jump в БД это денормализация.
+    // Развязка-3 по дереву: ПОСЛЕДНИЙ принятый VF - финитный предок, hops - номер его Inf-потомка
+    // (с 1). Вторая сверка после фронта: такого потомка нет - VFBroken, кусок не трогаем.
     public int Hop(int hops)
     {
         if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /connect was not called");
 
-        int capacity = DfaSize * PageCount;
+        var pieces = Mine.Pieces;
 
-        if (hops <= 0 || capacity <= 0 || _pieces.Count == 0) return VFBroken;
+        if (pieces.Count == 0 || !pieces[^1].IsFragment) return VFBroken;
 
-        var last = _pieces[^1];
+        if (!_infOf.TryGetValue(pieces[^1].FragmentId, out var children) || hops < 1 || hops > children.Count) return VFBroken;
 
-        if (!last.IsFragment) return VFBroken;
-
-        int id = last.FragmentId + hops * capacity;
-
-        // Звена нет - цепь оборвалась. Кусок не трогаем: он останется тем, чем был, а недостающее
-        // клиент дошлёт буквами.
-        if (id >= _fragments.Count) return VFBroken;
-
-        _pieces[^1] = new Piece(true, "", id);
+        pieces[^1] = new Piece(true, "", children[hops - 1]);
 
         return VFInfinite;
+    }
+
+    public FragmentSeed SeedOf(int id) =>
+        _infAt.TryGetValue(id, out var at) ? new FragmentSeed(id, _fragments[id], at.Base, at.Hop) : new FragmentSeed(id, _fragments[id]);
+
+    // Адреса Infinite зависят от размеров, а те меняются на connect: пересчёт с нуля, по порядку id -
+    // тогда номера под предком выходят те же, что давало обучение.
+    private void ReaddressInfinite()
+    {
+        _infOf.Clear();
+        _infAt.Clear();
+
+        for (int id = DfaSize * PageCount; id < _fragments.Count; id++) AddressInfinite(id);
+    }
+
+    // Предок - самый длинный финитный фрагмент, которым строка начинается и у которого есть место.
+    private void AddressInfinite(int id)
+    {
+        int capacity = DfaSize * PageCount;
+        string text = _fragments[id];
+
+        if (capacity <= 0 || id < capacity || text == "") return;
+
+        for (int length = text.Length - 1; length >= FragmentMinLength; length--)
+        {
+            if (!_fragIndex.TryGetValue(text[..length], out int ancestor) || ancestor >= capacity) continue;
+
+            if (!_infOf.TryGetValue(ancestor, out var children)) _infOf[ancestor] = children = [];
+
+            if (children.Count >= HopCount - 1) continue;
+
+            children.Add(id);
+            _infAt[id] = (ancestor, children.Count);
+
+            return;
+        }
     }
 
     public int SymbolsOf(TypeQuery type) => type == TypeQuery.Direct ? Alphabet!.Length : Translator.SymbolCount(Alphabet!);
@@ -726,13 +871,16 @@ public class Speech : ISpeech
     {
         if (Alphabet is null || RuneAlphabet is null) throw new Exception("CRIT: /connect was not called");
 
-        if (_pieces.Count == 0) _assembly.Restart();
+        var mine = Mine;
 
-        _assembly.Stop();
+        if (mine.Pieces.Count == 0) mine.Clock.Restart();
 
-        sb.Clear();
+        mine.Clock.Stop();
 
-        foreach (var piece in _pieces)
+        // Своя строка на каждое закрытие: сборки у потоков раздельные и закрываться могут разом.
+        var sb = new StringBuilder();
+
+        foreach (var piece in mine.Pieces)
             sb.Append(piece.Text is not null
                 ? piece.Text
                 : piece.IsFragment
@@ -746,20 +894,30 @@ public class Speech : ISpeech
         // Кусок, оставшийся от промахнувшейся головы, приклеивается ПОСЛЕДНИМ - он и есть конец
         // адреса. Запрос за ним уже был оплачен головой, и терять его только потому, что она не
         // нашла адрес, значит брать за один кусок дважды.
-        if (_trailing.Length > 0)
+        if (mine.Trailing.Length > 0)
         {
-            sb.Append(_trailing);
+            sb.Append(mine.Trailing);
 
-            _trailing = "";
+            mine.Trailing = "";
         }
 
-        int runes = _pieces.Count;
+        // Начало от неполной головы встаёт ПЕРВЫМ - до того, как адрес уйдёт в дерево. Собранное
+        // само начинается с хоста - значит это целый адрес, клиент ушёл сборкой мимо головы, и
+        // начало устарело: клеить его некуда.
+        if (_carried.TryRemove(Stream, out string? start))
+        {
+            int slash = start.IndexOf('/');
+
+            if (!sb.ToString().StartsWith(slash > 0 ? start[..slash] : start, StringComparison.Ordinal)) sb.Insert(0, start);
+        }
+
+        int runes = mine.Pieces.Count;
 
         // Разбивка покрытия: чем меньше chunks, тем плотнее словарь лёг на этот url.
         int capacity = DfaSize * PageCount;
         int chunks = 0, l2 = 0, l3 = 0, infinite = 0;
 
-        foreach (var piece in _pieces)
+        foreach (var piece in mine.Pieces)
         {
             if (!piece.IsFragment) { chunks++; continue; }
 
@@ -778,9 +936,12 @@ public class Speech : ISpeech
 
         (LastLeaf, LastPrefix, LastShared) = _tree.Remember(Canonical(assembled), assembled);
 
-        _pieces.Clear();
+        mine.Pieces.Clear();
 
-        return new AssembledResult(sb.ToString(), runes, _assembly.ElapsedMilliseconds, chunks, l2, l3, infinite);
+        // Одноразовая сборка отслужила: держать её незачем.
+        if (Stream < 0) Forget(Stream);
+
+        return new AssembledResult(assembled, runes, mine.Clock.ElapsedMilliseconds, chunks, l2, l3, infinite);
     }
 
     // Канонический разбор адреса текущим словарём: самый длинный фрагмент на каждой позиции,
@@ -900,13 +1061,11 @@ public class Speech : ISpeech
     // Классический LZW поверх символов собранного payload'а. _phrases растёт на всё, а в адресную
     // таблицу _fragments фраза попадает, дорастив до FragmentMinLength.
     //
-    // Адреса выдаём подряд и на потолке L3 не останавливаемся: за ним начинается Infinite, который
-    // клиент достаёт Развязкой-3 (якорь + hop). Поэтому адресуемо не DfaSize*PageCount, а всё
-    // до DfaSize*PageCount*HopCount - такие строки едут клиенту как обычно.
+    // Номера выдаём подряд и на потолке L3 не останавливаемся: за ним начинается Infinite, который
+    // клиент достаёт Развязкой-3 по дереву (финитный предок + номер под ним).
     //
-    // Overflowed - то, что не адресуется даже так: в БД строка ляжет, но клиенту не пойдёт, он её
-    // не адресует и пошлёт буквами (direct-фоллбэк). Сохранена она уже сейчас, и подхватится, когда
-    // адресное пространство вырастет.
+    // Overflowed - Infinite без адреса (все предки полны или их нет): в БД строка ляжет, но клиенту
+    // не пойдёт, он её пошлёт буквами. Сохранена она уже сейчас.
     public LearnResult LearnFrom(string text)
     {
         var addressable = new List<FragmentSeed>();
@@ -914,7 +1073,7 @@ public class Speech : ISpeech
 
         if (DfaSize <= 0 || string.IsNullOrEmpty(text)) return new LearnResult(addressable, overflowed);
 
-        int limit = DfaSize * PageCount * HopCount;
+        int capacity = DfaSize * PageCount;
 
         string w = "";
 
@@ -933,7 +1092,9 @@ public class Speech : ISpeech
                 _fragments.Add(wc);
                 _fragIndex[wc] = id;
 
-                (id < limit ? addressable : overflowed).Add(new FragmentSeed(id, wc));
+                AddressInfinite(id);
+
+                (id < capacity || _infAt.ContainsKey(id) ? addressable : overflowed).Add(SeedOf(id));
             }
 
             w = c.ToString();

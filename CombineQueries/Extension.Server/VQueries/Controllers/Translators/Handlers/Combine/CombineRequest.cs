@@ -4,7 +4,8 @@ using Newtonsoft.Json;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Combine;
 
-public record CombineRequest : IRequest<CombineResponse>
+// Ответ двух видов: кусок (CombineResponse) или закрытие, если первая /c несёт весь адрес (TailResponse).
+public record CombineRequest : IRequest<object>
 {
     [JsonProperty("runes")] public required string Runes { get; set; }
 
@@ -15,4 +16,7 @@ public record CombineRequest : IRequest<CombineResponse>
     [JsonProperty("hop")] public int Hop { get; set; }
 
     [JsonProperty("q")] public int Q { get; set; }
+
+    // Подпись: её несут VF и hop, по ней кусок ложится в сборку своего потока. -1 - руна, без подписи.
+    [JsonProperty("sign")] public int Sign { get; set; } = -1;
 }

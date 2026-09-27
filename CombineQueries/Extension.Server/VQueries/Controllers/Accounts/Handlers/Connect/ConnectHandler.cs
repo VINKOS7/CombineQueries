@@ -80,7 +80,7 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
                 Jumps = JumpsOf(),
                 Roots = Translator.Fragments,
                 Hypers = Seed(_speech.HyperUrls, (i, u) => new HyperSeed(i, u), SeedLimit),
-                Fragments = Seed(_speech.FragmentTexts, (i, t) => new FragmentSeed(i, t), Math.Min(FragmentSeedLimit, Reach(request)))
+                Fragments = Seed(_speech.FragmentTexts, (i, _) => _speech.SeedOf(i), Math.Min(FragmentSeedLimit, Reach(request)))
             };
         }
         catch (Exception ex)

@@ -1,0 +1,31 @@
+# Отладочный хост: для сборок из редактора и локальных билдов, чтобы они не лезли в состояние
+# опубликованного мира на vq. Разворачивать: fly deploy -c fly.debug.toml --ha=false
+#
+# Код тот же, что у прода, отличаются только приложение и база. База своя - vqueries_debug на том же
+# кластере cq-db: хайперы и фрагменты отладки не попадают в прод-дамп. Секреты - те же три, что у
+# прода (см. fly.prod.toml), в ConnectionStrings__Context другая Database.
+#
+# Машину не гасим, как и прод: connect жмётся один раз за жизнь инстанса, а всё, что он дал, живёт
+# в памяти процесса. Гашение по простою убивало это посреди отладки.
+
+app = "vq-debug"
+primary_region = "arn"
+
+[build]
+  dockerfile = "VQueries/Dockerfile"
+
+[env]
+  ASPNETCORE_ENVIRONMENT = "Production"
+  ASPNETCORE_HTTP_PORTS = "8080"
+  DOTNET_gcServer = "0"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
