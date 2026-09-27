@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Services.Speech;
@@ -7,10 +9,15 @@ namespace CombineQueries.Api.Services.Speech;
 public record AssembledResult(string Text, int Runes, long ElapsedMs, int Chunks, int L2, int L3, int Infinite);
 
 // Сид для connect и пиггибэк новых фрагментов в ответе /t/. Сериализуются camelCase:
-// HyperSeed -> {handle,url}, FragmentSeed -> {id,text}.
+// HyperSeed -> {handle,url}, FragmentSeed -> {id,text}, у адресованного Infinite ещё {base,hop}:
+// финитный предок и номер строки среди его Inf-потомков.
 public record HyperSeed(int Handle, string Url);
 
-public record FragmentSeed(int Id, string Text);
+public record FragmentSeed(
+    int Id,
+    string Text,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Base = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] int Hop = 0);
 
 // Сид хайпера: собранный адрес и номер узла, которым он прыгается.
 public record JumpSeed(string Url, int Jump);
@@ -97,12 +104,18 @@ public interface ISpeech
 
     int Accept(string rune);
 
+    // Первая руна адреса без метки «:» на конце: адрес весь в ней, закрывать сразу.
+    bool Single(string rune);
+
     void SetFragmentPage(int page);
 
     int AcceptVirtualFragment(int id);
 
-    // Развязка-3: сдвигает последний принятый VF на hops ёмкостей (старший разряд адреса Infinite).
+    // Развязка-3 по дереву: последний принятый VF - финитный предок, hops - номер его Inf-потомка.
     int Hop(int hops);
+
+    // Сид строки словаря: у адресованного Infinite с предком и номером под ним.
+    FragmentSeed SeedOf(int id);
 
     int SymbolsOf(TypeQuery type);
 
@@ -144,6 +157,22 @@ public interface ISpeech
 
     // Придержать кусок промахнувшейся головы: он приклеится концом адреса при закрытии.
     void Keep(string text);
+
+    // Придержать начало адреса от неполной головы: закрытие поставит его первым. По потоку.
+    void Carry(string start);
+
+    // Выбросить накопленные куски: закрывающий запрос сказал, что адрес весь в нём самом.
+    void Drop();
+
+    // Неподписанный запрос (руна) - в сборку потока, подписывавшего последним.
+    void Adopt();
+
+    // Самостоятельный запрос (пара, одиночная f/c) - в свою одноразовую сборку: чужую не трогает,
+    // чужой долг не берёт.
+    void Isolate();
+
+    // Разделить текст на адреса по хосту.
+    IReadOnlyList<string> Split(string text);
 
     // Узел и его соседи по родителю: адреса, отличающиеся от него ровно последним куском.
     IEnumerable<(string Url, int Jump)> Family(int handle, int limit);

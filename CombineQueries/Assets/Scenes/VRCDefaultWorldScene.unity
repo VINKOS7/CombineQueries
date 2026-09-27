@@ -643,17 +643,17 @@ RectTransform:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 474748425}
-  m_LocalRotation: {x: 0.00000004366245, y: -0.04730695, z: -0.9988804, w: -0.0000000020678526}
-  m_LocalPosition: {x: 0, y: 0, z: 0.421}
+  m_LocalRotation: {x: 0.07399789, y: 0.0067232857, z: -0.0004988817, w: -0.99723566}
+  m_LocalPosition: {x: 0, y: 0, z: 0.42099997}
   m_LocalScale: {x: 0.0016, y: 0.0016, z: 0.0016}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1800851014}
   m_Father: {fileID: 1233185020}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 188.487, y: 179.219, z: -179.885}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 2.137}
+  m_AnchoredPosition: {x: 0.00000003142471, y: 2.137}
   m_SizeDelta: {x: 1800, y: 760}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &474748427
@@ -1197,14 +1197,14 @@ RectTransform:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1305440222}
-  m_LocalRotation: {x: 0.000000012594911, y: 0.9575889, z: -0.28813797, w: 0.00000004185754}
-  m_LocalPosition: {x: 0, y: 0, z: -0.095}
+  m_LocalRotation: {x: -0.3319666, y: 0.0021368668, z: 0.005400644, w: 0.9432733}
+  m_LocalPosition: {x: 0, y: 0, z: -0.09500003}
   m_LocalScale: {x: 0.0016, y: 0.0016, z: 0.0016}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1378402709}
   m_Father: {fileID: 1233185020}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: -141.22299, y: 540.033, z: -539.355}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: 0, y: 3.23}
@@ -1249,7 +1249,7 @@ MonoBehaviour:
   m_FallbackScreenDPI: 96
   m_DefaultSpriteDPI: 96
   m_DynamicPixelsPerUnit: 1
-  m_PresetInfoIsWorld: 0
+  m_PresetInfoIsWorld: 1
 --- !u!223 &1305440226
 Canvas:
   m_ObjectHideFlags: 0
@@ -2299,9 +2299,9 @@ MonoBehaviour:
   useAssignedLayers: 0
   DynamicPrefabs: []
   DynamicMaterials:
+  - {fileID: 671119288}
   - {fileID: 1670410191}
   - {fileID: 1785042150}
-  - {fileID: 671119288}
   - {fileID: 2100000, guid: cea7f1e7e1e52a14ba543be0c99ed572, type: 2}
   LightMapsNear: []
   LightMapsFar: []

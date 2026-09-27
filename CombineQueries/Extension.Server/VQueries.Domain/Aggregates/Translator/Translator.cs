@@ -177,18 +177,24 @@ public class Translator : Entity, IAggregateRoot
 
     // Кладёт строку словаря по её глобальному адресу; уровень считает адрес и размеры развязок.
     // Словарь - биекция текст<->адрес, поэтому дубль по любой из сторон отбиваем (вернём null).
-    public VirtualFragment? Learn(int id, string text, int dfaSize, int pageCount)
+    //
+    // ancestor - финитный предок Infinite-строки, её адрес по дереву (его назначает рантайм). Пишется
+    // только у Infinite: у финитной адрес - сам id.
+    public VirtualFragment? Learn(int id, string text, int dfaSize, int pageCount, int? ancestor = null)
     {
         if (string.IsNullOrEmpty(text) || id < 0) return null;
 
         foreach (var known in VirtualFragments) if (known.Id == id || known.Text == text) return null;
+
+        var level = VirtualFragment.LevelOf(id, dfaSize, pageCount);
 
         var fragment = new VirtualFragment
         {
             Id = id,
             TranslatorId = Id,
             Text = text,
-            Level = VirtualFragment.LevelOf(id, dfaSize, pageCount)
+            Level = level,
+            Jump = level == FragmentLevel.Infinite ? ancestor : null
         };
 
         VirtualFragments.Add(fragment);
@@ -209,29 +215,6 @@ public class Translator : Entity, IAggregateRoot
         Hypers.Add(hyper);
 
         return hyper;
-    }
-
-    // Сшивает Infinite-строки в цепочки «заёма по одному фрагменту».
-    //
-    // Бесконечная строка своего печёного адреса не имеет и ЗАНИМАЕТ его у финитной: якорь =
-    // id % capacity, а следующее звено той же цепи лежит ровно через ёмкость - Jump = id + capacity.
-    // Значит адрес раскладывается на «якорь + k хопов», где k = id / capacity, и каждый хоп стоит
-    // ровно один запрос. End держит готовый результат, чтобы tail не проходил цепь заново.
-    public void ChainInfinite(int capacity)
-    {
-        if (capacity <= 0) return;
-
-        var byId = new Dictionary<int, VirtualFragment>();
-
-        foreach (var fragment in VirtualFragments) byId[fragment.Id] = fragment;
-
-        foreach (var fragment in VirtualFragments)
-        {
-            if (fragment.Level != FragmentLevel.Infinite) continue;
-
-            fragment.Jump = byId.ContainsKey(fragment.Id + capacity) ? fragment.Id + capacity : null;
-            fragment.End = fragment.Text;
-        }
     }
 
     public static int SymbolCount(string alphabet) => alphabet.Length + Fragments.Length;

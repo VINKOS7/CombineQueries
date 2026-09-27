@@ -6,23 +6,28 @@ using Microsoft.EntityFrameworkCore;
 using CombineQueries.Api.Services.Persist;
 using CombineQueries.Api.Services.Speech;
 using CombineQueries.Api.Services.Outbox;
+using CombineQueries.Api.Services.Forwarder;
 using CombineQueries.Domain.Aggregates.Translator;
 using CombineQueries.Domain.Aggregates.Translator.types;
 
 namespace CombineQueries.Api.Controllers.Translators.Handlers.Tail;
 
 // Единственный репозиторий — ITranslatorRepo: словарь и хайперы это части агрегата Translator.
-public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech speech, ITranslatorRepo translatorRepo)
+public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeak speak, ISpeech speech, ITranslatorRepo translatorRepo)
     : IRequestHandler<TailRequest, TailResponse>
 {
     public async Task<TailResponse> Handle(TailRequest request, CancellationToken cancellationToken)
     {
         if (speech.Alphabet is null || speech.RuneAlphabet is null) throw new Exception("CRIT: /connect was not called");
 
+        // Весь адрес в первой /c: одиночная руна или пара «фрагмент + одна-две буквы».
+        bool single = request.Rune.Length > 0 || request.Pair;
+
         // Подпись сверяется ДО сборки и до форварда: чужой хвост не должен увести наружу URL,
         // собранный из чужих же чанков. Попытка ровно одна - дальше приём валится до connect.
         // Выключение - на клиенте: SignValues=1 делает подпись единственной и сверку тривиальной.
-        if (request.Type == TypeQuery.Fragmentate && !speech.CheckSign(request.Sign))
+        // Одиночная руна и пара подписи не несут: их поток уже усыновлён на входе, как у любой руны.
+        if (!single && request.Type == TypeQuery.Fragmentate && !speech.CheckSign(request.Sign))
         {
             // Приём НЕ роняем: часть чужая, а не поток разъехался. У остальных клиентов свои
             // кольца, и падать им из-за чужого запроса незачем.
@@ -34,18 +39,24 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech sp
 
         if (request.Type != TypeQuery.Fragmentate && request.Type != TypeQuery.Direct) throw new ArgumentOutOfRangeException(nameof(request), request.Type, "Unexpected TypeCombine value");
 
-        // Закрывающий кусок: /cf диктует фрагмент и закрывает одним запросом. Кладём его в поток
+        // Адрес весь в этом запросе: накопленные куски остались от потерянной цепочки и приклеились
+        // бы к нему - отсюда склейки вида products/137dummyjson.com/products/136. Сбрасываем до приёма.
+        if (!request.Merge) speech.Drop();
+
+        // Закрывающий кусок: /sf диктует фрагмент и закрывает одним запросом. Кладём его в поток
         // ровно так же, как это сделал бы отдельный /c, - разницы для сборки нет, экономится
         // только сам запрос.
         if (request.Fragment >= 0)
         {
-            speech.SetFragmentPage(0);
-            speech.AcceptVirtualFragment(request.Fragment);
+            speech.SetFragmentPage(request.Fragment / speech.DfaSize);
+            speech.AcceptVirtualFragment(request.Fragment % speech.DfaSize);
         }
 
-        // У закрывающего куска хвостовых символов нет по определению: адрес кончается ровно на
-        // границе фрагмента, иначе клиент этой формой не воспользовался бы.
-        string tail = request.Fragment >= 0
+        if (request.Rune.Length > 0) speech.Accept(request.Rune);
+
+        // Хвостовые символы - только если приехали: у /sf и одиночной руны их нет, адрес кончается
+        // ровно на границе фрагмента (или руны); у пары это её одна-две буквы.
+        string tail = request.Runes.Length == 0
             ? ""
             : Translator.TrimPad(request.Type == TypeQuery.Direct
                 ? Translator.DirectUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize)
@@ -60,11 +71,25 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech sp
         logger.LogInformation("tail: assembled {Runes} pieces ({Chunks} runes, L2 {L2}, L3 {L3}, inf {Inf}) + {Chars} chars in {ElapsedMs} ms -> {Url}",
             assembled.Runes, assembled.Chunks, assembled.L2, assembled.L3, assembled.Infinite, tail.Length, assembled.ElapsedMs, url);
 
-        // Наружу идём в фон: сборка закончена, а ждать чужой сервер клиенту незачем. Тело приедет
-        // ДОЛГОМ - с этим же ответом, если успело, иначе со следующим запросом.
-        outbox.Fetch(url, speech.Stream);
+        // Адрес влез в первую /c - наружу идём сразу, через Speak, и тело едет этим же ответом:
+        // долгом оно стоило бы клиенту ещё запроса.
+        //
+        // Остальные закрывающие идут в фон: тело приедет ДОЛГОМ - с этим же ответом, если успело,
+        // иначе со следующим запросом.
+        IReadOnlyList<Delivery> ready;
 
-        var ready = outbox.Take(speech.Stream);
+        if (single)
+        {
+            var spoken = await speak.GetAsync(url, cancellationToken);
+
+            ready = [.. outbox.Take(speech.Stream), new Delivery(url, spoken.Body, spoken.ElapsedMs)];
+        }
+        else
+        {
+            outbox.Fetch(url, speech.Stream);
+
+            ready = outbox.Take(speech.Stream);
+        }
 
         int handle = speech.Intern(url, assembled.ElapsedMs);
 
@@ -84,6 +109,8 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech sp
         //много инфы для логов в дев
         return new TailResponse
         {
+            // Свежее кольцо - только подписанному: одиночная руна и пара части не тратили.
+            Signs = single ? null : speech.TakeFreshSigns(),
             Runes = assembled.Runes,
             ForwardedUrl = url,
             Ready = ready,
@@ -125,14 +152,13 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeech sp
             }
             else speech.TakeChains();
 
-            // адрес перевалил за потолок, получат Level=Infinite.
-            foreach (var seed in learned.Addressable) translator.Learn(seed.Id, seed.Text, speech.DfaSize, speech.PageCount);
-            
-            //хм зачем второй раз, мб нужно разделение адресные, или бесконечные, кажется это связано с механизмом Займа
-            foreach (var seed in learned.Overflowed) translator.Learn(seed.Id, seed.Text, speech.DfaSize, speech.PageCount);
+            // адрес перевалил за потолок, получат Level=Infinite. У адресованного Infinite в Jump ляжет
+            // финитный предок - его адрес по дереву.
+            foreach (var seed in learned.Addressable) translator.Learn(seed.Id, seed.Text, speech.DfaSize, speech.PageCount, seed.Base);
 
-            // Цепь Infinite пересшиваем, только если в неё реально что-то добавилось.
-            if (learned.Overflowed.Count > 0) translator.ChainInfinite(speech.DfaSize * speech.PageCount);
+            //хм зачем второй раз, мб нужно разделение адресные, или бесконечные, кажется это связано с механизмом Займа
+            // Overflowed - Infinite без адреса (все предки полны): в базу ложится, предка у него нет.
+            foreach (var seed in learned.Overflowed) translator.Learn(seed.Id, seed.Text, speech.DfaSize, speech.PageCount);
 
             await translatorRepo.UnitOfWork.SaveEntitiesAsync(cancellationToken);
         }

@@ -18,25 +18,34 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
     private const int RuneSize = 3;
     private const int RuneWidth = 4;
     private const int NumSize = 4;
-    private const int DfaSize = 1024;
-    private const int PageCount = 64;
+    // Размеры VF-пула. Синтетика Infinite подключается с маленькими (CQ_DFA x CQ_PAGES), чтобы дойти
+    // до Inf за сотню строк, а не за 65 536, - как dev-режим сервера.
+    private static readonly int DfaSize = int.Parse(Environment.GetEnvironmentVariable("CQ_DFA") ?? "1024");
+    private static readonly int PageCount = int.Parse(Environment.GetEnvironmentVariable("CQ_PAGES") ?? "64");
     private const int HopCount = 64;
     private const int MaxChunks = 256;
     private const int MaxJumps = 4096;
     private const int HeadLimit = 2048;
     private const int HeadBases = 8;
     private const int RangeMax = 4;
-    private const int CloseLimit = 1024;
+    private const int SingleLimit = 1024;
+    private const int PairLimit = 2048;
+    private const int Pair2Limit = 64;
 
     // Виды кусков очереди - те же номера, что queueKind в клиенте.
     private const int Chunk = 0;
     private const int Fragment = 1;
     private const int Tail = 2;
     private const int Hop = 3;
-    private const int Close = 8;
+    private const int SingleFragment = 8;
+    private const int Pair = 9;
+    private const int Pair2 = 10;
 
     private readonly List<string> _roots = [];
     private readonly SortedDictionary<int, string> _fragments = [];
+
+    // Адрес Infinite по дереву: финитный предок и номер строки среди его Inf-потомков.
+    private readonly Dictionary<int, (int Base, int Hop)> _infinite = [];
     private readonly Dictionary<string, int> _jumps = [];
     private readonly Dictionary<string, string> _bodies = [];
     private readonly Dictionary<string, int> _spent = [];
@@ -54,6 +63,11 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
     public int TotalQueries { get; private set; }
 
     public int Fragments => _fragments.Count;
+
+    public int Infinite => _infinite.Count;
+
+    // Сколько раз Inf уехал предком и номером под ним.
+    public int HopsSent { get; private set; }
 
     public int Jumps => _jumps.Count;
 
@@ -160,13 +174,13 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
             {
                 var (id, length) = FragmentAt(payload, position);
 
-                int capacity = DfaSize * PageCount;
-                int hop = id / capacity;
+                // Infinite едет предком (обычный VF) и номером под ним (hop).
+                var (anchor, hop) = _infinite.GetValueOrDefault(id, (id, 0));
                 int cost = hop > 0 ? 2 : 1;
 
-                if (id >= 0 && hop < HopCount && cost <= (length + RuneSize - 1) / RuneSize && values.Count + cost <= MaxChunks)
+                if (id >= 0 && cost <= (length + RuneSize - 1) / RuneSize && values.Count + cost <= MaxChunks)
                 {
-                    values.Add(id - hop * capacity);
+                    values.Add(anchor);
                     kinds.Add(Fragment);
 
                     if (hop > 0) { values.Add(hop); kinds.Add(Hop); }
@@ -184,6 +198,27 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
             accumulatedLength++;
             position += symbolLength;
 
+            // Первая руна адреса: «:» последним символом - «будет ещё». Без метки она уходит, только
+            // если адрес ею и кончается; настоящий «:» на этом месте едет первым в следующем куске.
+            if (values.Count == 0 && accumulatedLength == RuneSize - 1 && position < payload.Length)
+            {
+                var (next, nextLength) = SymbolAt(payload, position);
+
+                if (next == Alphabet.IndexOf(':') || position + nextLength < payload.Length)
+                {
+                    // «:» перед меткой дал бы полосу из двух, а полоса - это одиночка.
+                    if (accumulated % Symbols == Alphabet.IndexOf(':')) throw new InvalidOperationException("':' as the second symbol reads as a whole address: " + payload);
+
+                    values.Add(accumulated * Symbols + Alphabet.IndexOf(':'));
+                    kinds.Add(Chunk);
+
+                    accumulated = 0;
+                    accumulatedLength = 0;
+
+                    continue;
+                }
+            }
+
             if (accumulatedLength < RuneSize) continue;
 
             values.Add(accumulated);
@@ -195,8 +230,21 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
         int tail = accumulatedLength == 0 ? 0 : accumulatedLength == 1 ? 1 + accumulated : 1 + Symbols + accumulated;
 
-        if (tail == 0 && values.Count > 0 && kinds[^1] == Fragment && values[^1] < CloseLimit) kinds[^1] = Close;
-        else { values.Add(tail); kinds.Add(Tail); }
+        // Одна руна без метки - весь адрес: закрывает сама, хвост не нужен.
+        bool single = tail == 0 && values.Count == 1 && kinds[0] == Chunk;
+
+        // Фрагмент и одна буква - тоже весь адрес в первой /c: одна ссылка, хвост не нужен.
+        bool pair = values.Count == 1 && kinds[0] == Fragment && accumulatedLength == 1 && values[0] < PairLimit
+            && accumulated < Alphabet.Length && accumulated != Alphabet.IndexOf(':');
+
+        // Фрагмент и две буквы - так же, для первых фрагментов.
+        bool pair2 = values.Count == 1 && kinds[0] == Fragment && accumulatedLength == 2 && values[0] < Pair2Limit
+            && accumulated / Symbols < Alphabet.Length && accumulated % Symbols < Alphabet.Length && accumulated % Symbols != Alphabet.IndexOf(':');
+
+        if (pair) { values[0] = values[0] * Alphabet.Length + accumulated; kinds[0] = Pair; }
+        else if (pair2) { values[0] = values[0] * Symbols * Symbols + accumulated; kinds[0] = Pair2; }
+        else if (tail == 0 && values.Count > 0 && kinds[^1] == Fragment && values[^1] < SingleLimit) kinds[^1] = SingleFragment;
+        else if (!single) { values.Add(tail); kinds.Add(Tail); }
 
         int jump = _jumps.GetValueOrDefault(payload, -1);
 
@@ -221,13 +269,18 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
         for (int i = 0; i < values.Count; i++)
         {
+            if (kinds[i] == Hop) HopsSent++;
+
             answer = await LoadAsync(kinds[i] switch
             {
                 Chunk => $"/c/{Runes(values[i], RuneAlphabet, RuneWidth)}/0/0/0/0",
-                Fragment => $"/c/{Runes(0, RuneAlphabet, RuneWidth)}/{values[i] % DfaSize}/{values[i] / DfaSize}/0/1",
-                Hop => $"/c/{Runes(0, RuneAlphabet, RuneWidth)}/0/0/{values[i]}/1",
-                Close => $"/cf/{Num(values[i])}/{NextSign()}",
-                _ => $"/t/{TailRunes(values[i])}/{NextSign()}"
+                Fragment => $"/c/{Runes(0, RuneAlphabet, RuneWidth)}/{values[i] % DfaSize}/{values[i] / DfaSize}/0/1/{NextSign()}",
+                Hop => $"/c/{Runes(0, RuneAlphabet, RuneWidth)}/0/0/{values[i]}/1/{NextSign()}",
+                // Флаг склейки: 1 - закрывает цепочку, 0 - адрес весь в этом запросе.
+                SingleFragment => $"/sf/{Num(values[i])}/{(i > 0 ? 1 : 0)}/{NextSign()}",
+                Pair => $"/c/{PairRune(values[i] % Alphabet.Length)}/{values[i] / Alphabet.Length % DfaSize}/{values[i] / Alphabet.Length / DfaSize}/0/2",
+                Pair2 => $"/c/{Runes(values[i] % (Symbols * Symbols) * Symbols + Alphabet.IndexOf(':'), RuneAlphabet, RuneWidth)}/{values[i] / (Symbols * Symbols) % DfaSize}/{values[i] / (Symbols * Symbols) / DfaSize}/0/2",
+                _ => $"/t/{TailRunes(values[i])}/{(i > 0 ? 1 : 0)}/{NextSign()}"
             });
 
             Debt(answer);
@@ -259,7 +312,8 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
         _headTried = true;
 
-        var answer = await LoadAsync($"/hd/{Num(piece)}/{Num(found % HeadBases)}/{NextSign()}");
+        // Третье число - флаг полноты: кусок равен всему расхождению, значит адрес головы полный.
+        var answer = await LoadAsync($"/hd/{Num(piece)}/{Num(found % HeadBases)}/1/{NextSign()}");
 
         bool ours = false;
 
@@ -338,7 +392,13 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
             int id = Number(item, "id");
             string text = Text(item, "text");
 
-            if (id >= 0 && text != "") _fragments.TryAdd(id, text);
+            if (id < 0 || text == "") continue;
+
+            _fragments.TryAdd(id, text);
+
+            int hop = Number(item, "hop");
+
+            if (hop > 0) _infinite[id] = (Number(item, "base"), hop);
         }
     }
 
@@ -346,8 +406,15 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
     {
         int id = -1, length = 0;
 
+        int capacity = DfaSize * PageCount;
+
         foreach (var (key, text) in _fragments)
-            if (text.Length > length && payload.AsSpan(position).StartsWith(text, StringComparison.Ordinal)) { id = key; length = text.Length; }
+        {
+            // Первая сверка, на фронте: Inf - только с адресом по дереву, влезающим в пулы.
+            bool addressed = _infinite.TryGetValue(key, out var at) ? at.Base >= 0 && at.Base < capacity && at.Hop < HopCount : key < capacity;
+
+            if (addressed && text.Length > length && payload.AsSpan(position).StartsWith(text, StringComparison.Ordinal)) { id = key; length = text.Length; }
+        }
 
         return (id, length);
     }
@@ -420,6 +487,8 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
         return Runes(runes, RuneAlphabet, RuneWidth);
     }
+
+    private static string PairRune(int letter) => Runes((letter * Symbols + Alphabet.IndexOf(':')) * Symbols + Alphabet.IndexOf(':'), RuneAlphabet, RuneWidth);
 
     private static string Num(int value) => Runes(value, Digits, NumSize);
 

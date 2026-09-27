@@ -19,10 +19,12 @@ public class VirtualFragment : Entity
 
     public FragmentLevel Level { get; set; }
 
-    // Infinite: следующее звено цепи (+1 запрос на хоп). null = хвост цепи.
+    // Infinite: финитный предок - адрес строки по дереву (предок VF-ом + номер среди его Inf-потомков
+    // hop-ом, номер - порядок id среди Inf с тем же предком). null - адреса нет, строка едет буквами.
+    // Денормализация: рантайм считает адрес сам.
     public int? Jump { get; set; }
 
-    // Infinite: готовый результат, забирается на query.tail, чтобы не проходить цепь заново.
+    // Не пишется: готовый текст держала прежняя цепь заёма по ёмкости (Archive/Domain/ChainInfinite.cs).
     public string? End { get; set; }
 
     public const int TextMax = 512;

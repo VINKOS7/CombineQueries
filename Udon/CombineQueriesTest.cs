@@ -22,7 +22,14 @@ public class CombineQueriesTest : UdonSharpBehaviour
     [UdonSynced] private bool linked;
     [UdonSynced] private bool syncedRunning;
     [UdonSynced] private string syncedBoard = string.Empty;
-    [UdonSynced] private bool awaiting;
+
+    // Три панели прогона - снимком для зрителей, как и доска. Пишет только владелец, он же нажавший.
+    [UdonSynced] private string syncedRequests = string.Empty;
+    [UdonSynced] private string syncedResponses = string.Empty;
+    [UdonSynced] private string syncedData = string.Empty;
+    // Локальное: «мой клиент ждёт ответа». Синхронным быть не может - у остальных игроков Update видел
+    // чужое ожидание при своём свободном клиенте, звал OnQueryDone и сам слал шаги прогона.
+    private bool awaiting;
 
 
     public int action = 0;
@@ -205,13 +212,13 @@ public class CombineQueriesTest : UdonSharpBehaviour
         }
 
         // Зелёный куб (прогон): локальный прогон нажавшего, как было.
-        if (syncedRunning) { Note("занято: идёт прогон, дождись done"); return; }
+        if (syncedRunning) { Say("занято: идёт прогон, дождись done"); return; }
 
         if (awaiting && !client.Busy()) awaiting = false;
 
         RequestSerialization();
 
-        if (awaiting) return;
+        if (awaiting) { Say("занято: клиент ещё ждёт ответа"); return; }
 
         // Connect мог нажать другой куб - у клиента общее подключение. Спрашиваем сам клиент.
         if (!ready && client.Connected()) ready = true;
@@ -308,6 +315,10 @@ public class CombineQueriesTest : UdonSharpBehaviour
     // чтобы хвост прошлого прогона не лёг строками в новый.
     private void StartRun()
     {
+        // Замок и доска уходят от нажавшего: без владения его RequestSerialization ничего не шлёт, а
+        // сериализация владельца перетирала бы его прогон посреди шага.
+        if (Networking.LocalPlayer != null && !Networking.IsOwner(gameObject)) Networking.SetOwner(Networking.LocalPlayer, gameObject);
+
         syncedRunning = true;
 
         RequestSerialization();
@@ -328,6 +339,10 @@ public class CombineQueriesTest : UdonSharpBehaviour
         if (requests != null) requests.text = "";
         if (responses != null) responses.text = "";
         if (data != null) data.text = "";
+
+        syncedRequests = "";
+        syncedResponses = "";
+        syncedData = "";
 
         syncedBoard = testUrlSeeded + "   " + NumberOf(testUrlSeeded.Length) + " chars   (hyper from db, never sent)\n"
               + testUrlFull + "   " + NumberOf(testUrlFull.Length) + " chars   (levels L1-L3)\n"
@@ -391,6 +406,10 @@ public class CombineQueriesTest : UdonSharpBehaviour
         Pour(requests, sent);
         Pour(responses, client.TakeResponses());
         Pour(data, client.TakeData());
+
+        syncedRequests = requests != null ? requests.text : "";
+        syncedResponses = responses != null ? responses.text : "";
+        syncedData = data != null ? data.text : "";
 
         step++;
 
@@ -703,7 +722,17 @@ public class CombineQueriesTest : UdonSharpBehaviour
     }
 
     // Закрепление чёрного приезжает синхронизацией - перекрашиваем куб под новое состояние.
-    public override void OnDeserialization() => Guard();
+    // Снимок приехал: куб перекрашиваем, а доску и три панели зритель берёт из снимка - сам он прогон не
+    // ведёт, и рисовать ему больше нечем. Владелец снимков не получает, он рисует сам.
+    public override void OnDeserialization()
+    {
+        Guard();
+
+        if (output != null) output.text = syncedBoard;
+        if (requests != null) requests.text = syncedRequests;
+        if (responses != null) responses.text = syncedResponses;
+        if (data != null) data.text = syncedData;
+    }
 
     // Владение отдаём: чёрный куб забирает первый нажавший, чтобы записать закрепление.
     public override bool OnOwnershipRequest(VRCPlayerApi requestingPlayer, VRCPlayerApi requestedOwner) => true;

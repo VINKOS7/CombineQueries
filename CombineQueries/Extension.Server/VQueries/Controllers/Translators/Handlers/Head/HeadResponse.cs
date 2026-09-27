@@ -23,6 +23,9 @@ public record HeadResponse : ISigned
 
     [JsonProperty("kept")] public string? Kept { get; set; }
 
+    // Неполная голова оставила на сервере начало адреса: клиенту досылать только остаток.
+    [JsonProperty("carried")] public bool Carried { get; set; }
+
     [JsonProperty("ready")] public IReadOnlyList<Delivery>? Ready { get; set; }
 
     [JsonProperty("pending")] public int Pending { get; set; }

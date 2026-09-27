@@ -103,7 +103,13 @@ public class CombineQueries : UdonSharpBehaviour
     // products/12, /11, /0, и они съедали бюджет. Восемь накрывают всю четвёрку за один запрос.
     // Больше не имеет смысла: у сервера Batch = 8.
     private const int RangeMax = 8;
-    private const int CloseLimit = 1024;
+    private const int SingleLimit = 1024;
+    // Фрагмент и буква одной ссылкой: адрес «фрагмент + одна буква» (products/13 + 6) - весь в первой
+    // /c, без хвоста. Номера фрагментов ниже PairLimit, буквы - весь алфавит: 2048 * 59 ссылок.
+    private const int PairLimit = 2048;
+    // Фрагмент и ДВЕ буквы - только для первых Pair2Limit фрагментов: это общие начала, выученные
+    // раньше всех (dummyjson.com/products/ + 83). 64 * 59 * 59 ссылок.
+    private const int Pair2Limit = 64;
 
     // ---- Лимиты, тайминги, лог ----
 
@@ -121,12 +127,14 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", "/0/0/0/0", Symbols, RuneAlphabet, RuneSize, RuneWidth);
     private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth, SignValues);
     private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
-    private readonly VRCUrl[] VfPool = VfPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, dfaSize, pageCount);
-    private readonly VRCUrl[] HopPool = HopPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, hopCount);
+    private readonly VRCUrl[] VfPool = VfPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, dfaSize, pageCount, SignValues);
+    private readonly VRCUrl[] HopPool = HopPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, hopCount, SignValues);
     private readonly VRCUrl[] HeadPool = HeadPoolOf(baseUrl + "/hd/", HeadLimit, HeadBases, JumpSignValues);
     private readonly VRCUrl[] RangePool = RangePoolOf(baseUrl + "/h/", MaxJumps, RangeMax, JumpSignValues);
     private readonly VRCUrl[] CreditPool = CreditPoolOf(baseUrl + "/tc/", JumpSignValues);
-    private readonly VRCUrl[] ClosePool = ClosePoolOf(baseUrl + "/cf/", CloseLimit, SignValues);
+    private readonly VRCUrl[] SinglePool = SinglePoolOf(baseUrl + "/sf/", SingleLimit, SignValues);
+    private readonly VRCUrl[] PairPool = PairPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, PairLimit, dfaSize);
+    private readonly VRCUrl[] Pair2Pool = Pair2PoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, Pair2Limit, dfaSize);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
     private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
@@ -144,6 +152,10 @@ public class CombineQueries : UdonSharpBehaviour
     private string[] roots = new string[0];
     private string[] cachedFragments = new string[0];
     private int[] cachedFragIds = new int[0];
+    // Адрес Infinite по дереву, его даёт сервер: финитный предок и номер строки среди его
+    // Inf-потомков (с 1). У финитных -1 и 0.
+    private int[] cachedFragBase = new int[0];
+    private int[] cachedFragHop = new int[0];
 
     // ---- Текущая отправка ----
 
@@ -211,7 +223,9 @@ public class CombineQueries : UdonSharpBehaviour
     private const int KindRange = 5;
     private const int KindHead = 6;
     private const int KindCredit = 7;
-    private const int KindClose = 8;
+    private const int KindSingle = 8;
+    private const int KindPair = 9;
+    private const int KindPair2 = 10;
 
     // Единственный словарь тел: ключ - адрес без схемы, значение - пара «состояние, тело».
     //
@@ -258,6 +272,8 @@ public class CombineQueries : UdonSharpBehaviour
         roots = new string[0];
         cachedFragments = new string[0];
         cachedFragIds = new int[0];
+        cachedFragBase = new int[0];
+        cachedFragHop = new int[0];
 
         ForgetJumps();
 
@@ -482,7 +498,10 @@ public class CombineQueries : UdonSharpBehaviour
             int n = 0;
             string[] r = new string[list.Count];
 
-            for (int i = 0; i < list.Count; i++) if (list.TryGetValue(i, out DataToken it) && it.TokenType == TokenType.String) r[n] = it.String; n++;
+            // Счётчик внутри тела цикла: снаружи он крутнулся бы один раз, все корни легли бы в r[0], и
+            // проверка ниже выбросила бы список целиком - L1-корни в руне не работали бы вовсе.
+            for (int i = 0; i < list.Count; i++)
+                if (list.TryGetValue(i, out DataToken it) && it.TokenType == TokenType.String) { r[n] = it.String; n++; }
 
             if (n == list.Count) roots = r;
         }
@@ -657,8 +676,73 @@ public class CombineQueries : UdonSharpBehaviour
 
         for (int i = 0; i < slotKey.Length; i++) if (!slotDelete[i] && !slotLoading[i] && slotKey[i] != "") slotReleased[i] = TotalQueries;
 
+        Singles();
         Jumps();
         Spell();
+    }
+
+    // Одним запросом: адрес, который целиком один фрагмент, - /sf; целиком влез в хвост - /t; ровно
+    // в одну руну - /c без метки «:» на конце, сервер закроет адрес на ней самой. Настоящий «:»
+    // последним в такую руну не ляжет - прочитался бы меткой, и такой адрес едет сборкой.
+    // Раньше прыжка и головы: бьёт наверняка, без поиска по дереву и без промаха. Флаг склейки 0 -
+    // адрес весь в этом запросе, и накопленные на сервере куски к нему не прилипнут.
+    private void Singles()
+    {
+        fragments = true;
+
+        for (int i = 0; i < slotKey.Length; i++)
+        {
+            if (slotDelete[i] || slotLoading[i] || slotDirect[i] || slotKey[i] == "") continue;
+
+            string payload = slotKey[i];
+
+            if (ProblemWith(payload) != "") continue;
+
+            int single = SingleOf(payload);
+            int[] symbols = single < 0 ? SymbolsOf(payload) : null;
+
+            if (single < 0 && (symbols == null || symbols.Length > RuneSize || (symbols.Length == RuneSize && symbols[RuneSize - 1] == Alphabet.IndexOf(':')))) continue;
+
+            Flying(i, true);
+
+            LastUrl = payload;
+
+            if (single >= 0)
+            {
+                LastRoad = "single";
+                route = "/sf";
+
+                Load(KindTail, payload, SinglePool[single * 2 * SignValues + NextSign()]);
+
+                continue;
+            }
+
+            if (symbols.Length == RuneSize)
+            {
+                LastRoad = "rune";
+                route = "/c";
+
+                Load(KindTail, payload, ChunkPool[(symbols[0] * Symbols + symbols[1]) * Symbols + symbols[2]]);
+
+                continue;
+            }
+
+            int tail = symbols.Length == 1 ? 1 + symbols[0] : 1 + Symbols + symbols[0] * Symbols + symbols[1];
+
+            LastRoad = "tail";
+            route = "/t";
+
+            Load(KindTail, payload, TailPool[tail * 2 * SignValues + NextSign()]);
+        }
+    }
+
+    // Номер фрагмента, который накрывает адрес целиком, или -1. Потолок SingleLimit: дальше пул /sf не печён.
+    private int SingleOf(string payload)
+    {
+        for (int i = 0; i < cachedFragments.Length; i++)
+            if (cachedFragIds[i] < SingleLimit && cachedFragments[i] == payload) return cachedFragIds[i];
+
+        return -1;
     }
 
     // Прыжки: ОДНО окно на пачку.
@@ -901,7 +985,10 @@ public class CombineQueries : UdonSharpBehaviour
     {
         int[] q = new int[MaxChunks + 1];
 
-        int[] k = q;
+        // Отдельный массив, а НЕ второе имя q: присваивание массива копирует ссылку, и каждая пара
+        // «значение, вид» затирала бы значение видом. Номер фрагмента уходил бы видом шага - фрагмент 1,
+        // руна - нулём, хвост - символом "b", и любой адрес собирался бы в dummyjson.com + b.
+        int[] k = new int[MaxChunks + 1];
         int count = 0;
 
         int acc = 0, accLen = 0, pos = 0;
@@ -910,9 +997,10 @@ public class CombineQueries : UdonSharpBehaviour
         {
             if (accLen == 0)
             {
-                int fid = -1, flen = 0;
+                int fid = -1, flen = 0, fat = -1;
 
                 char here = payload[pos];
+                int capacity = dfaSize * pageCount;
 
                 for (int i = 0; i < cachedFragments.Length; i++)
                 {
@@ -920,22 +1008,30 @@ public class CombineQueries : UdonSharpBehaviour
 
                     if (cachedFragments[i][0] != here) continue;
 
+                    // Первая сверка, на фронте: Infinite берём, только если сервер дал адрес по дереву
+                    // и тот влезает в пулы - предок финитный, номер в пределах hop-пула. Без адреса
+                    // строка за потолком VF-пула не адресуется вовсе. Вторая сверка - на сервере.
+                    int fragHop = cachedFragHop[i];
+
+                    if (fragHop > 0 ? cachedFragBase[i] < 0 || cachedFragBase[i] >= capacity || fragHop >= hopCount : cachedFragIds[i] >= capacity) continue;
+
                     if (payload.Substring(pos, cachedFragments[i].Length) != cachedFragments[i]) continue;
 
                     fid = cachedFragIds[i];
                     flen = cachedFragments[i].Length;
+                    fat = i;
                 }
 
                 if (fid >= 0)
                 {
-                    int capacity = dfaSize * pageCount;
-                    int hop = fid / capacity;
-                    int anchor = fid - hop * capacity;
+                    // Infinite едет предком (обычный VF) и номером под ним (hop).
+                    int hop = cachedFragHop[fat];
+                    int anchor = hop > 0 ? cachedFragBase[fat] : fid;
 
                     int plain = (flen + RuneSize - 1) / RuneSize;
                     int cost = hop > 0 ? 2 : 1;
 
-                    if (hop < hopCount && cost <= plain && count + cost <= MaxChunks)
+                    if (cost <= plain && count + cost <= MaxChunks)
                     {
                         q[count] = anchor; k[count] = 1; count++;
 
@@ -956,6 +1052,27 @@ public class CombineQueries : UdonSharpBehaviour
             accLen++;
             pos += symLen;
 
+            // Первая руна адреса несёт метку: «:» последним символом - «будет ещё». Без метки сервер
+            // закроет адрес на ней самой, поэтому без неё она уходит, только если адрес ею и
+            // кончается. Настоящий «:» на этом месте едет первым символом следующего куска.
+            if (count == 0 && accLen == RuneSize - 1 && pos < payload.Length)
+            {
+                int nextLen;
+                int next = NextSymbol(payload, pos, out nextLen);
+
+                if (next == Alphabet.IndexOf(':') || pos + nextLen < payload.Length)
+                {
+                    // «:» перед меткой дал бы полосу из двух, а полоса - это одиночка.
+                    if (acc % Symbols == Alphabet.IndexOf(':')) { Fail("':' as the second symbol reads as a whole address: " + payload); return; }
+
+                    q[count] = acc * Symbols + Alphabet.IndexOf(':'); k[count] = 0; count++;
+
+                    acc = 0; accLen = 0;
+
+                    continue;
+                }
+            }
+
             if (accLen == RuneSize)
             {
                 if (count >= MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
@@ -970,8 +1087,22 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (count >= MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
 
-        if (tail == 0 && count > 0 && k[count - 1] == 1 && q[count - 1] < CloseLimit) k[count - 1] = 8;
-        else { q[count] = tail; k[count] = 2; count++; }
+        // Одна руна без метки - весь адрес: закрывает сама, хвост не нужен.
+        bool alone = tail == 0 && count == 1 && k[0] == 0;
+
+        // Фрагмент и одна буква - тоже весь адрес в первой /c: одна ссылка, хвост не нужен. Без hop,
+        // значит номер куска и есть номер фрагмента. Настоящий «:» так не уйдёт - руна [:, :, :] пустая.
+        bool pair = count == 1 && k[0] == KindFragment && accLen == 1 && q[0] < PairLimit && acc < Alphabet.Length && acc != Alphabet.IndexOf(':');
+
+        // Фрагмент и две буквы - так же, для первых фрагментов. Последней буквой «:» не встанет - снимется
+        // вместе с добивкой.
+        bool pair2 = count == 1 && k[0] == KindFragment && accLen == 2 && q[0] < Pair2Limit
+            && acc / Symbols < Alphabet.Length && acc % Symbols < Alphabet.Length && acc % Symbols != Alphabet.IndexOf(':');
+
+        if (pair) { q[0] = q[0] * Alphabet.Length + acc; k[0] = KindPair; }
+        else if (pair2) { q[0] = (q[0] * Alphabet.Length + acc / Symbols) * Alphabet.Length + acc % Symbols; k[0] = KindPair2; }
+        else if (tail == 0 && count > 0 && k[count - 1] == 1 && q[count - 1] < SingleLimit) k[count - 1] = 8;
+        else if (!alone) { q[count] = tail; k[count] = 2; count++; }
 
         int slot = SlotOf(payload);
 
@@ -988,7 +1119,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         LastRoad = headed
             ? (skip > 0 ? "head/hyper" : "head/combine")
-            : (skip > 0 ? "hyper" : "combine");
+            : (skip > 0 ? "hyper" : (pair || pair2 ? "pair" : "combine"));
 
         queueLen = count - skip + (skip > 0 ? 1 : 0);
         queue = new int[queueLen];
@@ -1120,7 +1251,10 @@ public class CombineQueries : UdonSharpBehaviour
         // идут строго по порядку (stream.Next, Position++), и пропуск одной кладёт поток в 403.
         // Поэтому разводим не ссылку, а вопрос: второй раз он не задаётся, пока первый в полёте,
         // и такой адрес едет обычной сборкой.
-        int question = piece * HeadBases + (found % HeadBases);
+        // Последний множитель - флаг полноты. Кусок головы здесь равен всему расхождению, значит
+        // адрес головы полный: 1. Неполной головы клиент не шлёт: остались руны - это уже не голова,
+        // а /c (фрагмент и хвост подряд, без ожидания ответа головы).
+        int question = (piece * HeadBases + (found % HeadBases)) * 2 + 1;
 
         for (int i = 0; i < slotKey.Length; i++) if (!slotDelete[i] && slotLoading[i] && slotHead[i] == question) return false;
 
@@ -1148,9 +1282,9 @@ public class CombineQueries : UdonSharpBehaviour
         Load(KindCredit, "", CreditPool[NextSign()]);
     }
 
-    // Отправляет ВСЮ цепочку адреса разом. Куски ложатся в очередь SDK подряд и приходят на сервер
-    // в том же порядке, а хвост её закрывает. Ждать ответа на кусок было незачем: в нём нет ничего,
-    // что решало бы, каким быть следующему.
+    // Отправляет ВСЮ цепочку адреса разом. Куски ложатся в очередь обёртки подряд и уходят на сервер
+    // в том же порядке (см. Pump), а хвост её закрывает. Ждать ответа на кусок незачем: в нём нет
+    // ничего, что решало бы, каким быть следующему, - порядок держит очередь, а не ожидание.
     private void SendChain(string payload)
     {
         for (int at = 0; at < queueLen; at++)
@@ -1167,14 +1301,15 @@ public class CombineQueries : UdonSharpBehaviour
                     Load(kind, payload, ChunkPool[value]);
                     continue;
 
+                // VF и hop - с подписью: по ней сервер кладёт кусок в сборку своего потока.
                 case KindFragment:
                     route = "/c";
-                    Load(kind, payload, VfPool[value]);
+                    Load(kind, payload, VfPool[value * SignValues + NextSign()]);
                     continue;
 
                 case KindHop:
                     route = "/c";
-                    Load(kind, payload, HopPool[value]);
+                    Load(kind, payload, HopPool[value * SignValues + NextSign()]);
                     continue;
 
                 case KindJumpOne:
@@ -1185,9 +1320,21 @@ public class CombineQueries : UdonSharpBehaviour
                     Load(KindRange, payload, RangePool[value * RangeMax * JumpSignValues + NextSign()]);
                     continue;
 
-                case KindClose:
-                    route = "/cf";
-                    Load(KindTail, payload, ClosePool[value * SignValues + NextSign()]);
+                // Фрагмент и буква одной ссылкой - весь адрес, закрывает сам. Подписи нет, как у руны.
+                case KindPair:
+                    route = "/c";
+                    Load(KindTail, payload, PairPool[value]);
+                    continue;
+
+                case KindPair2:
+                    route = "/c";
+                    Load(KindTail, payload, Pair2Pool[value]);
+                    continue;
+
+                // Флаг склейки: перед закрывающим в этой цепочке шли куски - 1, он один - 0.
+                case KindSingle:
+                    route = "/sf";
+                    Load(KindTail, payload, SinglePool[(value * 2 + (at > 0 ? 1 : 0)) * SignValues + NextSign()]);
                     continue;
             }
 
@@ -1199,7 +1346,7 @@ public class CombineQueries : UdonSharpBehaviour
             route = fragments ? "/t" : "/d";
 
             Load(KindTail, payload, fragments
-                ? TailPool[value * SignValues + NextSign()]
+                ? TailPool[(value * 2 + (at > 0 ? 1 : 0)) * SignValues + NextSign()]
                 : DirectTailPool[value]);
         }
     }
@@ -1231,8 +1378,6 @@ public class CombineQueries : UdonSharpBehaviour
         TotalQueries++;
         inFlight++;
 
-        lastLoadAt = Time.time;
-
         if (payload != "")
         {
             int at = SlotOf(payload);
@@ -1250,6 +1395,64 @@ public class CombineQueries : UdonSharpBehaviour
 
         SendCustomEventDelayedSeconds(nameof(OnLoadTimeout), Timeout);
 
+        Enqueue(url, TotalQueries + " " + (payload == "" ? "-" : payload));
+
+        Pump();
+    }
+
+    // Своя очередь запросов - ТОЛЬКО ради порядка. У SDK общей очереди для строк нет: каждая
+    // загрузка сама ждёт своего окна, и из нескольких ждущих уходит та, что первой его поймала.
+    // Тогда хвост адреса обгоняет его же кусок, и сервер собирает чужое. Поэтому SDK получает
+    // строго по одной ссылке: следующую - как только ответил предыдущий. Задержек здесь нет,
+    // пять секунд между запросами по-прежнему отмеряет сам SDK.
+    private VRCUrl[] outUrl = new VRCUrl[16];
+    private string[] outNote = new string[16];
+    private int outFirst, outCount;
+    private bool sending;
+
+    private void Enqueue(VRCUrl url, string note)
+    {
+        // Конец массива занят: сдвигаем очередь к началу, а если тесно - растём вдвое.
+        if (outFirst + outCount == outUrl.Length)
+        {
+            int size = outCount * 2 > outUrl.Length ? outUrl.Length * 2 : outUrl.Length;
+
+            VRCUrl[] urls = new VRCUrl[size];
+            string[] notes = new string[size];
+
+            for (int i = 0; i < outCount; i++) { urls[i] = outUrl[outFirst + i]; notes[i] = outNote[outFirst + i]; }
+
+            outUrl = urls;
+            outNote = notes;
+            outFirst = 0;
+        }
+
+        outUrl[outFirst + outCount] = url;
+        outNote[outFirst + outCount] = note;
+        outCount++;
+    }
+
+    // Отдаёт SDK первую ссылку очереди, если он не занят предыдущей.
+    private void Pump()
+    {
+        if (sending || outCount == 0) return;
+
+        VRCUrl url = outUrl[outFirst];
+        string note = outNote[outFirst];
+
+        outUrl[outFirst] = null;
+        outFirst++;
+        outCount--;
+
+        if (outCount == 0) outFirst = 0;
+
+        sending = true;
+        lastLoadAt = Time.time;
+
+        // Ссылка ровно та, что уходит в загрузчик, и в том порядке, в каком уходит. Мимо Trace: тот
+        // пишет и в табло, а полные ссылки его раздули бы. Номер - тот же, что у строки request.
+        Debug.Log("[CombineQueries] load: " + note + " -> " + url.Get());
+
         VRCStringDownloader.LoadUrl(url, this);
     }
 
@@ -1261,6 +1464,11 @@ public class CombineQueries : UdonSharpBehaviour
 
         Fail("no answer in " + Timeout + "s, for " + LastUrl
             + " - url blocked by the SDK or server unreachable");
+
+        // Ответа нет и уже не будет: без этого следующая ссылка очереди ждала бы его вечно.
+        sending = false;
+
+        Pump();
     }
 
     // ==== Ответы ====
@@ -1268,6 +1476,11 @@ public class CombineQueries : UdonSharpBehaviour
     public override void OnStringLoadSuccess(IVRCStringDownload response)
     {
         if (inFlight > 0) inFlight--;
+
+        // Ответ пришёл - SDK свободен: отдаём ему следующую ссылку очереди.
+        sending = false;
+
+        Pump();
 
         Answers++;
 
@@ -1340,6 +1553,11 @@ public class CombineQueries : UdonSharpBehaviour
     {
         if (inFlight > 0) inFlight--;
 
+        // Ошибка - тоже ответ: SDK свободен, следующая ссылка уходит сразу.
+        sending = false;
+
+        Pump();
+
         // if conditionals up to 3-4, you should mutate you switch
         if (phase == PhaseConnect) { phase = PhaseIdle; connectOk = false; }
         if (phase == PhaseVerify) { phase = PhaseIdle; Fail("codeword rejected"); return; }
@@ -1411,6 +1629,7 @@ public class CombineQueries : UdonSharpBehaviour
         // проход выбрал бы тот же якорь и встал. Такой адрес едет сборкой.
         if (!ours && at >= 0) jumps.Remove(slotKey[at]);
 
+        Singles();
         Jumps();
         Spell();
     }
@@ -1420,6 +1639,8 @@ public class CombineQueries : UdonSharpBehaviour
     {
         int at = SlotBySent(link);
         string payload = at < 0 ? "" : slotKey[at];
+
+        bool ours = false;
 
         if (answer.TryGetValue("found", out DataToken list) && list.TokenType == TokenType.DataList)
         {
@@ -1436,6 +1657,8 @@ public class CombineQueries : UdonSharpBehaviour
 
                 KeepJump(PayloadOf(url), jump);
 
+                if (PayloadOf(url) == payload) ours = true;
+
                 Named(url, "head[" + TotalQueries + "]");
             }
 
@@ -1444,7 +1667,11 @@ public class CombineQueries : UdonSharpBehaviour
 
         if (payload == "" || Loaded(payload)) return;
 
-        // Наш адрес голова назвала - дальше он уедет прыжком. Не назвала - диктуем остаток сами.
+        // Наш адрес голова назвала - и сама ушла за ним наружу, как прыжок: тело едет долгом, этим
+        // ответом или следующим. Раньше за ним слался второй запрос /h - ещё пять секунд.
+        if (ours) return;
+
+        // Номер пришёл раньше и не от этой головы - прыжок его и отвезёт. Не назвала - диктуем сами.
         if (JumpOf(payload) >= 0) { SendCombine(payload); return; }
 
         string kept = DictString(answer, "kept");
@@ -1620,8 +1847,10 @@ public class CombineQueries : UdonSharpBehaviour
 
         string[] texts = new string[have + list.Count];
         int[] ids = new int[have + list.Count];
+        int[] bases = new int[have + list.Count];
+        int[] hops = new int[have + list.Count];
 
-        for (int i = 0; i < have; i++) { texts[i] = cachedFragments[i]; ids[i] = cachedFragIds[i]; }
+        for (int i = 0; i < have; i++) { texts[i] = cachedFragments[i]; ids[i] = cachedFragIds[i]; bases[i] = cachedFragBase[i]; hops[i] = cachedFragHop[i]; }
 
         int n = have;
 
@@ -1640,20 +1869,29 @@ public class CombineQueries : UdonSharpBehaviour
 
             if (known) continue;
 
+            // Адрес по дереву приходит только у Infinite: предок и номер под ним.
+            int hop = DictInt(item.DataDictionary, "hop");
+
             texts[n] = text;
             ids[n] = id;
+            bases[n] = hop > 0 ? DictInt(item.DataDictionary, "base") : -1;
+            hops[n] = hop > 0 ? hop : 0;
             n++;
         }
 
-        if (n == texts.Length) { cachedFragments = texts; cachedFragIds = ids; return; }
+        if (n == texts.Length) { cachedFragments = texts; cachedFragIds = ids; cachedFragBase = bases; cachedFragHop = hops; return; }
 
         string[] fitTexts = new string[n];
         int[] fitIds = new int[n];
+        int[] fitBases = new int[n];
+        int[] fitHops = new int[n];
 
-        for (int i = 0; i < n; i++) { fitTexts[i] = texts[i]; fitIds[i] = ids[i]; }
+        for (int i = 0; i < n; i++) { fitTexts[i] = texts[i]; fitIds[i] = ids[i]; fitBases[i] = bases[i]; fitHops[i] = hops[i]; }
 
         cachedFragments = fitTexts;
         cachedFragIds = fitIds;
+        cachedFragBase = fitBases;
+        cachedFragHop = fitHops;
     }
 
     private void RememberChain(int leaf)
@@ -1866,26 +2104,30 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-    private static VRCUrl[] VfPoolOf(string baseUri, string runeAlph, int runeWidth, int slots, int pages)
+    // Последнее число у VF и hop - подпись: по ней сервер кладёт кусок в сборку СВОЕГО потока, и два
+    // клиента, собирающие разом, не склеиваются. Руна подписи не несёт: пул рун x8 не запечь.
+    private static VRCUrl[] VfPoolOf(string baseUri, string runeAlph, int runeWidth, int slots, int pages, int signs)
     {
         string sentinel = RunesOf(0, runeAlph, runeWidth);
 
-        VRCUrl[] pool = new VRCUrl[slots * pages];
+        VRCUrl[] pool = new VRCUrl[slots * pages * signs];
 
         for (int p = 0; p < pages; p++)
             for (int o = 0; o < slots; o++)
-                pool[p * slots + o] = new VRCUrl(baseUri + sentinel + "/" + o + "/" + p + "/0/1");
+                for (int sign = 0; sign < signs; sign++)
+                    pool[(p * slots + o) * signs + sign] = new VRCUrl(baseUri + sentinel + "/" + o + "/" + p + "/0/1/" + sign);
 
         return pool;
     }
 
-    private static VRCUrl[] HopPoolOf(string baseUri, string runeAlph, int runeWidth, int hops)
+    private static VRCUrl[] HopPoolOf(string baseUri, string runeAlph, int runeWidth, int hops, int signs)
     {
         string sentinel = RunesOf(0, runeAlph, runeWidth);
 
-        VRCUrl[] pool = new VRCUrl[hops];
+        VRCUrl[] pool = new VRCUrl[hops * signs];
 
-        for (int h = 0; h < hops; h++) pool[h] = new VRCUrl(baseUri + sentinel + "/0/0/" + h + "/1");
+        for (int h = 0; h < hops; h++)
+            for (int sign = 0; sign < signs; sign++) pool[h * signs + sign] = new VRCUrl(baseUri + sentinel + "/0/0/" + h + "/1/" + sign);
 
         return pool;
     }
@@ -1896,7 +2138,7 @@ public class CombineQueries : UdonSharpBehaviour
 
         int tails = 1 + symbols + symbols * symbols;
 
-        VRCUrl[] pool = new VRCUrl[tails * signs];
+        VRCUrl[] pool = new VRCUrl[tails * 2 * signs];
 
         for (int v = 0; v < tails; v++)
         {
@@ -1909,7 +2151,9 @@ public class CombineQueries : UdonSharpBehaviour
 
             string runes = RunesOf(value, runeAlph, runeWidth);
 
-            for (int sign = 0; sign < signs; sign++) pool[v * signs + sign] = new VRCUrl(baseUri + runes + "/" + sign);
+            // Флаг склейки: 1 - закрывает цепочку, 0 - адрес весь в этом запросе.
+            for (int merge = 0; merge < 2; merge++)
+                for (int sign = 0; sign < signs; sign++) pool[(v * 2 + merge) * signs + sign] = new VRCUrl(baseUri + runes + "/" + merge + "/" + sign);
         }
 
         return pool;
@@ -1962,16 +2206,51 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-    private static VRCUrl[] ClosePoolOf(string baseUri, int pieces, int signs)
+    // Флаг склейки - второе число: 1 - закрывает цепочку, 0 - адрес весь в этом запросе.
+    private static VRCUrl[] SinglePoolOf(string baseUri, int pieces, int signs)
     {
-        VRCUrl[] pool = new VRCUrl[pieces * signs];
+        VRCUrl[] pool = new VRCUrl[pieces * 2 * signs];
 
         for (int piece = 0; piece < pieces; piece++)
         {
             string id = RunesOf(piece, Digits, NumSize);
 
-            for (int sign = 0; sign < signs; sign++) pool[piece * signs + sign] = new VRCUrl(baseUri + id + "/" + sign);
+            for (int merge = 0; merge < 2; merge++)
+                for (int sign = 0; sign < signs; sign++) pool[(piece * 2 + merge) * signs + sign] = new VRCUrl(baseUri + id + "/" + merge + "/" + sign);
         }
+
+        return pool;
+    }
+
+    // Фрагмент и буква: руна [буква, «:», «:»], фрагмент - номер и страница, вид 2. Подписи нет - поток
+    // сервер берёт тот, что подписывал последним, как у руны.
+    private static VRCUrl[] PairPoolOf(string baseUri, string runeAlph, int runeWidth, int pieces, int slots)
+    {
+        int pad = Alphabet.IndexOf(':');
+        int letters = Alphabet.Length;
+
+        VRCUrl[] pool = new VRCUrl[pieces * letters];
+
+        for (int piece = 0; piece < pieces; piece++)
+            for (int letter = 0; letter < letters; letter++)
+                pool[piece * letters + letter] = new VRCUrl(baseUri + RunesOf((letter * Symbols + pad) * Symbols + pad, runeAlph, runeWidth) + "/" + (piece % slots) + "/" + (piece / slots) + "/0/2");
+
+        return pool;
+    }
+
+    // Фрагмент и две буквы: руна [буква, буква, «:»], остальное как у пары - и вид тот же, 2: сервер
+    // снимает добивку, и ему всё равно, одна буква или две.
+    private static VRCUrl[] Pair2PoolOf(string baseUri, string runeAlph, int runeWidth, int pieces, int slots)
+    {
+        int pad = Alphabet.IndexOf(':');
+        int letters = Alphabet.Length;
+
+        VRCUrl[] pool = new VRCUrl[pieces * letters * letters];
+
+        for (int piece = 0; piece < pieces; piece++)
+            for (int first = 0; first < letters; first++)
+                for (int second = 0; second < letters; second++)
+                    pool[(piece * letters + first) * letters + second] = new VRCUrl(baseUri + RunesOf((first * Symbols + second) * Symbols + pad, runeAlph, runeWidth) + "/" + (piece % slots) + "/" + (piece / slots) + "/0/2");
 
         return pool;
     }
@@ -1985,9 +2264,10 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
+    // Третье число головы - флаг полноты последнего адреса: 1 - полный, 0 - за ним досылается остаток.
     private static VRCUrl[] HeadPoolOf(string baseUri, int pieces, int bases, int signs)
     {
-        VRCUrl[] pool = new VRCUrl[pieces * bases * signs];
+        VRCUrl[] pool = new VRCUrl[pieces * bases * 2 * signs];
 
         for (int piece = 0; piece < pieces; piece++)
         {
@@ -1997,8 +2277,9 @@ public class CombineQueries : UdonSharpBehaviour
             {
                 string second = RunesOf(b, Digits, NumSize);
 
-                for (int sign = 0; sign < signs; sign++)
-                    pool[(piece * bases + b) * signs + sign] = new VRCUrl(baseUri + first + "/" + second + "/" + sign);
+                for (int complete = 0; complete < 2; complete++)
+                    for (int sign = 0; sign < signs; sign++)
+                        pool[((piece * bases + b) * 2 + complete) * signs + sign] = new VRCUrl(baseUri + first + "/" + second + "/" + complete + "/" + sign);
             }
         }
 
