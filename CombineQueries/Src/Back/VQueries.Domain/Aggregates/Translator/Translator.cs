@@ -1,0 +1,417 @@
+using Dotseed.Domain;
+using CombineQueries.Domain.Aggregates.Translator.types;
+using System.Text;
+
+namespace CombineQueries.Domain.Aggregates.Translator;
+
+public class Translator : Entity, IAggregateRoot
+{
+    
+    public new Guid Id { get; set; } = new();
+    public required string BaseForwardUrl { get; set; }
+    public required string Alphabet { get; set; }
+    public required IArenaTreeRunes<char> Runes { get; set; }
+    public string? Name { get; set; }
+    public string? Description { get; set; }
+
+    // Свой словарь VF, связь 1 ко многим. Не путать со статическим Fragments ниже: там L1-корни
+    // рун-алфавита (печёные, курируемые), а здесь адресуемые строки, которые растит обучение.
+    public ICollection<VirtualFragment> VirtualFragments { get; set; } = [];
+
+    // Свои хайперы, связь 1 ко многим: handle -> собранный URL.
+    public ICollection<Hyper> Hypers { get; set; } = [];
+
+    // Дерево цепочек combine-запросов: узлы ссылаются на родителя внутри этой же коллекции.
+    public ICollection<Chain> Chains { get; set; } = [];
+
+    // Словарь по возрастанию адреса. Адрес - это индекс, поэтому порядок и есть часть контракта:
+    // тот, кто заливает словарь в рантайм, полагается на него, а не сортирует заново.
+    public IReadOnlyList<(int Id, string Text)> LearnedOrdered()
+    {
+        var learned = new List<(int Id, string Text)>(VirtualFragments.Count);
+
+        foreach (var fragment in VirtualFragments) learned.Add((fragment.Id, fragment.Text));
+
+        learned.Sort((a, b) => a.Id.CompareTo(b.Id));
+
+        return learned;
+    }
+
+    // Хайперы по возрастанию handle - тот же контракт, handle это тоже индекс.
+    public IReadOnlyList<(int Handle, string Url)> RememberedOrdered()
+    {
+        var remembered = new List<(int Handle, string Url)>(Hypers.Count);
+
+        foreach (var hyper in Hypers) remembered.Add((hyper.Id, hyper.Url));
+
+        remembered.Sort((a, b) => a.Handle.CompareTo(b.Handle));
+
+        return remembered;
+    }
+
+    // Дерево цепочек как плоский список узлов: связи держит ParentId.
+    public IReadOnlyList<(int Id, int? ParentId, string Step, string? Url)> Grown()
+    {
+        var grown = new List<(int Id, int? ParentId, string Step, string? Url)>(Chains.Count);
+
+        foreach (var chain in Chains) grown.Add((chain.Id, chain.ParentId, chain.Step, chain.Url));
+
+        return grown;
+    }
+
+    // Забыть накопленные хайперы. Цепочки НЕ трогаем: сброс касается только того, что копилось
+    // само, а посев остаётся - иначе прыгать станет не по чему.
+    public int Forget()
+    {
+        int forgotten = Hypers.Count;
+
+        Hypers.Clear();
+
+        return forgotten;
+    }
+
+    // Выпалывает цепочки, чей адрес не прошёл отбор (keep == false). Возвращает сколько задело.
+    //
+    // Узел с детьми остаётся - через него идут чужие пути - и теряет только адрес; бездетный уходит
+    // целиком. Номера остальных не трогаем: дерево держит дыры, а выданные клиенту прыжки обязаны
+    // остаться верными.
+    public int Prune(Func<string, IReadOnlyList<string>, bool> keep)
+    {
+        var byId = new Dictionary<int, Chain>();
+        var parents = new HashSet<int>();
+
+        foreach (var chain in Chains)
+        {
+            byId[chain.Id] = chain;
+
+            if (chain.ParentId is int parent) parents.Add(parent);
+        }
+
+        var weeds = new List<Chain>();
+
+        foreach (var chain in Chains) if (chain.Url is not null && !keep(chain.Url, PathOf(chain, byId))) weeds.Add(chain);
+
+        foreach (var weed in weeds)
+        {
+            if (parents.Contains(weed.Id)) weed.Url = null;
+            else Chains.Remove(weed);
+        }
+
+        return weeds.Count;
+    }
+
+    // Шаги от корня до узла. Счётчик отсекает кольцо в битых данных: глубже числа узлов пути нет.
+    private static IReadOnlyList<string> PathOf(Chain chain, Dictionary<int, Chain> byId)
+    {
+        var steps = new List<string>();
+
+        for (Chain? at = chain; at is not null && steps.Count <= byId.Count; at = at.ParentId is int parent ? byId.GetValueOrDefault(parent) : null)
+            steps.Add(at.Step);
+
+        steps.Reverse();
+
+        return steps;
+    }
+
+    // Кладёт узел дерева. Дубль по номеру отбиваем - номера назначает дерево в рантайме.
+    public Chain? Grow(int id, int? parentId, string step, string? url)
+    {
+        if (id < 0 || string.IsNullOrEmpty(step)) return null;
+
+        foreach (var known in Chains)
+            if (known.Id == id)
+            {
+                // Узел уже есть: у листа мог появиться адрес, это единственное, что меняется.
+                if (url is not null) known.Url = url;
+
+                return known;
+            }
+
+        var chain = new Chain { Id = id, TranslatorId = Id, ParentId = parentId, Step = step, Url = url };
+
+        Chains.Add(chain);
+
+        return chain;
+    }
+
+//    private int BaseRune { get; set; }
+
+    // Новый транслятор под алфавит. Рун-дерево строится здесь же - снаружи о нём знать незачем.
+    public static Translator For(string alphabet, string baseForwardUrl) => new()
+    {
+        Alphabet = alphabet,
+        BaseForwardUrl = baseForwardUrl,
+        Runes = ATRFrom(alphabet),
+
+        Name = string.Empty,
+        Description = string.Empty
+    };
+
+    public static Translator From(IAddTranslator<char> command) => new()
+    {
+        Alphabet = command.Alphabet,
+        BaseForwardUrl = command.BaseForwardUrl,
+        Runes = command.Runes,
+
+        Name = command.Name ?? string.Empty,
+        Description = command.Description ?? string.Empty
+//      BaseRune = BaseForRune(command.SizeRune + 1)
+    };
+
+    public static IArenaTreeRunes<char> ATRFrom(string alphabet)
+    {
+        var arena = new ArenaTreeRunes<char>();
+
+        foreach (char c in alphabet) arena.From(arena.Root!, c);
+
+        return arena;
+    }
+
+    public static readonly string[] Fragments =
+    [
+        "/todos/", "localhost:", "www.", ".com", ".org", ".net", ".ru", ".io", ".dev",
+        "/api/", "/v1/", "/r/", "/comments/", ".html", ".php", ".json",
+        "json", "html", "index", "search", "image", "video", "data", "list", "item",
+        "page", "user", "admin", "name", "true", "false", "?id=", "&id=", "/users/", "com"
+    ];
+
+    // Кладёт строку словаря по её глобальному адресу; уровень считает адрес и размеры развязок.
+    // Словарь - биекция текст<->адрес, поэтому дубль по любой из сторон отбиваем (вернём null).
+    //
+    // ancestor - финитный предок Infinite-строки, её адрес по дереву (его назначает рантайм). Пишется
+    // только у Infinite: у финитной адрес - сам id.
+    public VirtualFragment? Learn(int id, string text, int dfaSize, int pageCount, int? ancestor = null)
+    {
+        if (string.IsNullOrEmpty(text) || id < 0) return null;
+
+        foreach (var known in VirtualFragments) if (known.Id == id || known.Text == text) return null;
+
+        var level = VirtualFragment.LevelOf(id, dfaSize, pageCount);
+
+        var fragment = new VirtualFragment
+        {
+            Id = id,
+            TranslatorId = Id,
+            Text = text,
+            Level = level,
+            Jump = level == FragmentLevel.Infinite ? ancestor : null
+        };
+
+        VirtualFragments.Add(fragment);
+
+        return fragment;
+    }
+
+    // Запоминает собранный URL под его handle. Дубль по любой из сторон отбиваем: handle<->url
+    // такая же биекция, как адрес<->текст у словаря.
+    public Hyper? Remember(int handle, string url)
+    {
+        if (string.IsNullOrEmpty(url) || handle < 0) return null;
+
+        foreach (var known in Hypers) if (known.Id == handle || known.Url == url) return null;
+
+        var hyper = new Hyper { Id = handle, TranslatorId = Id, Url = url };
+
+        Hypers.Add(hyper);
+
+        return hyper;
+    }
+
+    public static int SymbolCount(string alphabet) => alphabet.Length + Fragments.Length;
+
+    public static string SymbolOf(string alphabet, int index) => index < alphabet.Length ? alphabet[index].ToString() : Fragments[index - alphabet.Length];
+
+    public const string UrlUnsafe = "#%[]/?";
+
+    public static string RuneAlphabetOf(string alphabet)
+    {
+        var runeAlphabet = new StringBuilder();
+
+        foreach (char c in alphabet) if (UrlUnsafe.IndexOf(c) < 0) runeAlphabet.Append(c);
+
+        return runeAlphabet.ToString();
+    }
+
+    public static long ValueOf(string rune, string runeAlphabet)
+    {
+        long value = 0;
+
+        foreach (char c in rune)
+        {
+            int digit = runeAlphabet.IndexOf(c);
+
+            if (digit < 0) throw new Exception($"domain error: rune symbol '{c}' is not in rune alphabet");
+
+            value = value * runeAlphabet.Length + digit;
+        }
+
+        return value;
+    }
+
+    public static int[] IndexesOf(string rune, string runeAlphabet, int runeSize, int symbols)
+    {
+        long value = ValueOf(rune, runeAlphabet);
+        var indexes = new int[runeSize];
+
+        for (int i = runeSize - 1; i >= 0; i--)
+        {
+            indexes[i] = (int)(value % symbols);
+            value /= symbols;
+        }
+
+        return indexes;
+    }
+
+    public static bool IsFragment(int index, string alphabet) => index >= alphabet.Length;
+
+    public static bool HasFragment(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    {
+        foreach (int index in IndexesOf(rune, runeAlphabet, runeSize, symbols)) if (IsFragment(index, alphabet)) return true;
+
+        return false;
+    }
+
+    public static readonly string[] DirectFragments = ["", "o", ".com/", "."];
+
+    public static string FragmentateUnrune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    {
+        int[] indexes = IndexesOf(rune, runeAlphabet, runeSize, symbols);
+        var parts = new string[runeSize];
+
+        for (int i = 0; i < runeSize; i++) parts[i] = SymbolOf(alphabet, indexes[i]);
+
+        return string.Concat(parts);
+    }
+
+    public static string DirectUnrune(string rune, string runeAlphabet, string alphabet, int chars)
+    {
+        long value = ValueOf(rune, runeAlphabet);
+
+        int piece = (int)(value % DirectFragments.Length);
+        value /= DirectFragments.Length;
+
+        var text = new char[chars];
+
+        for (int i = chars - 1; i >= 0; i--)
+        {
+            text[i] = alphabet[(int)(value % alphabet.Length)];
+            value /= alphabet.Length;
+        }
+
+        return new string(text) + DirectFragments[piece];
+    }
+
+    public const char Pad = ':';
+
+    public static string TrimPad(string text, int runeSize)
+    {
+        int cut = 0;
+
+        while (cut < runeSize && cut < text.Length && text[text.Length - 1 - cut] == Pad) cut++;
+
+        return text[..^cut];
+    }
+
+//    private static int BaseForRune(int runeSize)
+//    {
+//        if (runeSize < 1) return 0;
+//        if (runeSize == 1) return int.MaxValue;
+//
+//        int lo = 1, hi = 46340; // 46340^2 - предел даже для руны из двух разрядов
+//
+//        while (lo < hi)
+//        {
+//            int mid = lo + (hi - lo + 1) / 2;
+//
+//            if (FitsInInt(mid, runeSize)) lo = mid;
+//            else hi = mid - 1;
+//        }
+//
+//        return lo;
+//    }
+
+    public static int[] Compress(string input, string alphabet, int group, int baseRune)
+    {
+        if (string.IsNullOrEmpty(input) || group < 1) return [];
+
+        if (input.Length % group != 0) return [];
+
+        int n = input.Length / group;
+        int[] res = new int[n];
+
+        for (int b = 0; b < n; b++)
+        {
+            int acc = 0;
+
+            for (int k = 0; k < group; k++)
+            {
+                int idx = alphabet.IndexOf(input[b * group + k]);
+
+                if (idx < 0) return [];
+
+                acc = acc * baseRune + idx;
+            }
+
+            res[b] = acc;
+        }
+
+        return res;
+    }
+
+    public static string Decompress(int[] input, string alphabet, int groupSize, int baseRune)
+    {
+        if (input == null || input.Length == 0 || groupSize < 1) return "";
+
+        char[] block = new char[groupSize];
+        var text = new StringBuilder();
+
+        foreach (int id in input)
+        {
+            int rest = id;
+
+            for (int k = groupSize - 1; k >= 0; k--)
+            {
+                block[k] = alphabet[rest % baseRune];
+                rest /= baseRune;
+            }
+
+            text.Append(block);
+        }
+
+        return text.ToString();
+    }
+
+//    public static TypeCombine TypeFrom<TRune>(TRune symbol, string alphabet) where TRune : notnull => true switch
+//    {
+//        _ when IsFragmentate(RuneFrom(symbol), alphabet) => TypeCombine.Fragmentate,
+//        _ when IsDirect(RuneFrom(symbol), alphabet) => TypeCombine.Direct,
+//        _ => throw new Exception($"domain error: unknown type symbol '{symbol}'")
+//    };
+
+//    private static bool FitsInInt(int b, int runeSize)
+//    {
+//        long limit = (long)int.MaxValue + 1;
+//        long p = 1;
+//
+//        for (int i = 0; i < runeSize; i++)
+//        {
+//            p *= b;
+//
+//            if (p > limit) return false;
+//        }
+//
+//        return true;
+//    }
+
+//    private static char RuneFrom<TRune>(TRune symbol) where TRune : notnull => symbol switch
+//    {
+//        char c => c,
+//        int i => (char)i,
+//        _ => throw new Exception($"domain error: unsupported rune type '{typeof(TRune)}'")
+//    };
+//
+//    private static bool IsFragmentate(char symbol, string alphabet) => alphabet.IndexOf(symbol) < 0;
+//    private static bool IsDirect(int index, string alphabet) => index >= alphabet.Length;
+
+
+}

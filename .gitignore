@@ -30,43 +30,82 @@ node_modules/
 dist/
 
 ### Compiled publish output
-/publish/
+### По имени, а не по пути: каталог переезжал вместе со структурой, и 34 DLL висели в индексе
+### по старому пути. Внутри лежат и appsettings окружений - лишний путь к утечке.
+publish/
 /out/
 
 ## Operating system files
 Thumbs.db
 .DS_Store
 
-## Unity-проект (Unity/) - генерируемое не версионируем
-/Unity/[Ll]ibrary/
-/Unity/[Tt]emp/
-/Unity/[Oo]bj/
-/Unity/[Bb]uild*/
-/Unity/[Ll]ogs/
-/Unity/[Uu]ser[Ss]ettings/
-/Unity/ClientSimStorage/
-/Unity/*.sln
-/Unity/*.csproj
-/Unity/.vs/
+## Unity-проект (папка CombineQueries/) - генерируемое не версионируем
+/CombineQueries/[Ll]ibrary/
+/CombineQueries/[Tt]emp/
+/CombineQueries/[Oo]bj/
+/CombineQueries/[Bb]uild*/
+/CombineQueries/[Ll]ogs/
+/CombineQueries/[Uu]ser[Ss]ettings/
+/CombineQueries/ClientSimStorage/
+/CombineQueries/*.sln
+/CombineQueries/*.csproj
+/CombineQueries/.vs/
 
 ### Результат компиляции UdonSharp, ~107 МБ. Пересобирается при первом открытии.
-/Unity/Assets/SerializedUdonPrograms/
-/Unity/Assets/SerializedUdonPrograms.meta
+/CombineQueries/Assets/SerializedUdonPrograms/
+/CombineQueries/Assets/SerializedUdonPrograms.meta
 
 ### Пакеты ставит VCC по манифестам - в репо едут только они
-/Unity/Packages/*
-!/Unity/Packages/manifest.json
-!/Unity/Packages/vpm-manifest.json
-!/Unity/Packages/packages-lock.json
+/CombineQueries/Packages/*
+!/CombineQueries/Packages/manifest.json
+!/CombineQueries/Packages/vpm-manifest.json
+!/CombineQueries/Packages/packages-lock.json
 
 ### Настройки окружений - в них строки подключения и токены
-/VQueries/VQueries/appsettings.Alpha.json
-/VQueries/VQueries/appsettings.Production.json
+/CombineQueries/Src/Back/VQueries/appsettings.Alpha.json
+/CombineQueries/Src/Back/VQueries/appsettings.Production.json
+/CombineQueries/Src/Back/VQueries/appsettings.Prod.json
 
-### Окружение клиента - адреса и токен, в гит не едут (рядом лежат .example)
-/Udon/CombineQueries.dev.cs
-/Udon/CombineQueries.alpha.cs
-/Unity/Assets/CombineQueries/CombineQueries.dev.cs
-/Unity/Assets/CombineQueries/CombineQueries.dev.cs.meta
-/Unity/Assets/CombineQueries/CombineQueries.alpha.cs
-/Unity/Assets/CombineQueries/CombineQueries.alpha.cs.meta
+### Окружение клиента.
+###
+### Публичный CombineQueries.prod.cs ЕДЕТ в репо: он пустой, его и заполняют своим хостом.
+### Приватный - CombineQueries.prod.fly.cs, в нём настоящие адрес, токен и кодовое слово.
+### Дев-конфиг тоже приватный, рядом с ним лежит .example.
+###
+### Ловим ПО ИМЕНИ на любой глубине, а не по пути: пути ломались при каждом переносе папок,
+### и секреты дважды становились видны гиту. Шаблоны .example под маски не попадают.
+CombineQueries.dev.cs
+CombineQueries.alpha.cs
+CombineQueries.prod.fly.cs
+Config.*.cs
+Config.*.cs.meta
+*.dev.cs.meta
+*.alpha.cs.meta
+*.prod.fly.cs.meta
+appsettings.Alpha.json
+appsettings.Production.json
+appsettings.Prod.json
+appsettings.Release.json
+
+### Переключатель контура. Секретов не содержит, но привязан к ПРИВАТНОМУ CombineQueries.prod.fly.cs:
+### он ставит CQ_PROD + CQ_FLY, а под этой парой публичный CombineQueries.prod.cs выключается. У того,
+### кто взял тулзу, приватного файла нет - и проект просто не соберётся, класса окружения не окажется
+### вовсе. Поэтому переключатель личный и в репозиторий не едет.
+HostMode.cs
+HostMode.cs.meta
+
+### Бэкапы хоста: дамп прод-базы, код и собранное приложение на момент обновления. В базе токены
+### аккаунтов, поэтому только на диске.
+/CombineQueries/Src/Back/backups/
+
+### Архив: всё, что вышло из работы, но выбрасывать жалко. Лежит на диске, в репозиторий не едет.
+### Там и старые конфиги с настоящими токеном и кодовым словом - из-за них архив и утёк на dev.
+### Тильда в конце - чтобы Unity не импортировал старые .cs: клиент он видит через Assets/Junction/Front.
+/CombineQueries/Src/Front/Archive/
+/CombineQueries/Src/Front/Archive~/
+
+### Тулза - в CombineQueries/Src: клиент Udon в Src/Front, сервер в Src/Back. Unity компилирует только
+### внутри Assets/, поэтому клиент попадает туда junction'ом Assets/Junction/Front на Src/Front (сервер
+### Unity видеть не должен). После клонирования создать его заново:
+###   New-Item -ItemType Junction -Path CombineQueries\Assets\Junction\Front -Target CombineQueries\Src\Front
+/CombineQueries/Assets/Junction/Front
