@@ -10,20 +10,20 @@ is ClientSim, and ClientSim is editor-only. So the project *is* the deliverable.
 
 Everything below is local. Hosting is out of scope here.
 
-1. **Point the server at a database.** `Extension.Server/VQueries/appsettings.Development.json`,
+1. **Point the server at a database.** `Src/Back/VQueries/appsettings.Development.json`,
    key `ConnectionStrings:Context` — any empty PostgreSQL database will do.
 
 2. **Apply the migrations.** They create the schema *and* lay down the demo data: the sample
    dictionary and four seeded addresses the demo jumps to.
 
    ```bash
-   dotnet ef database update --project Extension.Server/VQueries
+   dotnet ef database update --project Src/Back/VQueries
    ```
 
 3. **Start the server** in the `Development` environment — the demo data is dev-only:
 
    ```bash
-   dotnet run --project Extension.Server/VQueries --urls http://localhost:5017
+   dotnet run --project Src/Back/VQueries --urls http://localhost:5017
    ```
 
 4. **Add this folder as a project** in VRChat Creator Companion → *Add Existing Project*. VCC
@@ -63,7 +63,7 @@ often show bodies that were fetched during the previous one.
 The status board reports errors, so read it first.
 
 - `NO CONNECTION TO SERVER (init)` — the server is not running, or `baseUrl` in
-  `Assets/Src/CombineQueries.cs` does not match where it listens.
+  `Src/Front/Core/CombineQueries.cs` does not match where it listens.
 - `Character outside the alphabet` — the url contains something `Alphabet` does not cover.
   Note it currently has **no uppercase letters**, so most real-world links are rejected.
 - Nothing at all in the console — the rig is not in the scene. Rebuild it from the Tools menu.
@@ -71,7 +71,7 @@ The status board reports errors, so read it first.
   an applied migration will not re-apply). Put them back:
 
   ```bash
-  dotnet run --project Extension.Server/VQueries.Dump -- seed
+  dotnet run --project Src/Back/VQueries.Dump -- seed
   ```
 
 ## Looking inside the database
@@ -80,9 +80,9 @@ The status board reports errors, so read it first.
 remembers" from "it is saved":
 
 ```bash
-dotnet run --project Extension.Server/VQueries.Dump            # everything
-dotnet run --project Extension.Server/VQueries.Dump -- chains  # what the demo jumps to
-dotnet run --project Extension.Server/VQueries.Dump -- seed    # restore the demo data
+dotnet run --project Src/Back/VQueries.Dump            # everything
+dotnet run --project Src/Back/VQueries.Dump -- chains  # what the demo jumps to
+dotnet run --project Src/Back/VQueries.Dump -- seed    # restore the demo data
 ```
 
 It reads the same connection string as the server (via `ASPNETCORE_ENVIRONMENT`, or
@@ -91,12 +91,22 @@ It reads the same connection string as the server (via `ASPNETCORE_ENVIRONMENT`,
 ## Layout
 
 ```
-Assets/Src/                     the client and the test driver
-Assets/Src/Editor/              the menu items that build the rig
+Src/                            the tool itself
+Src/Front/Core/                 the Udon client itself: CombineQueries.cs
+Src/Front/                      its configs, the host menu (Editor/) and the archive
+Src/Back/                       the server, its migrations and the dump tool
+Assets/                         the project of whoever uses the tool
+Assets/Junction/Front           junction to Src/Front - Unity compiles only inside Assets
+Assets/Samples/StaticSample/    Init and Send buttons, their boards and ClientUsageExample -
+                                calling the client from your own behaviour
+Assets/Samples/DynamicURLStepsSample/  the red Steps button and its board
+Assets/Samples/Editor/          the menu items that build the rig
 Assets/Scenes/                  the demo scene
-Extension.Server/               the server, its migrations and the dump tool
 ```
 
-The same client sources are mirrored at [`../Udon`](../Udon) as a drop-in folder for other
-projects, with its own README. **They are two copies kept in sync by hand** — edit one, copy to
-the other.
+The client lives once, in `Src/Front`. Unity sees it through the `Assets/Junction/Front` junction,
+which git does not keep - recreate it after cloning:
+
+```powershell
+New-Item -ItemType Junction -Path Assets\Junction\Front -Target Src\Front
+```
