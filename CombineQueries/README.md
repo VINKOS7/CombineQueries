@@ -26,29 +26,41 @@ Everything below is local. Hosting is out of scope here.
    dotnet run --project Src/Back/VQueries --urls http://localhost:5017
    ```
 
-4. **Add this folder as a project** in VRChat Creator Companion → *Add Existing Project*. VCC
+4. **Prepare the client.** Create the `Assets/Junction/Front` junction (see [Layout](#layout)) and
+   copy `Src/Front/CombineQueries.dev.cs.example` to `Src/Front/CombineQueries.dev.cs` — its
+   `BaseUrl` already points at `http://localhost:5017`.
+
+5. **Add this folder as a project** in VRChat Creator Companion → *Add Existing Project*. VCC
    resolves the packages from `Packages/vpm-manifest.json`; they are not committed.
 
-5. **Open it.** The first import takes a few minutes — UdonSharp recompiles the Udon programs,
+6. **Open it.** The first import takes a few minutes — UdonSharp recompiles the Udon programs,
    which are not committed either (they are build output, ~107 MB of it).
 
-6. **Open** `Assets/Scenes/VRCDefaultWorldScene.unity`, build the rig from
-   **Tools → CombineQueries → Dev rig visible**, and press Play.
+7. **Open** `Assets/Scenes/VRCDefaultWorldScene.unity`, build the rig from
+   **Tools → CombineQueries → Add test rig to current scene**, and press Play. The builder saves
+   the scene itself.
 
-   Rebuilding the rig is also how you apply a changed default: Unity stores component values in
-   the scene, so editing a default in code does nothing to a rig that already exists.
+   Running it again on a scene that already has the rig adds only what is missing and re-wires the
+   components; cubes and boards you moved or recoloured by hand stay as they are.
 
 ## What you should see
 
-Two cubes and a status board in front of the spawn point.
+Three cubes and five boards in front of the spawn point. In the hierarchy the client is the
+`CombineQueries` object at the root; the samples sit under `Samples`.
 
-- **Blue cube** — connect. Hands the server the alphabet and the sizes.
-- **Green cube** — runs the demo. Click again to stop it.
+- **Black cube** (`StaticSample`) — connect. Hands the server the alphabet and the sizes, and
+  connects every player in the instance; after that only the player who pressed it can press it
+  again.
+- **Green cube** (`StaticSample`) — runs the demo. It is locked while a run is going; press it after
+  `done` to run again.
+- **Red cube** (`DynamicURLStepsSample`) — counts the steps you walk and asks for
+  `dummyjson.com/products/<steps>` and the next five: a batch of four, then a batch of two.
 
-The board prints one line per step: how long it took, how many requests it cost, which road it
-took, and the coverage. Two things on that board are worth knowing up front:
+The status board prints one line per step: how long it took, how many requests it cost, which road
+it took, and the coverage. The side boards show what went out, what came back and the bodies.
+Two things are worth knowing up front:
 
-- **One request can claim up to four addresses.** Steps that ask for a batch spend a single
+- **One request can claim up to eight addresses.** Steps that ask for a batch spend a single
   request on the whole group, so the request count stops tracking the number of addresses.
 - **Bodies arrive late, and that is by design.** The server never blocks on the site it forwards
   to: it answers immediately and delivers each body with one of the *following* answers — you will
@@ -62,9 +74,13 @@ often show bodies that were fetched during the previous one.
 
 The status board reports errors, so read it first.
 
-- `NO CONNECTION TO SERVER (init)` — the server is not running, or `baseUrl` in
-  `Src/Front/Core/CombineQueries.cs` does not match where it listens.
-- `Character outside the alphabet` — the url contains something `Alphabet` does not cover.
+- `host unreachable (server not running?)` — the server is not running, or `BaseUrl` in
+  `Src/Front/CombineQueries.dev.cs` does not match where it listens.
+- `403` on connect — either `Token` in the same file is not an account the server knows (the
+  server says *token rejected*), or eight clients are already connected (*You should await when
+  some master instance be closed*); a place frees up after 10 minutes of silence, or restart the
+  server.
+- `character outside the alphabet` — the url contains something `Alphabet` does not cover.
   Note it currently has **no uppercase letters**, so most real-world links are rejected.
 - Nothing at all in the console — the rig is not in the scene. Rebuild it from the Tools menu.
 - Steps that should jump report no jump — the seeded addresses are gone (a reset clears them, and
@@ -97,8 +113,8 @@ Src/Front/                      its configs, the host menu (Editor/) and the arc
 Src/Back/                       the server, its migrations and the dump tool
 Assets/                         the project of whoever uses the tool
 Assets/Junction/Front           junction to Src/Front - Unity compiles only inside Assets
-Assets/Samples/StaticSample/    Init and Send buttons, their boards and ClientUsageExample -
-                                calling the client from your own behaviour
+Assets/Samples/StaticSample/    the black (connect) and green (demo) cubes, their boards and
+                                ClientUsageExample - calling the client from your own behaviour
 Assets/Samples/DynamicURLStepsSample/  the red Steps button and its board
 Assets/Samples/Editor/          the menu items that build the rig
 Assets/Scenes/                  the demo scene

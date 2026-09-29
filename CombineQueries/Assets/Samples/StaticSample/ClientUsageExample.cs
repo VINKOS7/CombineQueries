@@ -1,44 +1,54 @@
-﻿using UdonSharp;
+using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 
 // How to use CombineQueries from your own behaviour.
 //
 // The client is a VRChat url forwarder: a world can only load urls that were baked in at build
-// time, so an arbitrary url is spelled out to the server one chunk at a time and the server
-// fetches it for you.
+// time, so an arbitrary url is spelled out to the server piece by piece and the server fetches it
+// for you.
 //
-//   client.Init()                     once, on world start. Hands the alphabet to the server.
-//   client.Request(url)               any url, any time after Init. One send at a time.
-//   client.RequestDirect(url)         the same, but every symbol is a direct one - a plain letter,
-//                                     no fragment lookup - and the runes travel in base 59 through
-//                                     their own tail route. It also skips the handle cache, so it
-//                                     always pays full price: a yardstick for what the dictionary
-//                                     buys, never a way to send real traffic.
-//   client.Take()        what the target url answered, ready when the event fires.
-//   client.LastError                  empty on success, a message otherwise.
+//   client.Connect()        once, on world start. Hands the alphabet and the sizes to the server.
+//   client.Connected()      true once Connect went through.
+//   client.Require(url)     asks for a url and returns its KEY. Sends nothing by itself.
+//   client.Result(key)      the first call releases everything required so far, in one batch;
+//                           after that it only reads. Returns the body, or "" while it is on its way.
+//   client.Loaded(key)      whether the body arrived. Ask this, not Result == "": an empty body is
+//                           an answer too.
+//   client.Busy()           whether anything is in flight.
+//   client.LastError        empty on success, a message otherwise; client.Errors counts them.
 //
-// Init also fixes the scheme, http or https, and the scheme never travels: Request strips it and
-// the server puts it back. A url asking for the other scheme is refused. Request checks the url
-// before spending a single request on it - no host, no domain, a space, an uppercase letter or a
-// character outside the alphabet all land in LastError immediately. The alphabet is lowercase.
+// There is no completion event - poll Loaded:
 //
-// Completion arrives as an event, not as a return value - a send takes several round trips.
-// Set `target` to your behaviour and `onDoneEvent` to the method name (default "OnQueryDone"),
-// both on the CombineQueries component in the inspector. The event fires for Init as well, so
-// the first one you receive after startup is Init reporting back.
+//   private string key = "";
 //
-//   public void OnQueryDone()
+//   public void Fetch(string url)
+//   {
+//       key = queries.Require(url);
+//       queries.Result(key);                    // releases the batch
+//   }
+//
+//   void Update()
 //   {
 //       if (queries.LastError != "") { Debug.LogError(queries.LastError); return; }
 //
-//       string json = queries.Take();
+//       if (key == "" || !queries.Loaded(key)) return;
+//
+//       string json = queries.Result(key);
+//       key = "";
 //   }
 //
-// Calling Request while a send is in flight does nothing: the client holds one send buffer,
-// not a queue. Wait for the event before sending again. The first send of a url costs one
-// request per chunk plus the tail; every later send of the SAME url costs a single request,
-// because the server hands back a handle and the client remembers it.
+// Several Require calls followed by one Result go out together. Requiring the same url again
+// returns the same key.
+//
+// The scheme is fixed by the client (Scheme, https) and never travels: the client strips it and
+// the server puts it back. A url asking for the other scheme is refused. So is a url with no host
+// or domain, a space, an uppercase letter or a character outside the alphabet - before a single
+// request is spent on it. The alphabet is lowercase.
+//
+// The first send of a url costs one request per piece plus the closing one. The server learns
+// from it, and every later send of the SAME url costs a single request - often shared with up to
+// seven neighbours of the same family.
 public class ClientUsageExample : UdonSharpBehaviour
 {
     [SerializeField] private CombineQueries queries;

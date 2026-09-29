@@ -4,10 +4,11 @@ VRChat worlds can only fetch strings from `VRCUrl` objects that were **created a
 Building a url at runtime is impossible, so a world can never talk to a server about anything the
 author did not hardcode.
 
-This client works around that. It keeps a pool of pre-generated `VRCUrl`s, each one addressing a
-small chunk of text, and sends an arbitrary url to the server one chunk at a time. The server
-reassembles it, forwards the request, and hands back a **handle** — so the *second* time the same
-url is sent, the whole chain collapses into a single request.
+This client works around that. It bakes pools of `VRCUrl`s — each one names a small piece of text —
+and spells an arbitrary url out to the server one piece at a time. The server reassembles it,
+forwards the request and hands the body back. Along the way it learns: common parts of urls become
+dictionary fragments that travel as one piece, and every forwarded url is remembered as a
+**hyper**, so the next time that url — and up to seven of its neighbours — costs a single request.
 
 Needs the matching server: [`CombineQueries/Src/Back`](CombineQueries/Src/Back).
 
@@ -15,82 +16,180 @@ Needs the matching server: [`CombineQueries/Src/Back`](CombineQueries/Src/Back).
 
 ## Use
 
+The whole API is two calls: `Require` asks for a url, `Result` reads what came back.
+
 ```csharp
 [SerializeField] private CombineQueries client;
+private string key = "";
 
-client.Init();                                  // once, on world start
-client.Send("https://dummyjson.com/todos/1");   // any url, any time
+void Start() => client.Connect();                // once; client.Connected() turns true when done
 
-// Completion arrives as an event - set `target` and `onDoneEvent` in the inspector
-public void OnQueryDone()
+public void Fetch()
+{
+    key = client.Require("https://dummyjson.com/todos/1");  // queues the url, returns its key
+    client.Result(key);                                      // releases everything queued, in one pass
+}
+
+void Update()
 {
     if (client.LastError != "") { Debug.LogError(client.LastError); return; }
 
-    string json = client.TakeForwardedBody();   // what the target replied
+    if (key == "" || !client.Loaded(key)) return;           // still on its way
+
+    string json = client.Result(key);                        // what the target replied
+    key = "";
 }
 ```
 
-`Send` picks the fast path by itself. There is no mode to set.
+- `Require` sends nothing by itself. Several `Require` calls followed by one `Result` go out as one
+  batch; the first `Result` releases it, every later one only reads.
+- `Result` returns `""` both while the body is on its way and when the target answered with an
+  empty body. Ask `Loaded(key)` (or `StatusOf(key)`) to tell them apart.
+- There is no completion event: poll `Loaded`. `Busy()` says whether anything is in flight.
+- Refusals land in `LastError`, and `Errors` counts them — compare the counter, not the text: the
+  same failure twice reads the same.
+- `Remember()` connects without dropping what the client already knows — for a player who joins an
+  instance that is already connected.
+
+The client picks the cheapest road by itself. There is no mode to set.
 
 ## Speed
 
-Cost is not bandwidth, it is **VRChat's ~5 s cooldown paid once per request**. A full send costs one
-request per chunk; a cached url costs one request total.
+Cost is not bandwidth, it is **VRChat's ~5 s cooldown paid once per request**. So the only number
+that matters is how many requests a url takes, and that depends on what the server already knows.
 
-Two things cut the request count, and they stack.
+A *symbol* is one letter or one of 35 common url parts (roots) the server hands over on connect. A
+*rune* is three symbols; one request carries one rune, spelled on the wire as four letters.
 
-**Base compression.** A *symbol* is one letter or one whole fragment from a static table baked into
-both sides — `https://`, `.com`, `/api/` and so on. Chunks carry symbols, not characters, so common
-url parts collapse. It needs no warm-up and no synchronisation: the table never travels.
+| the server knows | road | requests |
+|---|---|---|
+| the whole url | `/h` — hyper | **1**, and the same answer covers up to 8 urls of the same family |
+| the url is one dictionary fragment | `/sf` | 1 |
+| a fragment plus one or two letters | pair in the first `/c` | 1 |
+| nothing, but the url is 3 symbols or less | first `/c` or `/t` | 1 |
+| parts of it | fragments in `/c`, runes between them | 1 per fragment (2 for a deep one), 1 per rune, plus the closing `/t` unless a fragment closes it |
+| nothing at all | runes only | ⌊(n − 2) / 3⌋ + 2 for n symbols |
 
-| url | characters | symbols | requests before | after |
-|---|---|---|---|---|
-| `https://dummyjson.com/todos/1` | 29 | 16 | 16 | **9** |
-| `https://jsonplaceholder.typicode.com/todos/2` | 44 | 32 | 23 | **17** |
-| `http://example.com/` | 19 | 10 | 11 | **6** |
-
-**Chunk width.** How many symbols ride in one request. The pool is `94^width`, so each step
-multiplies memory by 94 — this is the expensive lever.
-
-| symbols per request | requests for the 29-char url | time | pool | pool memory |
-|---|---|---|---|---|
-| 2 | 9 | ~45 s | 8 836 | ~1 MB |
-| 3 | 7 | ~35 s | 830 584 | ~90 MB |
-| 4 | 5 | ~25 s | 78 074 896 | ~8.5 GB |
-| **cached** | **1** | **~5 s** | 4 096 | ~0.5 MB |
-
-The handle is still the real win: one request regardless of url length, for every send after the
-first. Base compression makes that first send roughly twice as cheap; the handle makes every later
-one flat.
-
-LZW and friends do not help here. On a 29-character string their dictionary never warms, and the
-byte output has to be re-encoded into a 59-symbol alphabet (8 bits against 5.88) — measured, it
-comes out at 21 requests against 16. Compression that pays on this channel has to be dictionary
-based and static.
+A url is usually sent the expensive way exactly once. The server learns fragments (6 characters and
+longer) from what it forwards and stores the url as a hyper, and the client gets the addresses back
+with the next answers.
 
 ## Install
 
-1. Copy `CombineQueries.cs` (and, if you want the demo, `CombineQueriesTest.cs` and `ClientUsageExample.cs`)
-   into your project under `Assets/`.
-2. Copy `Editor/TestSceneBuilder.cs` into an `Editor` folder — **the folder name matters**. Unity
-   decides what is editor-only by that magic name, and this script uses `UnityEditor`. Put it
-   anywhere else and your world will fail to build.
-3. Let Unity compile. UdonSharp creates the program assets on first use.
-4. Put `CombineQueries` on a GameObject and point `baseUrl` at your server.
+1. Clone the repo and add `CombineQueries/` as a project in VRChat Creator Companion
+   (*Add Existing Project*). VCC resolves the packages from `Packages/vpm-manifest.json`.
+2. The client lives in `CombineQueries/Src/Front`, outside `Assets` — Unity compiles only inside
+   `Assets`, so link it in with a junction (git does not keep it):
 
-Fastest way to see it work: **Tools → CombineQueries → Add test rig to current scene**, then
-`Ctrl+S`, then Play. It drops two clickable cubes and a status canvas in front of the spawn.
-Blue cube runs `Init`, green one starts the cycling demo.
+   ```powershell
+   New-Item -ItemType Junction -Path CombineQueries\Assets\Junction\Front -Target CombineQueries\Src\Front
+   ```
 
-## Use
+3. Copy `Src/Front/CombineQueries.dev.cs.example` to `Src/Front/CombineQueries.dev.cs` (it is
+   ignored by git) and point `BaseUrl` at your server.
+4. Start the server — see [`CombineQueries/README.md`](CombineQueries/README.md).
+5. **Tools → CombineQueries → Add test rig to current scene**, then Play. The black cube connects,
+   the green one runs the demo, the red one sends the steps you walked.
+
+In your own world, put the `CombineQueries` component on one GameObject and reference it from your
+behaviours — the client is shared by everyone who asks.
+
+## Configuration
+
+**Where the server is** lives in `CombineQueriesEnvironment`: `Src/Front/CombineQueries.dev.cs` for
+development, `Src/Front/CombineQueries.prod.cs` for a published world — the second one switches on
+with the `CQ_PROD` scripting define (Project Settings → Player → Scripting Define Symbols).
+
+| constant | meaning |
+|---|---|
+| `BaseUrl` | where the server listens; baked into every url of every pool |
+| `Token` | the account token the server accepts; the migrations seed the one in the example file |
+| `MemHypers` | `"on"` — the server stores every new hyper in its database; keep it on |
+| `RequireCode`, `Codeword` | the codeword gate; off unless the server sets `Auth:Codeword` |
+
+**The structure** lives in `const` fields at the top of `Core/CombineQueries.cs`, because `VRCUrl`
+only accepts constant expressions: `Alphabet`, `RuneAlphabet`, `RuneSize` (3), `dfaSize` (1024),
+`pageCount` (64), `hopCount` (64), `MaxChunks` (256), `Scheme`. The client sends them in
+`/connect`, so the server follows. Changing any of them rebakes the pools — rebuild the world.
+
+### The one thing that will silently break everything
+
+`RuneAlphabet` **must be exactly** `Alphabet` with `#`, `%`, `[`, `]`, `/` and `?` removed — the
+server derives its own copy that way and never receives it. `Connect` checks the length, but not the
+order: swap two characters and every rune decodes to a different string. There is no error — the
+server simply forwards a wrong url.
+
+## Pools
+
+Everything below is baked into `VRCUrl`s in field initializers, so it costs world **load** time, not
+frame time. Each field of a url multiplies its pool; separate routes add up.
+
+| pool | route | urls |
+|---|---|---|
+| runes: 94³ | `/c` | 830 584 |
+| fragments: 1024 × 64 × 8 signs | `/c` | 524 288 |
+| deep-fragment hops: 64 × 8 | `/c` | 512 |
+| fragment + one letter: 2048 × 59 | `/c` | 120 832 |
+| fragment + two letters: 64 × 59² | `/c` | 222 784 |
+| closing tails: (1 + 94 + 94²) × 2 × 8 | `/t` | 142 896 |
+| closing fragments: 1024 × 2 × 8 | `/sf` | 16 384 |
+| hypers: 2048 × 8 × 8 | `/h` | 131 072 |
+| heads: 2048 × 8 × 2 × 8 | `/hd` | 262 144 |
+| direct tails: 59³ | `/d` | 205 379 |
+| credit, codeword | `/tc`, `/k` | 44 |
+| **total** | | **≈ 2.46 million** |
+
+## Protocol
+
+| request | purpose |
+|---|---|
+| `/connect?alphabet=…&runeSize=…&dfaSize=…&token=…&…` | hands the server the alphabet and the sizes; the answer brings roots, the dictionary, known hypers and this client's sign values |
+| `/c/{rune}/{id}/{page}/{hop}/{q}/{sign?}` | one piece of a url: `q = 0` a rune, `q = 1` a dictionary fragment (`hop > 0` — a deep one), `q = 2` a fragment plus one or two letters |
+| `/t/{rune}/{merge}/{sign}` | the closing 0–2 symbols; the server assembles and forwards |
+| `/sf/{id}/{merge}/{sign}` | closes with a fragment, or is the whole url by itself |
+| `/h/{jump}/{count}/{sign}` | known urls by hyper, up to 8 of one family |
+| `/hd/{fragment}/{base}/{complete}/{sign}` | a known start plus a fragment |
+| `/tc/{sign}` | collects bodies still owed |
+| `/k/{letter}`, `/kf` | the codeword, letter by letter, then the check |
+
+The alphabet is **percent-encoded** in `/connect` and nowhere else. Runes are spelled in
+`RuneAlphabet`, which has no `/`, `?`, `#`, `%`, `[` or `]`, so they are safe as path segments.
+
+The first `/c` of a url ends its rune with `:` when more pieces follow. Without the mark the url is
+complete: the server forwards at once and the body comes back in the same answer. Otherwise bodies
+ride along with the following answers — the server never blocks on the site it forwards to — and
+`/tc` picks up whatever is left.
+
+Signs keep clients apart. Each connected client gets its own sign values, fragments and closing
+requests carry them, and the server assembles each client's url in its own buffer.
+
+## Limits
+
+- **Lowercase only.** `Alphabet` has 59 characters and no uppercase letters; a url outside it is
+  refused before a single request is spent. The scheme is fixed by `Scheme`, and a url asking for
+  the other one is refused too.
+- **Length.** A url takes at most `MaxChunks` = 256 pieces, which is 766 characters spelled in plain
+  letters (more with fragments). The server stores hypers up to 2048 characters and fragments up to
+  512.
+- **Bodies up to 1 MB** — the server does not read further.
+- **Eight clients per server.** The ninth `/connect` gets 403 *"You should await when some master
+  instance be closed"*. A place frees up when a client stays silent for 10 minutes.
+- **A server restart** keeps the dictionary and the hypers — they are in the database — but every
+  client has to connect again.
+- **Direct mode is off.** `RequireDirect` and `RequestDirect` spell the url in plain letters over
+  `/d`, and that route is disabled on the server: they end in 404. The `/d` pool is still baked.
+
+## Legacy
+
+Earlier versions reported completion through an event. That model is gone: the client no longer
+has `Init`, `Send`, `target`, `onDoneEvent`, `TakeResult` or `TakeForwardedBody`, and nothing calls
+`OnQueryDone` any more. Code written against it looked like this:
 
 ```csharp
-[SerializeField] private CombineQueries client;
-
 client.Init();                       // once, on world start
-client.Send("https://example.com");  // picks the fast path automatically
+client.Send("https://example.com");  // one url at a time
 
-// completion arrives as an event - set `target` and `onDoneEvent` in the inspector
+// completion arrived as an event - `target` and `onDoneEvent` were set in the inspector
 public void OnQueryDone()
 {
     if (client.LastError != "") { Debug.LogError(client.LastError); return; }
@@ -99,71 +198,6 @@ public void OnQueryDone()
 }
 ```
 
-`Send` decides for itself whether to use the full chain or the single-request path. There is no
-mode switch to get wrong.
-
-## Configuration
-
-Everything lives in `const` fields at the top of `CombineQueries.cs`, because `VRCUrl` only accepts
-constant expressions.
-
-| constant | meaning |
-|---|---|
-| `baseUrl` | where the server listens |
-| `Alphabet` | characters the forwarded urls may contain |
-| `WireAlphabet` | characters the request itself may use — `Alphabet` minus `#%[]` |
-| `RuneSize` | source characters per request |
-| `WireSize` | wire characters per request |
-| `MaxChunks` | url length ceiling (`MaxChunks × RuneSize` characters) |
-| `MaxHandles` | how many urls can be cached |
-
-### The one thing that will silently break everything
-
-`WireAlphabet` **must be exactly** `Alphabet` with `#`, `%`, `[` and `]` removed — the server
-derives its own copy that way and never sends it over the wire. One extra or missing character
-shifts the numeric base, and every chunk then decodes to a different string. There is no error:
-the server simply forwards a wrong url. Count the characters when you touch either constant.
-
-### Picking RuneSize
-
-`RuneSize` is the whole performance dial, and it is quadratic in memory:
-
-| RuneSize | pool size | requests for a 30-char url | pool memory |
-|---|---|---|---|
-| 2 | 3 481 | 16 | ~0.4 MB |
-| 3 | 205 379 | 11 | ~23 MB |
-| 4 | 12 117 361 | 8 | ~1.4 GB |
-
-The pool is built in a field initializer, so it costs world **load** time, not frame time. 4 is not
-a real option. This repo ships `RuneSize = 2` because building 205 379 `VRCUrl` objects on
-interpreted Udon noticeably stalls startup; raise it to 3 (and `WireSize` to 4) once you have
-measured that cost on your target platform. The server reads the width from `/init` and adapts.
-
-## Protocol
-
-| request | purpose |
-|---|---|
-| `/init?alphabet=…&baseQuery=…&runeSize=…` | hand the server the alphabet and chunk width |
-| `/n?c=K*runeSize+pad` | declare chunk count and padding as one number |
-| `/m?r=<wire>` | one chunk; on the last one the server assembles, forwards, returns a handle |
-| `/h?r=<handle>` | a known url in a single request |
-
-The alphabet is **percent-encoded** in `/init` and nowhere else. It has to be: `#` would start a
-fragment and truncate it, `%` would start an escape sequence, `&` and `=` would be read as query
-separators. Chunks, by contrast, are sent raw — the server reads the query string without splitting
-it into key/value pairs, which is why `/`, `?`, `&` and `=` travel fine inside a chunk.
-
-There is no explicit "flush" step. The server knows how many chunks to expect from `/n`, so it
-finishes on its own — and the same number lets it notice a chunk that never arrived, instead of
-silently forwarding a url with a hole in it.
-
-## Limits
-
-- **One send at a time.** The client holds a single send buffer, not a queue. `IsBusy()` is there to
-  be checked; starting a new send mid-flight corrupts the chunk sequence.
-- **One client per server.** The server keeps assembly state globally, so two players sending at
-  once will interleave their chunks. Fine for a single-user test rig, not for a populated world.
-- **Handles die with the server.** After a restart the server answers `known: false`, the client
-  drops its cache and resends in full. That path is implemented; it is not free, just not fatal.
-- **Handles are never reused**, so a stale handle can only be unknown — it can never resolve to
-  somebody else's url.
+Port it to [Use](#use): `Init` → `Connect`, `Send` → `Require` + `Result`, and the event → polling
+`Loaded(key)`. `Request`, `RequestDirect` and `Take` are still in the client as leftovers of the
+single-url path; new code should not use them.

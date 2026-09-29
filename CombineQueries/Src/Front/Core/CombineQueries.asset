@@ -769,7 +769,7 @@ MonoBehaviour:
       Data: 34|UnityEngine.HeaderAttribute, UnityEngine.CoreModule
     - Name: header
       Entry: 1
-      Data: Codeword typed in-world before Init/Remember
+      Data: Codeword typed in-world before Connect/Remember
     - Name: 
       Entry: 8
       Data: 
