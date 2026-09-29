@@ -206,7 +206,7 @@ public class CombineQueriesTest : UdonSharpBehaviour
 
             // Чёрный подключает ИНСТАНС, а не одного нажавшего: событие уходит всем, и каждый
             // подключает свой клиент у себя. Иначе у остальных клиент не подключён, и их кубы
-            // отвечают «Init has not run», хотя жать их никто не запрещал.
+            // отвечают «not connected», хотя жать их никто не запрещал.
             SendCustomNetworkEvent(NetworkEventTarget.All, nameof(Linked));
             return;
         }
