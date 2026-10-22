@@ -52,6 +52,9 @@ public interface ISpeech
 
     bool ResetHypers { get; }
 
+    // Самый длинный url, который хайпером ложится в базу. Решает клиент параметром lengthBatch.
+    int LengthBatch { get; }
+
     string DirectRunes { get; }
 
     string DirectUnruned { get; }

@@ -93,8 +93,7 @@ namespace CombineQueries.Api.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Url")
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)");
+                        .HasColumnType("text");
 
                     b.HasKey("TranslatorId", "Id");
 
@@ -119,12 +118,16 @@ namespace CombineQueries.Api.Migrations
 
                     b.Property<string>("Url")
                         .IsRequired()
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)");
+                        .HasColumnType("text");
+
+                    b.Property<string>("UrlHash")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("text")
+                        .HasComputedColumnSql("md5(\"Url\")", true);
 
                     b.HasKey("TranslatorId", "Id");
 
-                    b.HasIndex("TranslatorId", "Url")
+                    b.HasIndex("TranslatorId", "UrlHash")
                         .IsUnique();
 
                     b.ToTable("Hypers", (string)null);

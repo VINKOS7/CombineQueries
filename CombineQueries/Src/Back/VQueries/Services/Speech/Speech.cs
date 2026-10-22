@@ -23,6 +23,11 @@ public class Speech : ISpeech
     public string BaseForwardUrl { get; private set; } = "";
 
     public bool ResetHypers { get; private set; }
+
+    // Самый длинный url, который хайпером ложится в базу. Решает клиент параметром lengthBatch в connect,
+    // 0 там значит «полная строка» - здесь это int.MaxValue.
+    public int LengthBatch { get; private set; } = Hyper.LengthBatchDefault;
+
     public string DirectRunes { get; set; } = string.Empty;
     public string DirectUnruned { get; set; } = string.Empty;
     public bool Authorized { get; private set; }
@@ -698,6 +703,7 @@ public class Speech : ISpeech
         Hypers = command.Hypers;
         BaseForwardUrl = command.BaseForwardUrl;
         ResetHypers = command.ResetHypers;
+        LengthBatch = command.LengthBatch < 0 ? Hyper.LengthBatchDefault : command.LengthBatch == 0 ? int.MaxValue : command.LengthBatch;
 
         // Незавершённую сборку чистить незачем: OpenSigns выше завёл клиенту новый поток, а сборка
         // у потока своя и рождается пустой. Хайперы и фрагменты НЕ трогаем: при реконнекте они

@@ -141,10 +141,19 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeak spe
 
             if (translator is null) return;
 
+            // Url длиннее lengthBatch в базу не идёт: в памяти он хайпер до рестарта, но расти базе
+            // им незачем. Цепочку забираем и выбрасываем, иначе она уехала бы со следующим хвостом.
+            //
             // Хайперы - и плоский handle -> url, и узлы дерева - пишутся только при hypers=on.
             // С off накопленное читается, но не пополняется: очередь узлов забираем и выбрасываем,
             // иначе при включении в БД уехала бы вся история этого запуска разом.
-            if (speech.Hypers)
+            if (url.Length > speech.LengthBatch)
+            {
+                logger.LogWarning("tail: url is {Length} chars, over lengthBatch {LengthBatch} - hyper kept in memory only", url.Length, speech.LengthBatch);
+
+                speech.TakeChains();
+            }
+            else if (speech.Hypers)
             {
                 translator.Remember(handle, url);
 

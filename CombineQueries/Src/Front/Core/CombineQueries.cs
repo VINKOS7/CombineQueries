@@ -55,6 +55,9 @@ public class CombineQueries : UdonSharpBehaviour
     private const string DfaSizeStr = "1024";
     private const string PageCountStr = "64";
     private const string HopCountStr = "64";
+    // Самый длинный url, который сервер запоминает хайпером в базе. Длиннее - работает до
+    // рестарта сервера, потом едет сборкой заново. "0" - полная строка, без потолка.
+    private const string LengthBatchStr = "2048";
 
     // ---- Алфавиты ----
 
@@ -86,7 +89,7 @@ public class CombineQueries : UdonSharpBehaviour
     private const int RuneSize = 3;
     private const int RuneWidth = 4;
     private const int NumSize = 4;
-    private const int MaxChunks = 256;
+    private const int MaxChunks = 1024;
     // Потолок номера прыжка. Половина прежних 4096 - это плата за вдвое широкое окно: пул стоит
     // MaxJumps * RangeMax * подписи, и обмен держит его прежним. На проде самый большой номер 1090,
     // запас двойной. Номер выше потолка не ломается, а теряет прыжок: такой адрес едет сборкой.
@@ -137,8 +140,8 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] Pair2Pool = Pair2PoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, Pair2Limit, dfaSize);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
-    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
-    private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
+    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
+    private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
 
     // ---- Подключение ----
 

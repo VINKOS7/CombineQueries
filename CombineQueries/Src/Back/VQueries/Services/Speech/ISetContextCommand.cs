@@ -21,6 +21,9 @@ public interface ISetContextCommand<TRunes>
 
     // Забыть накопленные хайперы при подключении. Уважается только в Development.
     bool ResetHypers { get; init; }
+
+    // Самый длинный url, который хайпером ложится в базу.
+    int LengthBatch { get; init; }
 }
 
 public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
@@ -34,4 +37,5 @@ public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
     public bool Hypers { get; init; } = true;
     public string BaseForwardUrl { get; init; } = "";
     public bool ResetHypers { get; init; }
+    public int LengthBatch { get; init; } = Hyper.LengthBatchDefault;
 }
