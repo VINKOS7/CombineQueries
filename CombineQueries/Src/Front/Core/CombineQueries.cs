@@ -30,7 +30,7 @@ public class CombineQueries : UdonSharpBehaviour
     public int LastPending;
     public int SeedJumps;
 
-    [Header("Codeword typed in-world before Init/Remember")]
+    [Header("Codeword typed in-world before Connect/Remember")]
     public string codeword = "";
     // Чей это набор. Клиент один на весь мир, а просящих в нём несколько, и в общей консоли их
     // строки ложатся вперемешку. Метку ставит сам просящий перед Result, она садится в запись
@@ -540,7 +540,7 @@ public class CombineQueries : UdonSharpBehaviour
     {
         string key = PayloadOf(url);
 
-        if (key == "") { Fail("Init fixed the scheme to " + Scheme + ", this url asks for another one"); return ""; }
+        if (key == "") { Fail("the client is built for " + Scheme + ", this url asks for another scheme"); return ""; }
 
         int at = SlotOf(key);
 
@@ -665,7 +665,7 @@ public class CombineQueries : UdonSharpBehaviour
         // пока отказ не разобрали. Набранное при этом не теряется - уедет первым же Result после connect.
         if (!connectOk)
         {
-            if (LastError == "") Fail("Init has not run - call Init first, then Require");
+            if (LastError == "") Fail("not connected - call Connect first, then Require");
 
             return;
         }
@@ -894,7 +894,7 @@ public class CombineQueries : UdonSharpBehaviour
     {
         if (string.IsNullOrEmpty(payload)) return;
 
-        if (!connectOk) { Fail("Init has not run - call Init first, then Require"); return; }
+        if (!connectOk) { Fail("not connected - call Connect first, then Require"); return; }
 
         fragments = withFragments;
 
