@@ -59,7 +59,9 @@ Cost is not bandwidth, it is **VRChat's ~5 s cooldown paid once per request**. S
 that matters is how many requests a url takes, and that depends on what the server already knows.
 
 A *symbol* is one letter or one of 35 common url parts (roots) the server hands over on connect. A
-*rune* is three symbols; one request carries one rune, spelled on the wire as four letters.
+*rune* is the four changing letters in a request's path, spelled in `RuneAlphabet`. Its **payload**
+is three symbols (`RuneSize`), or a dictionary fragment of any learned length, or a fragment plus
+one or two letters. One request carries one rune, and a url can be spelled entirely in fragments.
 
 | the server knows | road | requests |
 |---|---|---|
@@ -144,7 +146,7 @@ frame time. Each field of a url multiplies its pool; separate routes add up.
 | request | purpose |
 |---|---|
 | `/connect?alphabet=…&runeSize=…&dfaSize=…&token=…&…` | hands the server the alphabet and the sizes; the answer brings roots, the dictionary, known hypers and this client's sign values |
-| `/c/{rune}/{id}/{page}/{hop}/{q}/{sign?}` | one piece of a url: `q = 0` a rune, `q = 1` a dictionary fragment (`hop > 0` — a deep one), `q = 2` a fragment plus one or two letters |
+| `/c/{rune}/{id}/{page}/{hop}/{q}/{sign?}` | one piece of a url, `{rune}` is four letters: `q = 0` three symbols, `q = 1` a dictionary fragment (`hop > 0` — a deep one), `q = 2` a fragment plus one or two letters |
 | `/t/{rune}/{merge}/{sign}` | the closing 0–2 symbols; the server assembles and forwards |
 | `/sf/{id}/{merge}/{sign}` | closes with a fragment, or is the whole url by itself |
 | `/h/{jump}/{count}/{sign}` | known urls by hyper, up to 8 of one family |
