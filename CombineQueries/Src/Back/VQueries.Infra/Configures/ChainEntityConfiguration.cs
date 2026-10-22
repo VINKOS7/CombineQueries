@@ -21,7 +21,6 @@ public class ChainEntityConfiguration : IEntityTypeConfiguration<Chain>
         builder.Property(c => c.Id).ValueGeneratedNever();
 
         builder.Property(c => c.Step).IsRequired().HasMaxLength(Chain.StepMax);
-        builder.Property(c => c.Url).HasMaxLength(Chain.UrlMax);
 
         // Дети одного родителя: по нему дерево и обходится при восстановлении.
         builder.HasIndex(c => new { c.TranslatorId, c.ParentId });

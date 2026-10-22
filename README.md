@@ -111,8 +111,11 @@ with the `CQ_PROD` scripting define (Project Settings → Player → Scripting D
 
 **The structure** lives in `const` fields at the top of `Core/CombineQueries.cs`, because `VRCUrl`
 only accepts constant expressions: `Alphabet`, `RuneAlphabet`, `RuneSize` (3), `dfaSize` (1024),
-`pageCount` (64), `hopCount` (64), `MaxChunks` (256), `Scheme`. The client sends them in
+`pageCount` (64), `hopCount` (64), `MaxChunks` (1024), `Scheme`. The client sends them in
 `/connect`, so the server follows. Changing any of them rebakes the pools — rebuild the world.
+`LengthBatchStr` (2048) also goes to `/connect` as `lengthBatch`: the longest url the server stores as
+a hyper in its database; `"0"` stores the full string, whatever its length. It bakes nothing, so
+changing it needs no rebuild of the pools.
 
 ### The one thing that will silently break everything
 
@@ -145,7 +148,7 @@ frame time. Each field of a url multiplies its pool; separate routes add up.
 
 | request | purpose |
 |---|---|
-| `/connect?alphabet=…&runeSize=…&dfaSize=…&token=…&…` | hands the server the alphabet and the sizes; the answer brings roots, the dictionary, known hypers and this client's sign values |
+| `/connect?alphabet=…&runeSize=…&dfaSize=…&lengthBatch=…&token=…&…` | hands the server the alphabet and the sizes; the answer brings roots, the dictionary, known hypers and this client's sign values |
 | `/c/{rune}/{id}/{page}/{hop}/{q}/{sign?}` | one piece of a url, `{rune}` is four letters: `q = 0` three symbols, `q = 1` a dictionary fragment (`hop > 0` — a deep one), `q = 2` a fragment plus one or two letters |
 | `/t/{rune}/{merge}/{sign}` | the closing 0–2 symbols; the server assembles and forwards |
 | `/sf/{id}/{merge}/{sign}` | closes with a fragment, or is the whole url by itself |
@@ -170,9 +173,10 @@ requests carry them, and the server assembles each client's url in its own buffe
 - **Lowercase only.** `Alphabet` has 59 characters and no uppercase letters; a url outside it is
   refused before a single request is spent. The scheme is fixed by `Scheme`, and a url asking for
   the other one is refused too.
-- **Length.** A url takes at most `MaxChunks` = 256 pieces, which is 766 characters spelled in plain
-  letters (more with fragments). The server stores hypers up to 2048 characters and fragments up to
-  512.
+- **Length.** A url takes at most `MaxChunks` = 1024 pieces, which is 3070 characters spelled in plain
+  letters (more with fragments). The server stores hypers up to `lengthBatch` characters (2048 by
+  default) and fragments up to 512. A longer url is still forwarded and works as a hyper until the
+  server restarts, but it is not written to the database.
 - **Bodies up to 1 MB** — the server does not read further.
 - **Eight clients per server.** The ninth `/connect` gets 403 *"You should await when some master
   instance be closed"*. A place frees up when a client stays silent for 10 minutes.

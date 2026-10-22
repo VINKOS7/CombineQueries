@@ -23,7 +23,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
     private static readonly int DfaSize = int.Parse(Environment.GetEnvironmentVariable("CQ_DFA") ?? "1024");
     private static readonly int PageCount = int.Parse(Environment.GetEnvironmentVariable("CQ_PAGES") ?? "64");
     private const int HopCount = 64;
-    private const int MaxChunks = 256;
+    private const int MaxChunks = 1024;
     private const int MaxJumps = 4096;
     private const int HeadLimit = 2048;
     private const int HeadBases = 8;

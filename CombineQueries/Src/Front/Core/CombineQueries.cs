@@ -42,6 +42,12 @@ public class CombineQueries : UdonSharpBehaviour
     public string LastError = "";
     public string LastUrl = "";
 
+    // Сколько прыжков (хайперов) клиент помнит в кольце. Конструкторов у Udon нет, поэтому это поле
+    // инспектора: задаётся до Play и снаружи только читается. Кольцо заводится по нему на Connect.
+    [Header("Hyper ring: remembered jumps, set before Play")]
+    [SerializeField] private int hyperRingSize = 10240;
+    public int HyperRingSize => hyperRingSize;
+
     private const bool rememberInfinite = true;
     private const bool RequireCode = CombineQueriesEnvironment.RequireCode;
 
@@ -55,6 +61,9 @@ public class CombineQueries : UdonSharpBehaviour
     private const string DfaSizeStr = "1024";
     private const string PageCountStr = "64";
     private const string HopCountStr = "64";
+    // Самый длинный url, который сервер запоминает хайпером в базе. Длиннее - работает до
+    // рестарта сервера, потом едет сборкой заново. "0" - полная строка, без потолка.
+    private const string LengthBatchStr = "2048";
 
     // ---- Алфавиты ----
 
@@ -86,7 +95,7 @@ public class CombineQueries : UdonSharpBehaviour
     private const int RuneSize = 3;
     private const int RuneWidth = 4;
     private const int NumSize = 4;
-    private const int MaxChunks = 256;
+    private const int MaxChunks = 1024;
     // Потолок номера прыжка. Половина прежних 4096 - это плата за вдвое широкое окно: пул стоит
     // MaxJumps * RangeMax * подписи, и обмен держит его прежним. На проде самый большой номер 1090,
     // запас двойной. Номер выше потолка не ломается, а теряет прыжок: такой адрес едет сборкой.
@@ -113,7 +122,6 @@ public class CombineQueries : UdonSharpBehaviour
 
     // ---- Лимиты, тайминги, лог ----
 
-    private const int MaxRemembered = 1024;
     private const int MaxQueued = 2048;
     private const float Timeout = 60f;
     private const float CreditDelay = 0.5f;
@@ -137,8 +145,8 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] Pair2Pool = Pair2PoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, Pair2Limit, dfaSize);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
-    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
-    private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
+    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
+    private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
 
     // ---- Подключение ----
 
@@ -241,7 +249,7 @@ public class CombineQueries : UdonSharpBehaviour
     // ---- Прыжки ----
 
     private int jumpRingAt;
-    private string[] jumpRing = new string[MaxRemembered];
+    private string[] jumpRing = new string[0];
     private DataDictionary jumps = new DataDictionary();
 
     // ---- Лог ----
@@ -406,7 +414,7 @@ public class CombineQueries : UdonSharpBehaviour
     public void ForgetJumps()
     {
         jumps = new DataDictionary();
-        jumpRing = new string[MaxRemembered];
+        jumpRing = new string[hyperRingSize > 0 ? hyperRingSize : 1];
         jumpRingAt = 0;
     }
 
@@ -1905,12 +1913,15 @@ public class CombineQueries : UdonSharpBehaviour
     {
         if (jumps.ContainsKey(url)) { jumps.SetValue(url, jump); return; }
 
+        // До первого Connect кольца ещё нет: заводим его здесь, словарь пока пуст.
+        if (jumpRing.Length == 0) ForgetJumps();
+
         string evicted = jumpRing[jumpRingAt];
 
         if (evicted != null && evicted != "") jumps.Remove(evicted);
 
         jumpRing[jumpRingAt] = url;
-        jumpRingAt = (jumpRingAt + 1) % MaxRemembered;
+        jumpRingAt = (jumpRingAt + 1) % jumpRing.Length;
 
         jumps.SetValue(url, jump);
     }

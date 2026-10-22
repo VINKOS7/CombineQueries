@@ -28,6 +28,4 @@ public class Chain : Entity
     public string? Url { get; set; }
 
     public const int StepMax = 64;
-
-    public const int UrlMax = 2048;
 }

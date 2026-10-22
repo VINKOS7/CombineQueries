@@ -20,10 +20,13 @@ public class HyperEntityConfiguration : IEntityTypeConfiguration<Hyper>
         // handle назначает Speech по порядку интернирования - identity бы его перебил.
         builder.Property(h => h.Id).ValueGeneratedNever();
 
-        builder.Property(h => h.Url).IsRequired().HasMaxLength(Hyper.UrlMax);
+        builder.Property(h => h.Url).IsRequired();
 
-        // handle<->url биекция: один URL не может висеть на двух handle.
-        builder.HasIndex(h => new { h.TranslatorId, h.Url }).IsUnique();
+        // handle<->url биекция: один URL не может висеть на двух handle. Индекс по хэшу, а не по
+        // самому url: строка btree-индекса Postgres ограничена ~2,7 КБ, а url теперь без потолка.
+        builder.Property<string>("UrlHash").HasComputedColumnSql("md5(\"Url\")", stored: true);
+
+        builder.HasIndex("TranslatorId", "UrlHash").IsUnique();
 
         builder
             .HasOne<Translator>()

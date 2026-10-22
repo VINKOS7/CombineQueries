@@ -51,6 +51,11 @@ public record ConnectRequest : IRequest<ConnectResponse>
     // Развязка-3 (Infinite): сколько ёмкостей клиент умеет перепрыгнуть одним доп. запросом.
     // Адресуемо всего dfaSize*pageCount*hopCount. 1 = развязки нет, за L3 ничего не адресуется.
     [JsonProperty("hopCount")] public int HopCount { get; set; } = 1;
+
+    // Самый длинный url, который сервер запоминает хайпером в базе. Длиннее - форвард и /h до
+    // рестарта работают, но в персист ни хайпер, ни его цепочка не ложатся. Схема потолка не держит.
+    // 0 - потолка нет: в базу ложится полная строка любой длины.
+    [JsonProperty("lengthBatch")] public int LengthBatch { get; set; } = Hyper.LengthBatchDefault;
 }
 
 public record InitCommand<TSymbol> : IAddTranslator<TSymbol> where TSymbol : notnull

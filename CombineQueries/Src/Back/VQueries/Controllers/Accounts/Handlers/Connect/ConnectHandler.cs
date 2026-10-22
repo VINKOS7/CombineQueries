@@ -41,6 +41,8 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
             if (request.Scheme != "http" && request.Scheme != "https") throw new Exception($"domain error: scheme={request.Scheme}, must be http or https");
 
+            if (request.LengthBatch < 0) throw new Exception($"domain error: lengthBatch={request.LengthBatch}, must be >= 0 (0 = full string)");
+
             bool again = _speech.Alphabet is not null;
 
             var (dfaSize, pageCount) = SizesOf(request);
@@ -55,10 +57,11 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
                 HopCount = request.HopCount,
                 Hypers = request.Persist,
                 BaseForwardUrl = request.baseForwardUrl,
-                ResetHypers = request.ResetHypers
+                ResetHypers = request.ResetHypers,
+                LengthBatch = request.LengthBatch
             });
 
-            _logger.LogInformation($"connect: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}, scheme={request.Scheme}, dfaSize={dfaSize}, pageCount={pageCount}");
+            _logger.LogInformation($"connect: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}, scheme={request.Scheme}, dfaSize={dfaSize}, pageCount={pageCount}, lengthBatch={request.LengthBatch}");
 
             if (account is not null)
             {

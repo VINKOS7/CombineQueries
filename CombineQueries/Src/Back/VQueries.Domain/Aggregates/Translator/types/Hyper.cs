@@ -16,5 +16,7 @@ public class Hyper : Entity
 
     public required string Url { get; set; }
 
-    public const int UrlMax = 2048;
+    // Длина url, которую сервер кладёт в базу, если клиент не прислал lengthBatch в /connect.
+    // Сама колонка - text без потолка: длину решает клиент, а не схема.
+    public const int LengthBatchDefault = 2048;
 }
