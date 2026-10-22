@@ -42,6 +42,12 @@ public class CombineQueries : UdonSharpBehaviour
     public string LastError = "";
     public string LastUrl = "";
 
+    // Сколько прыжков (хайперов) клиент помнит в кольце. Конструкторов у Udon нет, поэтому это поле
+    // инспектора: задаётся до Play и снаружи только читается. Кольцо заводится по нему на Connect.
+    [Header("Hyper ring: remembered jumps, set before Play")]
+    [SerializeField] private int hyperRingSize = 10240;
+    public int HyperRingSize => hyperRingSize;
+
     private const bool rememberInfinite = true;
     private const bool RequireCode = CombineQueriesEnvironment.RequireCode;
 
@@ -116,7 +122,6 @@ public class CombineQueries : UdonSharpBehaviour
 
     // ---- Лимиты, тайминги, лог ----
 
-    private const int MaxRemembered = 1024;
     private const int MaxQueued = 2048;
     private const float Timeout = 60f;
     private const float CreditDelay = 0.5f;
@@ -244,7 +249,7 @@ public class CombineQueries : UdonSharpBehaviour
     // ---- Прыжки ----
 
     private int jumpRingAt;
-    private string[] jumpRing = new string[MaxRemembered];
+    private string[] jumpRing = new string[0];
     private DataDictionary jumps = new DataDictionary();
 
     // ---- Лог ----
@@ -409,7 +414,7 @@ public class CombineQueries : UdonSharpBehaviour
     public void ForgetJumps()
     {
         jumps = new DataDictionary();
-        jumpRing = new string[MaxRemembered];
+        jumpRing = new string[hyperRingSize > 0 ? hyperRingSize : 1];
         jumpRingAt = 0;
     }
 
@@ -1908,12 +1913,15 @@ public class CombineQueries : UdonSharpBehaviour
     {
         if (jumps.ContainsKey(url)) { jumps.SetValue(url, jump); return; }
 
+        // До первого Connect кольца ещё нет: заводим его здесь, словарь пока пуст.
+        if (jumpRing.Length == 0) ForgetJumps();
+
         string evicted = jumpRing[jumpRingAt];
 
         if (evicted != null && evicted != "") jumps.Remove(evicted);
 
         jumpRing[jumpRingAt] = url;
-        jumpRingAt = (jumpRingAt + 1) % MaxRemembered;
+        jumpRingAt = (jumpRingAt + 1) % jumpRing.Length;
 
         jumps.SetValue(url, jump);
     }
