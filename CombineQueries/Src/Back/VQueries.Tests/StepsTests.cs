@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 
 using NUnit.Framework;
 
-using CombineQueries.Tests.Wire;
+using CombineQueries.Tests.Tunnel;
 
 namespace CombineQueries.Tests;
 
@@ -17,7 +17,7 @@ namespace CombineQueries.Tests;
 //   CQ_TOKEN       - токен мира, по умолчанию Auth:Token из appsettings.json сервера;
 //   CQ_COOLDOWN_MS - пауза SDK между загрузками, 5000;
 //   CQ_HYPERS      - on/off, как MemHypers клиента. On копит цепочки в БД сервера.
-[TestFixture, Category("Wire"), NonParallelizable]
+[TestFixture, Category("Tunnel"), NonParallelizable, Order(6)]
 public class StepsTests
 {
     private const string Prefix = "https://dummyjson.com/products/";
@@ -25,7 +25,7 @@ public class StepsTests
     private const int Second = 2;
 
     private HttpClient _http = null!;
-    private WireClient _client = null!;
+    private TunnelClient _client = null!;
 
     [OneTimeSetUp]
     public async Task Connect()
@@ -46,7 +46,7 @@ public class StepsTests
 
         var cooldown = TimeSpan.FromMilliseconds(int.Parse(Environment.GetEnvironmentVariable("CQ_COOLDOWN_MS") ?? "5000"));
 
-        _client = new WireClient(_http, Token(), cooldown, Environment.GetEnvironmentVariable("CQ_HYPERS") != "off");
+        _client = new TunnelClient(_http, Token(), cooldown, Environment.GetEnvironmentVariable("CQ_HYPERS") != "off");
 
         await _client.ConnectAsync();
 
@@ -54,7 +54,11 @@ public class StepsTests
     }
 
     [OneTimeTearDown]
-    public void Disconnect() => _http.Dispose();
+    public void Disconnect()
+    {
+        _client?.Release();
+        _http.Dispose();
+    }
 
     // Одно нажатие: обе пачки по очереди, у каждой своё время от своего vrequest.
     [TestCase(7)]
@@ -117,27 +121,8 @@ public class StepsTests
 
         Assert.Multiple(() =>
         {
-            foreach (string url in urls)
-            {
-                string body = _client.BodyOf(url);
-
-                Assert.That(body, Is.Not.Empty, $"{url}: тело не приехало");
-
-                if (body != "") Assert.That(IdOf(body), Is.EqualTo(int.Parse(url[Prefix.Length..])), $"{url}: чужое тело");
-            }
+            foreach (string url in urls) _client.AssertBody(url, int.Parse(url[Prefix.Length..]), "");
         });
-    }
-
-    private static int IdOf(string body)
-    {
-        try
-        {
-            return JsonNode.Parse(body)?["id"]?.GetValue<int>() ?? -1;
-        }
-        catch (JsonException)
-        {
-            return -1;
-        }
     }
 
     // Токен мира: из окружения, иначе тот же, что в конфиге сервера рядом.

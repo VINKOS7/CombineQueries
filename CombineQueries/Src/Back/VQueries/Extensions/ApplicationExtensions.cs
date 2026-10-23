@@ -1,3 +1,4 @@
+using CombineQueries.Api.Controllers.Accounts.Handlers.Connect;
 using CombineQueries.Api.Services.Outbox;
 using CombineQueries.Api.Services.Speech;
 using CombineQueries.Infra.Services.Speak;
@@ -18,9 +19,9 @@ public static class ApplicationExtensions
         // форвардера по произвольным чужим доменам это реальная беда, а не теоретическая.
         services.AddHttpClient<ISpeak, Speak>(client =>
         {
-            // Дефолт 100 секунд: мёртвый целевой хост держал бы наш запрос всё это время,
-            // а Udon отвалится по своему таймауту сильно раньше и будет ждать впустую.
-            client.Timeout = TimeSpan.FromSeconds(15);
+            // Сколько ждать целевой API, решает клиент на connect (maxTickTime) - Speak режет каждый
+            // форвард сам. Здесь только верхний предохранитель на случай, если тот не сработал.
+            client.Timeout = TimeSpan.FromSeconds(ConnectRequest.MaxTickTimeLimit);
 
             // Тело чужого ответа читается в строку целиком - без потолка одна жирная ссылка
             // сажает процесс по памяти. 1 МБ с запасом: Udon столько всё равно не проглотит.

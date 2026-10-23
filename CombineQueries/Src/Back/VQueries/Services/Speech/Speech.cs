@@ -10,7 +10,7 @@ public class Speech : ISpeech
 {
     public string? Alphabet { get; private set; }
     public string? RuneAlphabet { get; private set; }
-    public int RuneSize { get; private set; } = 3;
+    public int TunnelsCount { get; private set; } = 3;
     public string Scheme { get; private set; } = "https";
     public int DfaSize { get; private set; }
     public int PageCount { get; private set; } = 1;
@@ -27,6 +27,10 @@ public class Speech : ISpeech
     // Самый длинный url, который хайпером ложится в базу. Решает клиент параметром lengthBatch в connect,
     // 0 там значит «полная строка» - здесь это int.MaxValue.
     public int LengthBatch { get; private set; } = Hyper.LengthBatchDefault;
+
+    // Сколько секунд форвард ждёт целевой API. Решает клиент параметром maxTickTime в connect; до
+    // первого connect - прежние 15.
+    public int MaxTickTime { get; private set; } = 15;
 
     public string DirectRunes { get; set; } = string.Empty;
     public string DirectUnruned { get; set; } = string.Empty;
@@ -695,7 +699,7 @@ public class Speech : ISpeech
 
         Alphabet = command.Alphabet;
         RuneAlphabet = Translator.RuneAlphabetOf(command.Alphabet);
-        RuneSize = command.RuneSize;
+        TunnelsCount = command.TunnelsCount;
         Scheme = command.Scheme;
         DfaSize = command.DfaSize;
         PageCount = command.PageCount < 1 ? 1 : command.PageCount;
@@ -704,6 +708,7 @@ public class Speech : ISpeech
         BaseForwardUrl = command.BaseForwardUrl;
         ResetHypers = command.ResetHypers;
         LengthBatch = command.LengthBatch < 0 ? Hyper.LengthBatchDefault : command.LengthBatch == 0 ? int.MaxValue : command.LengthBatch;
+        MaxTickTime = command.MaxTickTime > 0 ? command.MaxTickTime : 15;
 
         // Незавершённую сборку чистить незачем: OpenSigns выше завёл клиенту новый поток, а сборка
         // у потока своя и рождается пустой. Хайперы и фрагменты НЕ трогаем: при реконнекте они
@@ -786,7 +791,7 @@ public class Speech : ISpeech
     // ровно в руну, полоса - адрес короче руны: в обоих случаях он весь здесь, хвоста не будет.
     public bool Single(string rune) => Alphabet is not null && RuneAlphabet is not null && Mine.Pieces.Count == 0 && Pads(Symbols(rune)) != 1;
 
-    private int[] Symbols(string rune) => Translator.IndexesOf(rune, RuneAlphabet!, RuneSize, SymbolsOf(TypeQuery.Fragmentate));
+    private int[] Symbols(string rune) => Translator.IndexesOf(rune, RuneAlphabet!, TunnelsCount, SymbolsOf(TypeQuery.Fragmentate));
 
     private int Pads(int[] symbols)
     {
@@ -892,8 +897,8 @@ public class Speech : ISpeech
                 : piece.IsFragment
                     ? (piece.FragmentId >= 0 && piece.FragmentId < _fragments.Count ? _fragments[piece.FragmentId] : "")
                     : (type == TypeQuery.Direct
-                        ? Translator.DirectUnrune(piece.Rune, RuneAlphabet, Alphabet, RuneSize)
-                        : Translator.FragmentateUnrune(piece.Rune, RuneAlphabet, Alphabet, RuneSize, SymbolsOf(type))));
+                        ? Translator.DirectUnrune(piece.Rune, RuneAlphabet, Alphabet, TunnelsCount)
+                        : Translator.FragmentateUnrune(piece.Rune, RuneAlphabet, Alphabet, TunnelsCount, SymbolsOf(type))));
 
         sb.Append(tailText);
 
@@ -953,8 +958,8 @@ public class Speech : ISpeech
     // Канонический разбор адреса текущим словарём: самый длинный фрагмент на каждой позиции,
     // всё непокрытое копится в один рунный шаг.
     //
-    // Руны склеиваются целиком, а не режутся по RuneSize: размер руны - свойство клиента, а путь
-    // в дереве обязан зависеть только от самого адреса. Иначе клиенты с разным RuneSize завели бы
+    // Руны склеиваются целиком, а не режутся по TunnelsCount: размер руны - свойство клиента, а путь
+    // в дереве обязан зависеть только от самого адреса. Иначе клиенты с разным TunnelsCount завели бы
     // разные пути к одному url.
     //
     // Шаг руны хранится РАЗЖАТЫМ: сравнивать надо содержимое, а не форму передачи, и тогда

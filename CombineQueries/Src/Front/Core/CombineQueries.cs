@@ -48,6 +48,18 @@ public class CombineQueries : UdonSharpBehaviour
     [SerializeField] private int hyperRingSize = 10240;
     public int HyperRingSize => hyperRingSize;
 
+    // Сколько тактов (загрузок, по одной в ~5 с) может занять ОДИН url. Протокол числа кусков не
+    // ограничивает - это предохранитель от адреса, который ехал бы часами. Меньше 1 - значит 2048.
+    [Header("Max ticks: loads one url may take")]
+    [SerializeField] private int maxTicks = 2048;
+    public int MaxTicks => maxTicks > 0 ? maxTicks : 2048;
+
+    // Сколько секунд сервер ждёт целевой API на одном такте: не дождался - тело пустое, а в доставке
+    // error с причиной. Едет в /connect, а ссылка connect печётся константой, поэтому это строка, а не
+    // поле инспектора: VRCUrl из сериализуемого значения не собрать. Сервер принимает 1..60.
+    private const string MaxTickTimeStr = "15";
+    public string MaxTickTime => MaxTickTimeStr;
+
     private const bool rememberInfinite = true;
     private const bool RequireCode = CombineQueriesEnvironment.RequireCode;
 
@@ -57,7 +69,7 @@ public class CombineQueries : UdonSharpBehaviour
     private const string baseForwardUrl = "vink0s.com";
     private const string Scheme = "https";
     private const string RememberInfiniteStr = "true";
-    private const string RuneSizeStr = "3";
+    private const string TunnelsCountStr = "3";
     private const string DfaSizeStr = "1024";
     private const string PageCountStr = "64";
     private const string HopCountStr = "64";
@@ -92,10 +104,9 @@ public class CombineQueries : UdonSharpBehaviour
     private const int DirectPieces = 4;
     private const int FragmentCount = 35;
     private const int Symbols = 59 + FragmentCount;
-    private const int RuneSize = 3;
-    private const int RuneWidth = 4;
+    private const int TunnelsCount = 3;
+    private const int RuneLength = 4;
     private const int NumSize = 4;
-    private const int MaxChunks = 1024;
     // Потолок номера прыжка. Половина прежних 4096 - это плата за вдвое широкое окно: пул стоит
     // MaxJumps * RangeMax * подписи, и обмен держит его прежним. На проде самый большой номер 1090,
     // запас двойной. Номер выше потолка не ломается, а теряет прыжок: такой адрес едет сборкой.
@@ -122,7 +133,6 @@ public class CombineQueries : UdonSharpBehaviour
 
     // ---- Лимиты, тайминги, лог ----
 
-    private const int MaxQueued = 2048;
     private const float Timeout = 60f;
     private const float CreditDelay = 0.5f;
     private const int DataCut = 160;
@@ -132,21 +142,21 @@ public class CombineQueries : UdonSharpBehaviour
 
     private readonly string[] DirectFragments = new string[] { "", "o", ".com/", "." };
 
-    private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", "/0/0/0/0", Symbols, RuneAlphabet, RuneSize, RuneWidth);
-    private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, RuneSize, RuneWidth, SignValues);
-    private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, RuneSize, RuneWidth);
-    private readonly VRCUrl[] VfPool = VfPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, dfaSize, pageCount, SignValues);
-    private readonly VRCUrl[] HopPool = HopPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, hopCount, SignValues);
+    private readonly VRCUrl[] ChunkPool = PoolOf(baseUrl + "/c/", "/0/0/0/0", Symbols, RuneAlphabet, TunnelsCount, RuneLength);
+    private readonly VRCUrl[] TailPool = TailPoolOf(baseUrl + "/t/", Symbols, RuneAlphabet, TunnelsCount, RuneLength, SignValues);
+    private readonly VRCUrl[] DirectTailPool = DirectTailPoolOf(baseUrl + "/d/", 59, RuneAlphabet, TunnelsCount, RuneLength);
+    private readonly VRCUrl[] VfPool = VfPoolOf(baseUrl + "/c/", RuneAlphabet, RuneLength, dfaSize, pageCount, SignValues);
+    private readonly VRCUrl[] HopPool = HopPoolOf(baseUrl + "/c/", RuneAlphabet, RuneLength, hopCount, SignValues);
     private readonly VRCUrl[] HeadPool = HeadPoolOf(baseUrl + "/hd/", HeadLimit, HeadBases, JumpSignValues);
     private readonly VRCUrl[] RangePool = RangePoolOf(baseUrl + "/h/", MaxJumps, RangeMax, JumpSignValues);
     private readonly VRCUrl[] CreditPool = CreditPoolOf(baseUrl + "/tc/", JumpSignValues);
     private readonly VRCUrl[] SinglePool = SinglePoolOf(baseUrl + "/sf/", SingleLimit, SignValues);
-    private readonly VRCUrl[] PairPool = PairPoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, PairLimit, dfaSize);
-    private readonly VRCUrl[] Pair2Pool = Pair2PoolOf(baseUrl + "/c/", RuneAlphabet, RuneWidth, Pair2Limit, dfaSize);
+    private readonly VRCUrl[] PairPool = PairPoolOf(baseUrl + "/c/", RuneAlphabet, RuneLength, PairLimit, dfaSize);
+    private readonly VRCUrl[] Pair2Pool = Pair2PoolOf(baseUrl + "/c/", RuneAlphabet, RuneLength, Pair2Limit, dfaSize);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
-    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
-    private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + RuneSizeStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
+    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + TunnelsCountStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&maxTickTime=" + MaxTickTimeStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
+    private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + TunnelsCountStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&maxTickTime=" + MaxTickTimeStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
 
     // ---- Подключение ----
 
@@ -709,7 +719,7 @@ public class CombineQueries : UdonSharpBehaviour
             int single = SingleOf(payload);
             int[] symbols = single < 0 ? SymbolsOf(payload) : null;
 
-            if (single < 0 && (symbols == null || symbols.Length > RuneSize || (symbols.Length == RuneSize && symbols[RuneSize - 1] == Alphabet.IndexOf(':')))) continue;
+            if (single < 0 && (symbols == null || symbols.Length > TunnelsCount || (symbols.Length == TunnelsCount && symbols[TunnelsCount - 1] == Alphabet.IndexOf(':')))) continue;
 
             Flying(i, true);
 
@@ -725,7 +735,7 @@ public class CombineQueries : UdonSharpBehaviour
                 continue;
             }
 
-            if (symbols.Length == RuneSize)
+            if (symbols.Length == TunnelsCount)
             {
                 LastRoad = "rune";
                 route = "/c";
@@ -991,12 +1001,12 @@ public class CombineQueries : UdonSharpBehaviour
 
     private void SendCombine(string payload)
     {
-        int[] q = new int[MaxChunks + 1];
+        int[] q = new int[payload.Length + 2];
 
         // Отдельный массив, а НЕ второе имя q: присваивание массива копирует ссылку, и каждая пара
         // «значение, вид» затирала бы значение видом. Номер фрагмента уходил бы видом шага - фрагмент 1,
         // руна - нулём, хвост - символом "b", и любой адрес собирался бы в dummyjson.com + b.
-        int[] k = new int[MaxChunks + 1];
+        int[] k = new int[payload.Length + 2];
         int count = 0;
 
         int acc = 0, accLen = 0, pos = 0;
@@ -1036,10 +1046,10 @@ public class CombineQueries : UdonSharpBehaviour
                     int hop = cachedFragHop[fat];
                     int anchor = hop > 0 ? cachedFragBase[fat] : fid;
 
-                    int plain = (flen + RuneSize - 1) / RuneSize;
+                    int plain = (flen + TunnelsCount - 1) / TunnelsCount;
                     int cost = hop > 0 ? 2 : 1;
 
-                    if (cost <= plain && count + cost <= MaxChunks)
+                    if (cost <= plain)
                     {
                         q[count] = anchor; k[count] = 1; count++;
 
@@ -1063,7 +1073,7 @@ public class CombineQueries : UdonSharpBehaviour
             // Первая руна адреса несёт метку: «:» последним символом - «будет ещё». Без метки сервер
             // закроет адрес на ней самой, поэтому без неё она уходит, только если адрес ею и
             // кончается. Настоящий «:» на этом месте едет первым символом следующего куска.
-            if (count == 0 && accLen == RuneSize - 1 && pos < payload.Length)
+            if (count == 0 && accLen == TunnelsCount - 1 && pos < payload.Length)
             {
                 int nextLen;
                 int next = NextSymbol(payload, pos, out nextLen);
@@ -1081,10 +1091,8 @@ public class CombineQueries : UdonSharpBehaviour
                 }
             }
 
-            if (accLen == RuneSize)
+            if (accLen == TunnelsCount)
             {
-                if (count >= MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
-
                 q[count] = acc; k[count] = 0; count++;
 
                 acc = 0; accLen = 0;
@@ -1092,8 +1100,6 @@ public class CombineQueries : UdonSharpBehaviour
         }
 
         int tail = accLen == 0 ? 0 : (accLen == 1 ? 1 + acc : 1 + Symbols + acc);
-
-        if (count >= MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
 
         // Одна руна без метки - весь адрес: закрывает сама, хвост не нужен.
         bool alone = tail == 0 && count == 1 && k[0] == 0;
@@ -1128,6 +1134,8 @@ public class CombineQueries : UdonSharpBehaviour
         LastRoad = headed
             ? (skip > 0 ? "head/hyper" : "head/combine")
             : (skip > 0 ? "hyper" : (pair || pair2 ? "pair" : "combine"));
+
+        if (TooManyTicks(count - skip + (skip > 0 ? 1 : 0), payload)) return;
 
         queueLen = count - skip + (skip > 0 ? 1 : 0);
         queue = new int[queueLen];
@@ -1179,7 +1187,7 @@ public class CombineQueries : UdonSharpBehaviour
         {
             int value = 0;
 
-            for (int j = 0; j < RuneSize; j++)
+            for (int j = 0; j < TunnelsCount; j++)
             {
                 value = value * Alphabet.Length + (at < payload.Length ? Alphabet.IndexOf(payload[at]) : Alphabet.IndexOf(':'));
 
@@ -1203,7 +1211,7 @@ public class CombineQueries : UdonSharpBehaviour
             count++;
         }
 
-        if (count > MaxChunks) { Fail("url needs more than " + MaxChunks + " chunks"); return; }
+        if (TooManyTicks(count, payload)) return;
 
         queueLen = count;
         queue = new int[queueLen];
@@ -1280,10 +1288,11 @@ public class CombineQueries : UdonSharpBehaviour
 
     // Добор долга. Занятость его не откладывает: отправку и так выстраивает VRCStringDownloader,
     // а добор лишь забирает у сервера уже готовые тела.
+    // pendingSettle здесь НЕ снимается: его снимает Pump, когда этот /tc уходит или выброшен. Иначе
+    // каждый ответ длинной пачки ставил бы в хвост очереди ещё один /tc, и они выстреливали бы
+    // подряд уже после пачки, когда долга нет, - по пять секунд каждый.
     public void Settle()
     {
-        pendingSettle = false;
-
         LastError = "";
         route = "/tc";
 
@@ -1359,6 +1368,16 @@ public class CombineQueries : UdonSharpBehaviour
         }
     }
 
+    // Отказ до отправки: ни один кусок не уходит, если весь url в MaxTicks не влезает.
+    private bool TooManyTicks(int ticks, string payload)
+    {
+        if (ticks <= MaxTicks) return false;
+
+        Fail("url needs " + ticks + " ticks, MaxTicks is " + MaxTicks + ": " + payload);
+
+        return true;
+    }
+
     private int NextSign()
     {
         if (signs.Length == 0) return 0;
@@ -1403,7 +1422,8 @@ public class CombineQueries : UdonSharpBehaviour
 
         SendCustomEventDelayedSeconds(nameof(OnLoadTimeout), Timeout);
 
-        Enqueue(url, TotalQueries + " " + (payload == "" ? "-" : payload));
+        // Добор долга помечаем: route "/tc" ставит только Settle, рукопожатие идёт своими дорогами.
+        Enqueue(url, TotalQueries + " " + (payload == "" ? "-" : payload), route == "/tc");
 
         Pump();
     }
@@ -1415,10 +1435,11 @@ public class CombineQueries : UdonSharpBehaviour
     // пять секунд между запросами по-прежнему отмеряет сам SDK.
     private VRCUrl[] outUrl = new VRCUrl[16];
     private string[] outNote = new string[16];
+    private bool[] outSettle = new bool[16];
     private int outFirst, outCount;
     private bool sending;
 
-    private void Enqueue(VRCUrl url, string note)
+    private void Enqueue(VRCUrl url, string note, bool settle)
     {
         // Конец массива занят: сдвигаем очередь к началу, а если тесно - растём вдвое.
         if (outFirst + outCount == outUrl.Length)
@@ -1427,16 +1448,19 @@ public class CombineQueries : UdonSharpBehaviour
 
             VRCUrl[] urls = new VRCUrl[size];
             string[] notes = new string[size];
+            bool[] settles = new bool[size];
 
-            for (int i = 0; i < outCount; i++) { urls[i] = outUrl[outFirst + i]; notes[i] = outNote[outFirst + i]; }
+            for (int i = 0; i < outCount; i++) { urls[i] = outUrl[outFirst + i]; notes[i] = outNote[outFirst + i]; settles[i] = outSettle[outFirst + i]; }
 
             outUrl = urls;
             outNote = notes;
+            outSettle = settles;
             outFirst = 0;
         }
 
         outUrl[outFirst + outCount] = url;
         outNote[outFirst + outCount] = note;
+        outSettle[outFirst + outCount] = settle;
         outCount++;
     }
 
@@ -1445,14 +1469,27 @@ public class CombineQueries : UdonSharpBehaviour
     {
         if (sending || outCount == 0) return;
 
+        // Добор, до которого очередь дошла, когда долга уже нет: тела приехали довеском к ответам
+        // кусков, что стояли перед ним. Слать его - пять секунд впустую, выбрасываем.
+        while (outCount > 0 && outSettle[outFirst] && LastPending <= 0)
+        {
+            Debug.Log("[CombineQueries] skip: " + outNote[outFirst] + " - nothing owed");
+
+            Dequeue();
+
+            if (inFlight > 0) inFlight--;
+
+            pendingSettle = false;
+        }
+
+        if (outCount == 0) return;
+
         VRCUrl url = outUrl[outFirst];
         string note = outNote[outFirst];
 
-        outUrl[outFirst] = null;
-        outFirst++;
-        outCount--;
+        if (outSettle[outFirst]) pendingSettle = false;
 
-        if (outCount == 0) outFirst = 0;
+        Dequeue();
 
         sending = true;
         lastLoadAt = Time.time;
@@ -1462,6 +1499,16 @@ public class CombineQueries : UdonSharpBehaviour
         Debug.Log("[CombineQueries] load: " + note + " -> " + url.Get());
 
         VRCStringDownloader.LoadUrl(url, this);
+    }
+
+    private void Dequeue()
+    {
+        outUrl[outFirst] = null;
+        outSettle[outFirst] = false;
+        outFirst++;
+        outCount--;
+
+        if (outCount == 0) outFirst = 0;
     }
 
     public void OnLoadTimeout()
@@ -1618,6 +1665,11 @@ public class CombineQueries : UdonSharpBehaviour
 
         for (int i = 0; i < slotKey.Length; i++)
         {
+            // «Своих назвало» считаем ДО пропуска погашенных: тела названных едут этим же ответом, и
+            // TakeDebt гасит их слоты раньше нас. Без этого окно, назвавшее всех своих, кроме одного
+            // за его краем, выглядело бы не назвавшим никого - и стирало бы номер у того, за краем.
+            if (slotSent[i] == link && named.ContainsKey(slotKey[i])) ours = true;
+
             if (slotDelete[i] || slotSent[i] != link) continue;
 
             int jump = JumpOf(slotKey[i]);
@@ -2102,24 +2154,24 @@ public class CombineQueries : UdonSharpBehaviour
 
     // ==== Сборка пулов ====
 
-    private static VRCUrl[] PoolOf(string baseUri, string suffix, int symbols, string runeAlph, int runeSize, int runeWidth)
+    private static VRCUrl[] PoolOf(string baseUri, string suffix, int symbols, string runeAlph, int tunnelsCount, int runeLength)
     {
         int total = 1;
 
-        for (int i = 0; i < runeSize; i++) total *= symbols;
+        for (int i = 0; i < tunnelsCount; i++) total *= symbols;
 
         VRCUrl[] pool = new VRCUrl[total];
 
-        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v, runeAlph, runeWidth) + suffix);
+        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v, runeAlph, runeLength) + suffix);
 
         return pool;
     }
 
     // Последнее число у VF и hop - подпись: по ней сервер кладёт кусок в сборку СВОЕГО потока, и два
     // клиента, собирающие разом, не склеиваются. Руна подписи не несёт: пул рун x8 не запечь.
-    private static VRCUrl[] VfPoolOf(string baseUri, string runeAlph, int runeWidth, int slots, int pages, int signs)
+    private static VRCUrl[] VfPoolOf(string baseUri, string runeAlph, int runeLength, int slots, int pages, int signs)
     {
-        string sentinel = RunesOf(0, runeAlph, runeWidth);
+        string sentinel = RunesOf(0, runeAlph, runeLength);
 
         VRCUrl[] pool = new VRCUrl[slots * pages * signs];
 
@@ -2131,9 +2183,9 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-    private static VRCUrl[] HopPoolOf(string baseUri, string runeAlph, int runeWidth, int hops, int signs)
+    private static VRCUrl[] HopPoolOf(string baseUri, string runeAlph, int runeLength, int hops, int signs)
     {
-        string sentinel = RunesOf(0, runeAlph, runeWidth);
+        string sentinel = RunesOf(0, runeAlph, runeLength);
 
         VRCUrl[] pool = new VRCUrl[hops * signs];
 
@@ -2143,7 +2195,7 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth, int signs)
+    private static VRCUrl[] TailPoolOf(string baseUri, int symbols, string runeAlph, int tunnelsCount, int runeLength, int signs)
     {
         int pad = Alphabet.IndexOf(':');
 
@@ -2158,9 +2210,9 @@ public class CombineQueries : UdonSharpBehaviour
 
             int value = first * symbols + second;
 
-            for (int i = 2; i < runeSize; i++) value = value * symbols + pad;
+            for (int i = 2; i < tunnelsCount; i++) value = value * symbols + pad;
 
-            string runes = RunesOf(value, runeAlph, runeWidth);
+            string runes = RunesOf(value, runeAlph, runeLength);
 
             // Флаг склейки: 1 - закрывает цепочку, 0 - адрес весь в этом запросе.
             for (int merge = 0; merge < 2; merge++)
@@ -2170,15 +2222,15 @@ public class CombineQueries : UdonSharpBehaviour
         return pool;
     }
 
-    private static VRCUrl[] DirectTailPoolOf(string baseUri, int symbols, string runeAlph, int runeSize, int runeWidth)
+    private static VRCUrl[] DirectTailPoolOf(string baseUri, int symbols, string runeAlph, int tunnelsCount, int runeLength)
     {
         int total = 1;
 
-        for (int i = 0; i < runeSize; i++) total *= symbols;
+        for (int i = 0; i < tunnelsCount; i++) total *= symbols;
 
         VRCUrl[] pool = new VRCUrl[total];
 
-        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v * DirectPieces, runeAlph, runeWidth));
+        for (int v = 0; v < total; v++) pool[v] = new VRCUrl(baseUri + RunesOf(v * DirectPieces, runeAlph, runeLength));
 
         return pool;
     }
@@ -2235,7 +2287,7 @@ public class CombineQueries : UdonSharpBehaviour
 
     // Фрагмент и буква: руна [буква, «:», «:»], фрагмент - номер и страница, вид 2. Подписи нет - поток
     // сервер берёт тот, что подписывал последним, как у руны.
-    private static VRCUrl[] PairPoolOf(string baseUri, string runeAlph, int runeWidth, int pieces, int slots)
+    private static VRCUrl[] PairPoolOf(string baseUri, string runeAlph, int runeLength, int pieces, int slots)
     {
         int pad = Alphabet.IndexOf(':');
         int letters = Alphabet.Length;
@@ -2244,14 +2296,14 @@ public class CombineQueries : UdonSharpBehaviour
 
         for (int piece = 0; piece < pieces; piece++)
             for (int letter = 0; letter < letters; letter++)
-                pool[piece * letters + letter] = new VRCUrl(baseUri + RunesOf((letter * Symbols + pad) * Symbols + pad, runeAlph, runeWidth) + "/" + (piece % slots) + "/" + (piece / slots) + "/0/2");
+                pool[piece * letters + letter] = new VRCUrl(baseUri + RunesOf((letter * Symbols + pad) * Symbols + pad, runeAlph, runeLength) + "/" + (piece % slots) + "/" + (piece / slots) + "/0/2");
 
         return pool;
     }
 
     // Фрагмент и две буквы: руна [буква, буква, «:»], остальное как у пары - и вид тот же, 2: сервер
     // снимает добивку, и ему всё равно, одна буква или две.
-    private static VRCUrl[] Pair2PoolOf(string baseUri, string runeAlph, int runeWidth, int pieces, int slots)
+    private static VRCUrl[] Pair2PoolOf(string baseUri, string runeAlph, int runeLength, int pieces, int slots)
     {
         int pad = Alphabet.IndexOf(':');
         int letters = Alphabet.Length;
@@ -2261,7 +2313,7 @@ public class CombineQueries : UdonSharpBehaviour
         for (int piece = 0; piece < pieces; piece++)
             for (int first = 0; first < letters; first++)
                 for (int second = 0; second < letters; second++)
-                    pool[(piece * letters + first) * letters + second] = new VRCUrl(baseUri + RunesOf((first * Symbols + second) * Symbols + pad, runeAlph, runeWidth) + "/" + (piece % slots) + "/" + (piece / slots) + "/0/2");
+                    pool[(piece * letters + first) * letters + second] = new VRCUrl(baseUri + RunesOf((first * Symbols + second) * Symbols + pad, runeAlph, runeLength) + "/" + (piece % slots) + "/" + (piece / slots) + "/0/2");
 
         return pool;
     }

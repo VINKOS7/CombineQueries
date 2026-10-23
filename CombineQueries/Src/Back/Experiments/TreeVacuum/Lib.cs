@@ -1,4 +1,4 @@
-// Copy of the formula from Translator.UnrunedCombine (wireValue = nodeId*(L+1)+symbolIndex) + encode,
+// Copy of the formula from Translator.UnrunedCombine (tunnelValue = nodeId*(L+1)+symbolIndex) + encode,
 // which doesn't exist in the real code at all (only decode is there). Standalone folder, doesn't touch the repo.
 
 class Rune
@@ -45,9 +45,9 @@ static class ArenaTreeFactory
     }
 }
 
-record DecodeResult(long WireValue, int NodeId, int SymbolIndex, string PrefixFromTree, char? GrownSymbol);
+record DecodeResult(long TunnelValue, int NodeId, int SymbolIndex, string PrefixFromTree, char? GrownSymbol);
 
-// Клиент - держит своё зеркало дерева и позицию в сообщении, отдаёт по одному wire-запросу за раз.
+// Клиент - держит своё зеркало дерева и позицию в сообщении, отдаёт по одному tunnel-запросу за раз.
 class Client
 {
     private readonly string _alphabet;
@@ -103,11 +103,11 @@ class Client
         }
 
         int symbolSpan = _alphabet.Length + 1;
-        long wireValue = (long)node.Id * symbolSpan + symbolIndex;
+        long tunnelValue = (long)node.Id * symbolSpan + symbolIndex;
 
         _pos += depth;
 
-        return ToBaseAlphabet(wireValue, _alphabet);
+        return ToBaseAlphabet(tunnelValue, _alphabet);
     }
 
     private static string ToBaseAlphabet(long value, string alphabet)
@@ -148,31 +148,31 @@ class Server
     public string Accumulated => _accumulated;
     public int TreeNodeCount => _tree.Count;
     public int LastRounds { get; private set; }
-    public int LastWireChars { get; private set; }
+    public int LastTunnelChars { get; private set; }
 
     // сервер сам зовёт client.NextRequest() пока клиенту есть что слать, раунд за раундом
     public void ProcessAll(Client client, bool verbose = true)
     {
         int round = 0;
         _accumulated = "";
-        LastWireChars = 0;
+        LastTunnelChars = 0;
 
         while (!client.IsDone)
         {
             round++;
 
-            string? wire = client.NextRequest();
-            if (wire is null) break;
+            string? tunnel = client.NextRequest();
+            if (tunnel is null) break;
 
-            var result = DecodeVerbose(wire);
+            var result = DecodeVerbose(tunnel);
             _accumulated += result.PrefixFromTree;
-            LastWireChars += wire.Length;
+            LastTunnelChars += tunnel.Length;
 
             if (verbose)
             {
                 Console.WriteLine($"  round {round}:");
-                Console.WriteLine($"server received: \"{wire}\"");
-                Console.WriteLine($"server unruned: wireValue={result.WireValue}, nodeId={result.NodeId}, symbolIndex={result.SymbolIndex}, prefixFromTree=\"{result.PrefixFromTree}\", grown={(result.GrownSymbol is null ? "none/sentinel" : $"'{result.GrownSymbol}'")}, accumulatedSoFar=\"{_accumulated}\"");
+                Console.WriteLine($"server received: \"{tunnel}\"");
+                Console.WriteLine($"server unruned: tunnelValue={result.TunnelValue}, nodeId={result.NodeId}, symbolIndex={result.SymbolIndex}, prefixFromTree=\"{result.PrefixFromTree}\", grown={(result.GrownSymbol is null ? "none/sentinel" : $"'{result.GrownSymbol}'")}, accumulatedSoFar=\"{_accumulated}\"");
             }
         }
 
@@ -180,20 +180,20 @@ class Server
     }
 
     // то же самое, что Translator.UnrunedCombine, но с раскрытием всех промежуточных шагов
-    private DecodeResult DecodeVerbose(string wireRunes)
+    private DecodeResult DecodeVerbose(string tunnelRunes)
     {
-        long wireValue = 0;
+        long tunnelValue = 0;
 
-        foreach (var c in wireRunes)
+        foreach (var c in tunnelRunes)
         {
             int digit = _alphabet.IndexOf(c);
             if (digit < 0) throw new Exception($"domain error: symbol '{c}' not in alphabet");
-            wireValue = wireValue * _alphabet.Length + digit;
+            tunnelValue = tunnelValue * _alphabet.Length + digit;
         }
 
         int symbolSpan = _alphabet.Length + 1;
-        int nodeId = (int)(wireValue / symbolSpan);
-        int symbolIndex = (int)(wireValue % symbolSpan);
+        int nodeId = (int)(tunnelValue / symbolSpan);
+        int symbolIndex = (int)(tunnelValue % symbolSpan);
 
         var node = _tree.Get(nodeId);
 
@@ -216,6 +216,6 @@ class Server
             _tree.From(node, grown.Value);
         }
 
-        return new DecodeResult(wireValue, nodeId, symbolIndex, prefixFromTree, grown);
+        return new DecodeResult(tunnelValue, nodeId, symbolIndex, prefixFromTree, grown);
     }
 }

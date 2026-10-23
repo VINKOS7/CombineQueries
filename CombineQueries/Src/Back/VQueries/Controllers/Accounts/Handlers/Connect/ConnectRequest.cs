@@ -14,7 +14,10 @@ public record ConnectRequest : IRequest<ConnectResponse>
     [FromQuery(Name = "baseQuery")]
     public required string baseForwardUrl { get; set; }
 
-    [JsonProperty("runeSize")] public int RuneSize { get; set; } = 2;
+    // Сколько символов в одной руне. Имя в протоколе прежнее - runeSize: оно запечено в ссылках мира.
+    [JsonProperty("runeSize")]
+    [FromQuery(Name = "runeSize")]
+    public int TunnelsCount { get; set; } = 2;
 
     [JsonProperty("scheme")] public string Scheme { get; set; } = "https";
 
@@ -56,6 +59,13 @@ public record ConnectRequest : IRequest<ConnectResponse>
     // рестарта работают, но в персист ни хайпер, ни его цепочка не ложатся. Схема потолка не держит.
     // 0 - потолка нет: в базу ложится полная строка любой длины.
     [JsonProperty("lengthBatch")] public int LengthBatch { get; set; } = Hyper.LengthBatchDefault;
+
+    // Сколько секунд сервер ждёт целевой API на одном такте. Не дождался - тело пустое, а в доставке
+    // error с причиной. Потолок - таймаут загрузки Udon-клиента: дольше ответ всё равно никто не ждёт.
+    [JsonProperty("maxTickTime")] public int MaxTickTime { get; set; } = MaxTickTimeDefault;
+
+    public const int MaxTickTimeDefault = 15;
+    public const int MaxTickTimeLimit = 60;
 }
 
 public record InitCommand<TSymbol> : IAddTranslator<TSymbol> where TSymbol : notnull

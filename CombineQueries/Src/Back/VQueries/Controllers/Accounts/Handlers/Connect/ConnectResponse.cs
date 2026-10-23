@@ -8,7 +8,7 @@ public record ConnectResponse
 {
     [JsonProperty("shortDomain")] required public string? ShortDomain { get; set; }
 
-    [JsonProperty("runeSize")] public int RuneSize { get; set; }
+    [JsonProperty("runeSize")] public int TunnelsCount { get; set; }
 
     [JsonProperty("scheme")] public string? Scheme { get; set; }
 

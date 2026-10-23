@@ -35,13 +35,16 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
         {
             var account = await Authorize(request.Token);
 
-            int runeSize = request.RuneSize;
+            int tunnelsCount = request.TunnelsCount;
 
-            if (runeSize < 2) throw new Exception($"domain error: runeSize={runeSize}, must be >= 2");
+            if (tunnelsCount < 2) throw new Exception($"domain error: runeSize={tunnelsCount}, must be >= 2");
 
             if (request.Scheme != "http" && request.Scheme != "https") throw new Exception($"domain error: scheme={request.Scheme}, must be http or https");
 
             if (request.LengthBatch < 0) throw new Exception($"domain error: lengthBatch={request.LengthBatch}, must be >= 0 (0 = full string)");
+
+            if (request.MaxTickTime < 1 || request.MaxTickTime > ConnectRequest.MaxTickTimeLimit)
+                throw new Exception($"domain error: maxTickTime={request.MaxTickTime}, must be 1..{ConnectRequest.MaxTickTimeLimit} seconds");
 
             bool again = _speech.Alphabet is not null;
 
@@ -50,7 +53,7 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
             _speech.SetContext(new SetContextCommand<char>
             {
                 Alphabet = request.Alphabet,
-                RuneSize = runeSize,
+                TunnelsCount = tunnelsCount,
                 Scheme = request.Scheme,
                 DfaSize = dfaSize,
                 PageCount = pageCount,
@@ -58,10 +61,11 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
                 Hypers = request.Persist,
                 BaseForwardUrl = request.baseForwardUrl,
                 ResetHypers = request.ResetHypers,
-                LengthBatch = request.LengthBatch
+                LengthBatch = request.LengthBatch,
+                MaxTickTime = request.MaxTickTime
             });
 
-            _logger.LogInformation($"connect: alphabet {request.Alphabet.Length} chars, runeSize={runeSize}, scheme={request.Scheme}, dfaSize={dfaSize}, pageCount={pageCount}, lengthBatch={request.LengthBatch}");
+            _logger.LogInformation($"connect: alphabet {request.Alphabet.Length} chars, runeSize={tunnelsCount}, scheme={request.Scheme}, dfaSize={dfaSize}, pageCount={pageCount}, lengthBatch={request.LengthBatch}, maxTickTime={request.MaxTickTime}");
 
             if (account is not null)
             {
@@ -76,7 +80,7 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
             return new()
             {
                 ShortDomain = "http://v.ro",
-                RuneSize = runeSize,
+                TunnelsCount = tunnelsCount,
                 Scheme = request.Scheme,
                 DfaSize = _speech.DfaSize,
                 Signs = _speech.Signs,
@@ -110,17 +114,20 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
         return (dfaSize, pageCount);
     }
 
+    // Сколько прыжков отдаём на connect. 2048 - ровно MaxJumps клиента: дальше номера он прыжком не
+    // адресует. При 512 листы старше последних 512 срезались, и давно выученные адреса (products/6..9)
+    // снова ехали сборкой - по три загрузки вместо одного /h.
     private int SeedLimit
     {
         get
         {
-            int limit = _configuration.GetValue("Init:SeedLimit", 512);
+            int limit = _configuration.GetValue("Init:SeedLimit", 2048);
 
             return limit > 0 ? limit : int.MaxValue;
         }
     }
 
-    // Словарь режем ОТДЕЛЬНЫМ лимитом. Общий SeedLimit (512) держит сид прыжков, а словарь им резался
+    // Словарь режем ОТДЕЛЬНЫМ лимитом. Общий SeedLimit (2048) держит сид прыжков, а словарь им резался
     // по первым адресам: всё, что сервер выучил позже, - а это как раз длинные префиксы вроде
     // «site.com/product», - до клиента на connect не доезжало, и он собирал адрес рунами. Потолок
     // остаётся: сравнение с каждой строкой на клиенте идёт в Udon, и десятки тысяч строк там не

@@ -33,7 +33,7 @@ public interface ISpeech
 
     string? RuneAlphabet { get; }
 
-    int RuneSize { get; }
+    int TunnelsCount { get; }
 
     string Scheme { get; }
 
@@ -54,6 +54,9 @@ public interface ISpeech
 
     // Самый длинный url, который хайпером ложится в базу. Решает клиент параметром lengthBatch.
     int LengthBatch { get; }
+
+    // Сколько секунд форвард ждёт целевой API. Решает клиент параметром maxTickTime.
+    int MaxTickTime { get; }
 
     string DirectRunes { get; }
 

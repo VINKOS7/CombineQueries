@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 
 using NUnit.Framework;
 
-using CombineQueries.Tests.Wire;
+using CombineQueries.Tests.Tunnel;
 
 namespace CombineQueries.Tests;
 
@@ -14,7 +14,7 @@ namespace CombineQueries.Tests;
 // Ловит смешение потоков: руна и пара идут без подписи и достаются потоку, подписывавшему последним,
 // - при нескольких клиентах разом кусок может лечь в чужую сборку. Тогда тело приедет не тому или
 // адрес склеится из двух. Номера свежие (случайное окно), иначе адреса уйдут прыжками, мимо сборки.
-[TestFixture]
+[TestFixture, Order(3)]
 public class InstancesTests
 {
     private const string Prefix = "https://dummyjson.com/";
@@ -33,7 +33,7 @@ public class InstancesTests
         var host = new Uri(Environment.GetEnvironmentVariable("CQ_HOST") ?? "http://localhost:5017");
 
         var https = new List<HttpClient>();
-        var clients = new List<WireClient>();
+        var clients = new List<TunnelClient>();
         var batches = new List<string[]>();
 
         try
@@ -41,15 +41,17 @@ public class InstancesTests
             for (int i = 0; i < instances; i++)
             {
                 var http = new HttpClient { BaseAddress = host, Timeout = TimeSpan.FromSeconds(90) };
-                var client = new WireClient(http, Token(), cooldown, true);
+                var client = new TunnelClient(http, Token(), cooldown, true);
+
+                https.Add(http);
 
                 await client.ConnectAsync();
+
+                clients.Add(client);
 
                 var (path, count) = Paths[i % Paths.Length];
                 int first = Random.Shared.Next(1, count - Batch);
 
-                https.Add(http);
-                clients.Add(client);
                 batches.Add([.. Enumerable.Range(first, Batch).Select(number => $"{Prefix}{path}/{number}")]);
 
                 TestContext.Out.WriteLine($"инстанс {i}: {path}/{first}..{first + Batch - 1}");
@@ -76,31 +78,14 @@ public class InstancesTests
             Assert.Multiple(() =>
             {
                 for (int i = 0; i < instances; i++)
-                    foreach (string url in batches[i])
-                    {
-                        string body = clients[i].BodyOf(url);
-
-                        Assert.That(body, Is.Not.Empty, $"инстанс {i}, {url}: тело не приехало");
-
-                        if (body != "") Assert.That(IdOf(body), Is.EqualTo(int.Parse(url[(url.LastIndexOf('/') + 1)..])), $"инстанс {i}, {url}: чужое тело");
-                    }
+                    foreach (string url in batches[i]) clients[i].AssertBody(url, int.Parse(url[(url.LastIndexOf('/') + 1)..]), $"инстанс {i}, ");
             });
         }
         finally
         {
-            foreach (var http in https) http.Dispose();
-        }
-    }
+            foreach (var client in clients) client.Release();
 
-    private static int IdOf(string body)
-    {
-        try
-        {
-            return JsonNode.Parse(body)?["id"]?.GetValue<int>() ?? -1;
-        }
-        catch (JsonException)
-        {
-            return -1;
+            foreach (var http in https) http.Dispose();
         }
     }
 

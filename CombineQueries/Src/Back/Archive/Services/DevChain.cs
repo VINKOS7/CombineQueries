@@ -24,7 +24,7 @@ public static class DevChain
 
         int symbols = speech.SymbolsOf(TypeQuery.Fragmentate);
         int capacity = speech.DfaSize * speech.PageCount;
-        int width = WidthOf(symbols, speech.RuneSize, speech.RuneAlphabet.Length);
+        int width = WidthOf(symbols, speech.TunnelsCount, speech.RuneAlphabet.Length);
 
         var acc = new List<int>();
         int pos = 0;
@@ -49,7 +49,7 @@ public static class DevChain
                 {
                     int hop = id / capacity;
                     int anchor = id - hop * capacity;
-                    int plain = (length + speech.RuneSize - 1) / speech.RuneSize;
+                    int plain = (length + speech.TunnelsCount - 1) / speech.TunnelsCount;
 
                     if (hop < speech.HopCount && (hop > 0 ? 2 : 1) <= plain)
                     {
@@ -71,7 +71,7 @@ public static class DevChain
             acc.Add(symbol);
             pos += taken;
 
-            if (acc.Count < speech.RuneSize) continue;
+            if (acc.Count < speech.TunnelsCount) continue;
 
             long value = 0;
 
@@ -131,12 +131,12 @@ public static class DevChain
         return new string(runes);
     }
 
-    // Сколько разрядов рун-алфавита нужно, чтобы вместить symbols^runeSize.
-    private static int WidthOf(int symbols, int runeSize, int runeAlphabet)
+    // Сколько разрядов рун-алфавита нужно, чтобы вместить symbols^tunnelsCount.
+    private static int WidthOf(int symbols, int tunnelsCount, int runeAlphabet)
     {
         long span = 1;
 
-        for (int i = 0; i < runeSize; i++) span *= symbols;
+        for (int i = 0; i < tunnelsCount; i++) span *= symbols;
 
         int width = 1;
         long fits = runeAlphabet;

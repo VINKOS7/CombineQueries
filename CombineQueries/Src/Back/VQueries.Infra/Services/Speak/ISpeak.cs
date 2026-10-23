@@ -4,5 +4,6 @@ public record ForwardResult(bool Ok, int Status, string Body, long ElapsedMs, st
 
 public interface ISpeak
 {
-    Task<ForwardResult> GetAsync(string url, CancellationToken cancellationToken);
+    // timeout - сколько ждать целевой API. Свой у каждого connect (maxTickTime), поэтому не в HttpClient.
+    Task<ForwardResult> GetAsync(string url, TimeSpan timeout, CancellationToken cancellationToken);
 }

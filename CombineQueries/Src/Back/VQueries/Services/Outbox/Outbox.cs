@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 
+using CombineQueries.Api.Services.Speech;
 using CombineQueries.Infra.Services.Speak;
 
 namespace CombineQueries.Api.Services.Outbox;
@@ -28,9 +29,10 @@ public class Outbox(IServiceScopeFactory scopes, ILogger<Outbox> logger) : IOutb
                 using var scope = scopes.CreateScope();
 
                 var speak = scope.ServiceProvider.GetRequiredService<ISpeak>();
-                var result = await speak.GetAsync(url, CancellationToken.None);
+                var speech = scope.ServiceProvider.GetRequiredService<ISpeech>();
+                var result = await speak.GetAsync(url, TimeSpan.FromSeconds(speech.MaxTickTime), CancellationToken.None);
 
-                Keep(stream, new Delivery(url, result.Body, result.ElapsedMs));
+                Keep(stream, new Delivery(url, result.Body, result.ElapsedMs, result.Ok ? null : result.Error ?? "failed"));
             }
             catch (Exception error)
             {
@@ -38,7 +40,7 @@ public class Outbox(IServiceScopeFactory scopes, ILogger<Outbox> logger) : IOutb
                 // Пустое тело - честный ответ «сходили, не принесли».
                 logger.LogWarning("outbox: {Url} failed ({Kind}: {Message})", url, error.GetType().Name, error.Message);
 
-                Keep(stream, new Delivery(url, "", 0));
+                Keep(stream, new Delivery(url, "", 0, error.Message));
             }
             finally
             {

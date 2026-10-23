@@ -16,7 +16,7 @@ public class CombineHandler(ILogger<CombineHandler> logger, ISpeech speech) : IR
 
         int symbols = speech.SymbolsOf(TypeQuery.Fragmentate);
 
-        bool fragmentate = Translator.HasFragment(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize, symbols);
+        bool fragmentate = Translator.HasFragment(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.TunnelsCount, symbols);
 
         if (!fragmentate) speech.PushDirectRunes(request.Runes);
 

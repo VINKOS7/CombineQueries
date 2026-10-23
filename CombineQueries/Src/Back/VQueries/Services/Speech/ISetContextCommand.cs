@@ -5,7 +5,7 @@ namespace CombineQueries.Api.Services.Speech;
 public interface ISetContextCommand<TRunes>
 {
     string Alphabet { get; init; }
-    int RuneSize { get; init; }
+    int TunnelsCount { get; init; }
     string Scheme { get; init; }
     int DfaSize { get; init; }
     int PageCount { get; init; }
@@ -24,12 +24,15 @@ public interface ISetContextCommand<TRunes>
 
     // Самый длинный url, который хайпером ложится в базу.
     int LengthBatch { get; init; }
+
+    // Сколько секунд ждать целевой API на одном такте.
+    int MaxTickTime { get; init; }
 }
 
 public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
 {
     public required string Alphabet { get; init; }
-    public int RuneSize { get; init; } = 2;
+    public int TunnelsCount { get; init; } = 2;
     public string Scheme { get; init; } = "https";
     public int DfaSize { get; init; }
     public int PageCount { get; init; } = 1;
@@ -38,4 +41,5 @@ public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
     public string BaseForwardUrl { get; init; } = "";
     public bool ResetHypers { get; init; }
     public int LengthBatch { get; init; } = Hyper.LengthBatchDefault;
+    public int MaxTickTime { get; init; } = 15;
 }

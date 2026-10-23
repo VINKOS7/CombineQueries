@@ -3,6 +3,8 @@ using System.Text.Json.Nodes;
 
 using NUnit.Framework;
 
+using CombineQueries.Tests.Tunnel;
+
 namespace CombineQueries.Tests;
 
 // Много клиентов на одном сервере. Каждый connect рождает СВОЁ кольцо частей токена, и сервер держит
@@ -20,12 +22,23 @@ namespace CombineQueries.Tests;
 //
 // Сервер берётся из окружения: CQ_HOST (по умолчанию http://localhost:5017), CQ_TOKEN (по умолчанию
 // Auth:Token из appsettings.json сервера).
-[TestFixture, Category("Wire"), NonParallelizable]
+[TestFixture, Category("Tunnel"), NonParallelizable, Order(5)]
 public class SignsTests
 {
     private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
 
     private HttpClient _http = null!;
+
+    // Потоки теста: после него они уходят следующему, а не висят занятыми до конца SignLife.
+    private readonly List<Streams.Lease> _leases = [];
+
+    [TearDown]
+    public void Release()
+    {
+        foreach (var lease in _leases) Streams.Give(lease);
+
+        _leases.Clear();
+    }
 
     [OneTimeSetUp]
     public void Open() => _http = new HttpClient
@@ -115,18 +128,15 @@ public class SignsTests
         }
     }
 
+    // Поток из общих: свободный, а нет его - новый connect. Кольцо отдаётся с того места, докуда его
+    // довёл прошлый хозяин, - с начала тут не начинается, но тестам кольца это и не нужно.
     private async Task<string> ConnectAsync()
     {
-        string query = $"/connect?alphabet={AlphabetEncoded}&baseQuery=vink0s.com&runeSize=3&scheme=https&token={Token()}"
-            + "&dfaSize=1024&pageCount=64&hopCount=64&rememberInfinite=true&resetHypers=false&hypers=off";
+        var lease = await Streams.TakeAsync(_http, Streams.Query(AlphabetEncoded, "https", Token(), hypers: false));
 
-        using var response = await _http.GetAsync(query);
+        _leases.Add(lease);
 
-        string body = await response.Content.ReadAsStringAsync();
-
-        Assert.That((int)response.StatusCode, Is.EqualTo(200), $"connect -> {(int)response.StatusCode}: {body}");
-
-        return JsonNode.Parse(body)?["signs"]?.GetValue<string>() ?? "";
+        return lease.Signs[lease.Position..] + lease.Signs[..lease.Position];
     }
 
     // Добор долга: самый дешёвый подписанный запрос. Возвращает код и новое кольцо, если оно приехало.

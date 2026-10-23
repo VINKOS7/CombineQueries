@@ -13,7 +13,7 @@
 //    [SerializeField] public string baseUrl = "http://localhost:5017";
 //    [SerializeField] public string baseForwardUrl = "vink0s.com";
 //    [SerializeField] public string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
-//    [SerializeField] public int RuneSize = 4;
+//    [SerializeField] public int TunnelsCount = 4;
 
 //    // пул VRCUrl - ВСЁ ЕЩЁ проблема: строить VRCUrl можно только в field-init/компайл-тайме,
 //    // GetRuneQueries в рантайме через циклы может не пройти в честном Udon. Оставлено как было.
@@ -55,7 +55,7 @@
 
 //    public void Send(string url)
 //    {
-//        int[] runes = CompressRecursiveAccum(url, RuneSize);
+//        int[] runes = CompressRecursiveAccum(url, TunnelsCount);
 
 //        VRCUrl query = QueryByRunesFrom(IntArrayToString(runes));
 
@@ -64,14 +64,14 @@
 
 //    // Сжимает, ПЕРЕИСПОЛЬЗУЯ уже накопленные alphabetLevels (не с нуля). Новые уровни, которые
 //    // появились в процессе, дописываются в общий DataList - их же вернёт сервер и подтвердит.
-//    public int[] CompressRecursiveAccum(string input, int runeSize)
+//    public int[] CompressRecursiveAccum(string input, int tunnelsCount)
 //    {
 //        // старт с самого "прогретого" уровня, который у нас есть
 //        string currentAlphabet = alphabetLevels[alphabetLevels.Count - 1].String;
 
 //        int[] current = Compress(input, currentAlphabet);
 
-//        while (current.Length > runeSize && current.Length % 2 == 0 && current.Length > 0)
+//        while (current.Length > tunnelsCount && current.Length % 2 == 0 && current.Length > 0)
 //        {
 //            string asString = IntArrayToString(current);
 
