@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 using NUnit.Framework;
 
-namespace CombineQueries.Tests.Wire;
+namespace CombineQueries.Tests.Tunnel;
 
 // Подключения на прогон. Сервер держит восемь потоков, и место освобождает только поток, молчавший
 // десять минут, - connect на каждый тест выедал их за один прогон, и хвост набора ловил 403
@@ -33,9 +33,13 @@ public static class Streams
         public DateTime Seen { get; set; } = DateTime.UtcNow;
     }
 
-    public static string Query(string alphabetEncoded, string scheme, string token, bool hypers, int? lengthBatch = null, string baseQuery = "vink0s.com") =>
+    // Размеры VF у общих потоков: свои у клиента - значит свой connect, иначе сервер склеит VF чужими.
+    public static readonly int DfaSize = int.Parse(Environment.GetEnvironmentVariable("CQ_DFA") ?? "1024");
+    public static readonly int PageCount = int.Parse(Environment.GetEnvironmentVariable("CQ_PAGES") ?? "64");
+
+    public static string Query(string alphabetEncoded, string scheme, string token, bool hypers, int? lengthBatch = null, string baseQuery = "vink0s.com", int? dfaSize = null, int? pageCount = null) =>
         $"/connect?alphabet={alphabetEncoded}&baseQuery={baseQuery}&runeSize=3&scheme={scheme}&token={token}"
-        + $"&dfaSize={Environment.GetEnvironmentVariable("CQ_DFA") ?? "1024"}&pageCount={Environment.GetEnvironmentVariable("CQ_PAGES") ?? "64"}"
+        + $"&dfaSize={dfaSize ?? DfaSize}&pageCount={pageCount ?? PageCount}"
         + $"&hopCount=64&rememberInfinite=true&resetHypers=false&hypers={(hypers ? "on" : "off")}"
         + (lengthBatch is null ? "" : $"&lengthBatch={lengthBatch}");
 

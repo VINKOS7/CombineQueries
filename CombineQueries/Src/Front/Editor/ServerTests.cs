@@ -27,6 +27,7 @@ public class ServerTests : EditorWindow
     private bool _follow = true;
     private string _filter = "";
     private string _summary = "";
+    private int _warnings;
     private DateTime _started;
 
     [MenuItem("Tools/CombineQueries/Server tests")]
@@ -87,6 +88,7 @@ public class ServerTests : EditorWindow
         _lines.Clear();
         _results.Clear();
         _summary = "";
+        _warnings = 0;
         _started = DateTime.Now;
 
         if (!Directory.Exists(TestsPath)) { _summary = "Not found: " + TestsPath; return; }
@@ -167,7 +169,8 @@ public class ServerTests : EditorWindow
 
         if (_process != null && _process.HasExited && _incoming.IsEmpty && _summary == "")
         {
-            _summary = (_process.ExitCode == 0 ? "PASSED" : "FAILED") + $" (exit {_process.ExitCode}, {(DateTime.Now - _started).TotalSeconds:0} s)";
+            _summary = (_process.ExitCode == 0 ? "PASSED" : "FAILED") + (_warnings > 0 ? $", {_warnings} warnings" : "")
+                + $" (exit {_process.ExitCode}, {(DateTime.Now - _started).TotalSeconds:0} s)";
 
             UnityEngine.Debug.Log("[ServerTests] " + _summary + "\n" + string.Join("\n", _results));
 
@@ -187,7 +190,9 @@ public class ServerTests : EditorWindow
 
         if (trimmed.StartsWith("Passed ") && !trimmed.StartsWith("Passed!")) _results.Add("<color=#3c3>✔</color> " + trimmed.Substring(7));
         else if (trimmed.StartsWith("Failed ") && !trimmed.StartsWith("Failed!")) _results.Add("<color=#e44>✘</color> " + trimmed.Substring(7));
-        else if (trimmed.StartsWith("Skipped ")) _results.Add("<color=#cc3>–</color> " + trimmed.Substring(8));
+        // Assert.Warn адаптер NUnit отдаёт как Skipped: это тест, упавший не по нашей вине, - целевой API
+        // не ответил за maxTickTime. Не красный крест, а жёлтый восклицательный знак.
+        else if (trimmed.StartsWith("Skipped ")) { _results.Add("<color=#fc3>!</color> " + trimmed.Substring(8)); _warnings++; }
         else if (trimmed.StartsWith("Passed!") || trimmed.StartsWith("Failed!")) _summary = "";
     }
 

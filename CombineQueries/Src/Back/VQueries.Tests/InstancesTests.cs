@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 
 using NUnit.Framework;
 
-using CombineQueries.Tests.Wire;
+using CombineQueries.Tests.Tunnel;
 
 namespace CombineQueries.Tests;
 
@@ -33,7 +33,7 @@ public class InstancesTests
         var host = new Uri(Environment.GetEnvironmentVariable("CQ_HOST") ?? "http://localhost:5017");
 
         var https = new List<HttpClient>();
-        var clients = new List<WireClient>();
+        var clients = new List<TunnelClient>();
         var batches = new List<string[]>();
 
         try
@@ -41,7 +41,7 @@ public class InstancesTests
             for (int i = 0; i < instances; i++)
             {
                 var http = new HttpClient { BaseAddress = host, Timeout = TimeSpan.FromSeconds(90) };
-                var client = new WireClient(http, Token(), cooldown, true);
+                var client = new TunnelClient(http, Token(), cooldown, true);
 
                 https.Add(http);
 
@@ -78,14 +78,7 @@ public class InstancesTests
             Assert.Multiple(() =>
             {
                 for (int i = 0; i < instances; i++)
-                    foreach (string url in batches[i])
-                    {
-                        string body = clients[i].BodyOf(url);
-
-                        Assert.That(body, Is.Not.Empty, $"инстанс {i}, {url}: тело не приехало");
-
-                        if (body != "") Assert.That(IdOf(body), Is.EqualTo(int.Parse(url[(url.LastIndexOf('/') + 1)..])), $"инстанс {i}, {url}: чужое тело");
-                    }
+                    foreach (string url in batches[i]) clients[i].AssertBody(url, int.Parse(url[(url.LastIndexOf('/') + 1)..]), $"инстанс {i}, ");
             });
         }
         finally
@@ -93,18 +86,6 @@ public class InstancesTests
             foreach (var client in clients) client.Release();
 
             foreach (var http in https) http.Dispose();
-        }
-    }
-
-    private static int IdOf(string body)
-    {
-        try
-        {
-            return JsonNode.Parse(body)?["id"]?.GetValue<int>() ?? -1;
-        }
-        catch (JsonException)
-        {
-            return -1;
         }
     }
 

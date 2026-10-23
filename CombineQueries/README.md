@@ -40,7 +40,7 @@ Everything below is local. Hosting is out of scope here.
    **Tools → CombineQueries → Add test rig to current scene**, and press Play. The builder saves
    the scene itself.
 
-   Running it again on a scene that already has the rig adds only what is missing and re-wires the
+   Running it again on a scene that already has the rig adds only what is missing and re-tunnels the
    components; cubes and boards you moved or recoloured by hand stay as they are.
 
 ## What you should see

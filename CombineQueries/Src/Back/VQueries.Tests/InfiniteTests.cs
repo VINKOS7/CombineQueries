@@ -3,18 +3,20 @@ using System.Text.Json.Nodes;
 
 using NUnit.Framework;
 
-using CombineQueries.Tests.Wire;
+using CombineQueries.Tests.Tunnel;
 
 namespace CombineQueries.Tests;
 
 // Синтетика Infinite по дереву: строка за потолком L3 едет финитным предком (VF) и номером среди
-// его Inf-потомков (hop). Гонять с маленькими размерами, иначе до Inf не дойти: CQ_DFA=16
-// CQ_PAGES=8 - финитных адресов 128, всё выученное дальше - Infinite.
+// его Inf-потомков (hop). Размеры свои, маленькие - 16 x 8, финитных адресов 128, всё выученное дальше
+// - Infinite: на 1024 x 64 до Inf не дойти. Клиент шлёт их в своём connect и ими же адресует VF, так
+// что сервер склеивает теми же. Connect меняет контекст сервера для всех, поэтому фикстура идёт
+// почти последней - за ней только HyperTickTests со своим connect.
 //
 // Первый проход учит словарь, второй шлёт НОВЫЕ номера: собранные адреса становятся гиперами, и
 // повтор тех же ушёл бы прыжками, до фрагментов не дойдя. Новые собираются из выученных кусков.
 // Тела сверяются после каждого прохода: Inf, собранный не тем потомком, дал бы чужое тело.
-[TestFixture, Order(2)]
+[TestFixture, Order(7)]
 public class InfiniteTests
 {
     private const string Prefix = "https://dummyjson.com/";
@@ -36,7 +38,7 @@ public class InfiniteTests
             Timeout = TimeSpan.FromSeconds(90)
         };
 
-        var client = new WireClient(http, Token(), TimeSpan.Zero, false);
+        var client = new TunnelClient(http, Token(), TimeSpan.Zero, false) { DfaSize = 16, PageCount = 8 };
 
         await client.ConnectAsync();
 
@@ -56,7 +58,7 @@ public class InfiniteTests
         }
     }
 
-    private static async Task PassAsync(WireClient client, int pass)
+    private static async Task PassAsync(TunnelClient client, int pass)
     {
         string[] urls = [.. Paths.SelectMany(path => Enumerable.Range(1, path.Count)
             .Select(number => $"{Prefix}{path.Path}/{number}")
@@ -75,27 +77,8 @@ public class InfiniteTests
 
         Assert.Multiple(() =>
         {
-            foreach (string url in urls)
-            {
-                string body = client.BodyOf(url);
-
-                Assert.That(body, Is.Not.Empty, $"{url}: тело не приехало");
-
-                if (body != "") Assert.That(IdOf(body), Is.EqualTo(int.Parse(url[(url.LastIndexOf('/') + 1)..])), $"{url}: чужое тело");
-            }
+            foreach (string url in urls) client.AssertBody(url, int.Parse(url[(url.LastIndexOf('/') + 1)..]), "");
         });
-    }
-
-    private static int IdOf(string body)
-    {
-        try
-        {
-            return JsonNode.Parse(body)?["id"]?.GetValue<int>() ?? -1;
-        }
-        catch (JsonException)
-        {
-            return -1;
-        }
     }
 
     // Токен мира: из окружения, иначе тот же, что в конфиге сервера рядом.

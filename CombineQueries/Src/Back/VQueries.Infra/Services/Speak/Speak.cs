@@ -15,15 +15,20 @@ public class Speak : ISpeak
         _httpClient = httpClient;
     }
 
-    public async Task<ForwardResult> GetAsync(string url, CancellationToken cancellationToken)
+    public async Task<ForwardResult> GetAsync(string url, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var watch = Stopwatch.StartNew();
 
+        // Ждём целевой API ровно timeout, а не сколько позволит HttpClient: потолок задаёт клиент на connect.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        limit.CancelAfter(timeout);
+
         try
         {
-            var response = await _httpClient.GetAsync(url, cancellationToken);
+            var response = await _httpClient.GetAsync(url, limit.Token);
 
-            string body = await response.Content.ReadAsStringAsync(cancellationToken);
+            string body = await response.Content.ReadAsStringAsync(limit.Token);
 
             watch.Stop();
 
@@ -39,9 +44,14 @@ public class Speak : ISpeak
         {
             watch.Stop();
 
-            _logger.LogError($"forward: request to '{url}' failed after {watch.ElapsedMilliseconds} ms: {ex.Message}");
+            // Не дождались целевого API - отдельной строкой: клиенту это не сбой протокола, а долгий чужой сайт.
+            string error = limit.IsCancellationRequested && !cancellationToken.IsCancellationRequested
+                ? $"timeout: target did not answer in {timeout.TotalSeconds:0} s"
+                : ex.Message;
 
-            return new ForwardResult(false, 0, "", watch.ElapsedMilliseconds, ex.Message);
+            _logger.LogError($"forward: request to '{url}' failed after {watch.ElapsedMilliseconds} ms: {error}");
+
+            return new ForwardResult(false, 0, "", watch.ElapsedMilliseconds, error);
         }
     }
 }

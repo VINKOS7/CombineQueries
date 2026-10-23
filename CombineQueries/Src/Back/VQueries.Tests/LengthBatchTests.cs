@@ -1,6 +1,6 @@
 using NUnit.Framework;
 
-using CombineQueries.Tests.Wire;
+using CombineQueries.Tests.Tunnel;
 
 namespace CombineQueries.Tests;
 
@@ -10,7 +10,7 @@ namespace CombineQueries.Tests;
 //
 // Что url длиннее lengthBatch форвардится и ходит прыжком из памяти - см. HyperTickTests: проверять
 // это на мировом алфавите значит учить словарь мира синтетикой.
-[TestFixture, Category("Wire"), NonParallelizable, Order(1)]
+[TestFixture, Category("Tunnel"), NonParallelizable, Order(1)]
 public class LengthBatchTests
 {
     private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";

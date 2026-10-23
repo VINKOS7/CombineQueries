@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 using NUnit.Framework;
 
-using CombineQueries.Tests.Wire;
+using CombineQueries.Tests.Tunnel;
 
 namespace CombineQueries.Tests;
 
@@ -22,7 +22,7 @@ namespace CombineQueries.Tests;
 //
 // Сервер берётся из окружения: CQ_HOST (по умолчанию http://localhost:5017), CQ_TOKEN (по умолчанию
 // Auth:Token из appsettings.json сервера).
-[TestFixture, Category("Wire"), NonParallelizable, Order(5)]
+[TestFixture, Category("Tunnel"), NonParallelizable, Order(5)]
 public class SignsTests
 {
     private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";

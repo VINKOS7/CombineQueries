@@ -43,6 +43,9 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
 
             if (request.LengthBatch < 0) throw new Exception($"domain error: lengthBatch={request.LengthBatch}, must be >= 0 (0 = full string)");
 
+            if (request.MaxTickTime < 1 || request.MaxTickTime > ConnectRequest.MaxTickTimeLimit)
+                throw new Exception($"domain error: maxTickTime={request.MaxTickTime}, must be 1..{ConnectRequest.MaxTickTimeLimit} seconds");
+
             bool again = _speech.Alphabet is not null;
 
             var (dfaSize, pageCount) = SizesOf(request);
@@ -58,10 +61,11 @@ public class ConnectHandler : IRequestHandler<ConnectRequest, ConnectResponse>
                 Hypers = request.Persist,
                 BaseForwardUrl = request.baseForwardUrl,
                 ResetHypers = request.ResetHypers,
-                LengthBatch = request.LengthBatch
+                LengthBatch = request.LengthBatch,
+                MaxTickTime = request.MaxTickTime
             });
 
-            _logger.LogInformation($"connect: alphabet {request.Alphabet.Length} chars, runeSize={tunnelsCount}, scheme={request.Scheme}, dfaSize={dfaSize}, pageCount={pageCount}, lengthBatch={request.LengthBatch}");
+            _logger.LogInformation($"connect: alphabet {request.Alphabet.Length} chars, runeSize={tunnelsCount}, scheme={request.Scheme}, dfaSize={dfaSize}, pageCount={pageCount}, lengthBatch={request.LengthBatch}, maxTickTime={request.MaxTickTime}");
 
             if (account is not null)
             {

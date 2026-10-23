@@ -183,6 +183,9 @@ requests carry them, and the server assembles each client's url in its own buffe
   default) and fragments up to 512. A longer url is still forwarded and works as a hyper until the
   server restarts, but it is not written to the database.
 - **Bodies up to 1 MB** — the server does not read further.
+- **The target API gets `MaxTickTime` seconds** (15 by default, the server accepts 1–60), sent in
+  `/connect` as `maxTickTime`. A site that does not answer in time is delivered with an empty body
+  and an `error` field saying why; a body over 1 MB is delivered the same way.
 - **Eight clients per server.** The ninth `/connect` gets 403 *"You should await when some master
   instance be closed"*. A place frees up when a client stays silent for 10 minutes.
 - **A server restart** keeps the dictionary and the hypers — they are in the database — but every

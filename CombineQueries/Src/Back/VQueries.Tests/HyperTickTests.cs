@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 
 using NUnit.Framework;
 
-using CombineQueries.Tests.Wire;
+using CombineQueries.Tests.Tunnel;
 
 namespace CombineQueries.Tests;
 
@@ -12,7 +12,7 @@ namespace CombineQueries.Tests;
 //
 // Фикстура последняя в прогоне: её connect меняет контекст сервера (схему и алфавит) для всех. Мир
 // после неё переподключается сам - на Play.
-[TestFixture, Category("Wire"), NonParallelizable, Order(7)]
+[TestFixture, Category("Tunnel"), NonParallelizable, Order(8)]
 public class HyperTickTests
 {
     private static readonly int[] Lengths = [2048, 8192, 16384, 27000];
@@ -50,7 +50,7 @@ public class HyperTickTests
     [Test, Order(1)]
     public async Task OverLengthBatchGoesByHyperFromMemory()
     {
-        var client = new WireClient(_http, Streams.Token(), TimeSpan.Zero, false) { Scheme = "http", Isolated = true, LengthBatch = 4096 };
+        var client = new TunnelClient(_http, Streams.Token(), TimeSpan.Zero, false) { Scheme = "http", Isolated = true, LengthBatch = 4096 };
 
         await client.ConnectAsync();
 
@@ -83,7 +83,7 @@ public class HyperTickTests
     [Test, Order(2)]
     public async Task MaxDataPerHyperTick()
     {
-        var client = new WireClient(_http, Streams.Token(), TimeSpan.Zero, false) { Scheme = "http", Isolated = true, LengthBatch = 0 };
+        var client = new TunnelClient(_http, Streams.Token(), TimeSpan.Zero, false) { Scheme = "http", Isolated = true, LengthBatch = 0 };
 
         await client.ConnectAsync();
 

@@ -1,12 +1,14 @@
 using System.Text.Json.Nodes;
 
-namespace CombineQueries.Tests.Wire;
+using NUnit.Framework;
+
+namespace CombineQueries.Tests.Tunnel;
 
 // Порт пути Require/Result из Udon-клиента (Src/Front/Core/CombineQueries.cs): тот же выбор дороги -
 // прыжок диапазоном, голова, сборка фрагментами и рунами, хвост, добор долга - и те же печёные
 // адреса. Пауза между загрузками как у VRCStringDownloader: без неё долги приезжают не в те ответы,
 // что в мире, и тест меряет другую систему.
-public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool hypers)
+public class TunnelClient(HttpClient http, string token, TimeSpan cooldown, bool hypers)
 {
     private const string WorldEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
     private const string WorldAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
@@ -41,8 +43,11 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
     private const int NumSize = 4;
     // Размеры VF-пула. Синтетика Infinite подключается с маленькими (CQ_DFA x CQ_PAGES), чтобы дойти
     // до Inf за сотню строк, а не за 65 536, - как dev-режим сервера.
-    private static readonly int DfaSize = int.Parse(Environment.GetEnvironmentVariable("CQ_DFA") ?? "1024");
-    private static readonly int PageCount = int.Parse(Environment.GetEnvironmentVariable("CQ_PAGES") ?? "64");
+    // Свои размеры - и в connect, и в адресе VF: сервер склеивает id = page*dfaSize + slot по тем, что
+    // ему прислали, и клиент с другими размерами собрал бы чужой адрес.
+    public int DfaSize { get; init; } = int.Parse(Environment.GetEnvironmentVariable("CQ_DFA") ?? "1024");
+
+    public int PageCount { get; init; } = int.Parse(Environment.GetEnvironmentVariable("CQ_PAGES") ?? "64");
     private const int HopCount = 64;
     private const int MaxJumps = 4096;
     private const int HeadLimit = 2048;
@@ -68,6 +73,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
     private readonly Dictionary<int, (int Base, int Hop)> _infinite = [];
     private readonly Dictionary<string, int> _jumps = [];
     private readonly Dictionary<string, string> _bodies = [];
+    private readonly Dictionary<string, string> _errors = [];
     private readonly Dictionary<string, int> _spent = [];
 
     private Streams.Lease? _lease;
@@ -101,14 +107,41 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
     public string BodyOf(string url) => _bodies.GetValueOrDefault(PayloadOf(url), "");
 
+    // Сервер доставил адрес без тела и сказал почему - сбой цели, а не протокола.
+    public string ErrorOf(string url) => _errors.GetValueOrDefault(PayloadOf(url), "");
+
+    // Тело есть, или его нет по вине цели: тест протокола такое не валит, а предупреждает.
+    public void AssertBody(string url, int id, string who)
+    {
+        string body = BodyOf(url);
+
+        if (body == "" && ErrorOf(url) != "") { Assert.Warn($"{who}{url}: целевой API не ответил - {ErrorOf(url)}"); return; }
+
+        Assert.That(body, Is.Not.Empty, $"{who}{url}: тело не приехало");
+
+        if (body != "") Assert.That(IdOf(body), Is.EqualTo(id), $"{who}{url}: чужое тело");
+    }
+
+    private static int IdOf(string body)
+    {
+        try
+        {
+            return JsonNode.Parse(body)?["id"]?.GetValue<int>() ?? -1;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return -1;
+        }
+    }
+
     // Номер запроса, на котором приехало тело: 0 - сам vrequest, дальше - запросы после него. Как слот 2 коробки у клиента.
     public int SpentOf(string url) => _spent.GetValueOrDefault(PayloadOf(url));
 
     public async Task ConnectAsync()
     {
-        string query = Streams.Query(Isolated ? IsolatedEncoded : WorldEncoded, Scheme, token, hypers, LengthBatch);
+        string query = Streams.Query(Isolated ? IsolatedEncoded : WorldEncoded, Scheme, token, hypers, LengthBatch, dfaSize: DfaSize, pageCount: PageCount);
 
-        bool fresh = Fresh || Isolated || Scheme != "https" || LengthBatch is not null;
+        bool fresh = Fresh || Isolated || Scheme != "https" || LengthBatch is not null || DfaSize != Streams.DfaSize || PageCount != Streams.PageCount;
 
         _lease = fresh ? await Streams.ConnectAsync(http, query) : await Streams.TakeAsync(http, query);
 
@@ -224,9 +257,15 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
                 if (_jumps.GetValueOrDefault(PayloadOf(url), -1) == first) _jumps.Remove(PayloadOf(url));
     }
 
+    private static readonly bool Trace = Environment.GetEnvironmentVariable("CQ_TRACE") == "1";
+
+    private string _tracing = "";
+
     private async Task DispatchAsync(string url)
     {
         string payload = PayloadOf(url);
+
+        _tracing = payload;
 
         _headTried = false;
 
@@ -445,6 +484,9 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
             _bodies[url] = Text(item, "response");
 
+            // Почему тела нет: целевой API не ответил за maxTickTime, оборвал связь. Удачная доставка поля не несёт.
+            _errors[url] = Text(item, "error");
+
             if (!_spent.ContainsKey(url) && _batch.Any(asked => PayloadOf(asked) == url)) _spent[url] = Math.Max(0, TotalQueries - _releasedAt - 1);
 
             Mark(url);
@@ -529,6 +571,9 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
         LastMs = (long)(DateTime.UtcNow - _lastLoad).TotalMilliseconds;
         LastBytes = System.Text.Encoding.UTF8.GetByteCount(text);
+
+        // CQ_TRACE=1: каждая загрузка и начало ответа - разбирать, какой дорогой ушёл адрес. Обычный прогон молчит.
+        if (Trace) TestContext.Out.WriteLine($"  [{_tracing}] {path} -> {(int)response.StatusCode} {(text.Length > 300 ? text[..300] + "..." : text)}");
 
         if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"{path} -> {(int)response.StatusCode}: {text}");
 

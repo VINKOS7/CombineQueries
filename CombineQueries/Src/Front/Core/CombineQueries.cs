@@ -54,6 +54,12 @@ public class CombineQueries : UdonSharpBehaviour
     [SerializeField] private int maxTicks = 2048;
     public int MaxTicks => maxTicks > 0 ? maxTicks : 2048;
 
+    // Сколько секунд сервер ждёт целевой API на одном такте: не дождался - тело пустое, а в доставке
+    // error с причиной. Едет в /connect, а ссылка connect печётся константой, поэтому это строка, а не
+    // поле инспектора: VRCUrl из сериализуемого значения не собрать. Сервер принимает 1..60.
+    private const string MaxTickTimeStr = "15";
+    public string MaxTickTime => MaxTickTimeStr;
+
     private const bool rememberInfinite = true;
     private const bool RequireCode = CombineQueriesEnvironment.RequireCode;
 
@@ -149,8 +155,8 @@ public class CombineQueries : UdonSharpBehaviour
     private readonly VRCUrl[] Pair2Pool = Pair2PoolOf(baseUrl + "/c/", RuneAlphabet, RuneLength, Pair2Limit, dfaSize);
     private readonly VRCUrl[] AuthPool = AuthPoolOf(baseUrl + "/k/", AuthAlphabet);
     private readonly VRCUrl VerifyQuery = new VRCUrl(baseUrl + "/kf");
-    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + TunnelsCountStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
-    private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + TunnelsCountStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
+    private readonly VRCUrl ConnectQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + TunnelsCountStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&maxTickTime=" + MaxTickTimeStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=" + ResetHypersStr + "&hypers=" + GrowHypersStr);
+    private readonly VRCUrl RememberQuery = new VRCUrl(baseUrl + "/connect?alphabet=" + AlphabetEncoded + "&baseQuery=" + baseForwardUrl + "&runeSize=" + TunnelsCountStr + "&scheme=" + Scheme + "&token=" + Token + "&dfaSize=" + DfaSizeStr + "&pageCount=" + PageCountStr + "&hopCount=" + HopCountStr + "&lengthBatch=" + LengthBatchStr + "&maxTickTime=" + MaxTickTimeStr + "&rememberInfinite=" + RememberInfiniteStr + "&resetHypers=false&hypers=" + GrowHypersStr);
 
     // ---- Подключение ----
 

@@ -24,6 +24,9 @@ public interface ISetContextCommand<TRunes>
 
     // Самый длинный url, который хайпером ложится в базу.
     int LengthBatch { get; init; }
+
+    // Сколько секунд ждать целевой API на одном такте.
+    int MaxTickTime { get; init; }
 }
 
 public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
@@ -38,4 +41,5 @@ public record SetContextCommand<TRunes>() : ISetContextCommand<TRunes>
     public string BaseForwardUrl { get; init; } = "";
     public bool ResetHypers { get; init; }
     public int LengthBatch { get; init; } = Hyper.LengthBatchDefault;
+    public int MaxTickTime { get; init; } = 15;
 }

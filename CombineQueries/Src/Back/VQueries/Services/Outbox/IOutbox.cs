@@ -2,11 +2,13 @@ using Newtonsoft.Json;
 
 namespace CombineQueries.Api.Services.Outbox;
 
-// Один доставленный адрес: что просили и что пришло снаружи.
+// Один доставленный адрес: что просили и что пришло снаружи. Error - почему тела нет (целевой API не
+// ответил за maxTickTime, оборвал связь, тело больше 1 МБ); у удачного ответа поля нет вовсе.
 public record Delivery(
     [property: JsonProperty("url")] string Url,
     [property: JsonProperty("response")] string Response,
-    [property: JsonProperty("elapsedMs")] long ElapsedMs);
+    [property: JsonProperty("elapsedMs")] long ElapsedMs,
+    [property: JsonProperty("error", NullValueHandling = NullValueHandling.Ignore)] string? Error = null);
 
 // Почтовый ящик отложенных ответов.
 //

@@ -60,9 +60,9 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeak spe
 
         if (single)
         {
-            var spoken = await speak.GetAsync(url, cancellationToken);
+            var spoken = await speak.GetAsync(url, TimeSpan.FromSeconds(speech.MaxTickTime), cancellationToken);
 
-            ready = [.. outbox.Take(speech.Stream), new Delivery(url, spoken.Body, spoken.ElapsedMs)];
+            ready = [.. outbox.Take(speech.Stream), new Delivery(url, spoken.Body, spoken.ElapsedMs, spoken.Ok ? null : spoken.Error ?? "failed")];
         }
         else
         {
@@ -108,7 +108,7 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeak spe
         };
     }
 
-    private async Task Persist(string url, int handle, LearnResult learned, CancellationToken cancellationToken)
+    private async Task Persist (string url, int handle, LearnResult learned, CancellationToken cancellationToken)
     {
         try
         {

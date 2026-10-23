@@ -7,7 +7,7 @@ static void WarmupTable(string alphabet, string message, int passes)
 {
     Console.WriteLine($"Сообщение: \"{message}\" ({message.Length} символов), шлём {passes} раз подряд на одном дереве");
     Console.WriteLine();
-    Console.WriteLine("проход | запросов | wire-символов | ratio | узлов в дереве");
+    Console.WriteLine("проход | запросов | tunnel-символов | ratio | узлов в дереве");
     Console.WriteLine("-------|----------|---------------|-------|---------------");
 
     var clientTree = ArenaTreeFactory.ATRFrom(alphabet);
@@ -19,10 +19,10 @@ static void WarmupTable(string alphabet, string message, int passes)
         var client = new Client(alphabet, clientTree, message);
         server.ProcessAll(client, verbose: false);
 
-        double ratio = (double)message.Length / server.LastWireChars;
+        double ratio = (double)message.Length / server.LastTunnelChars;
         bool ok = server.Accumulated == message;
 
-        Console.WriteLine($"{p,6} | {server.LastRounds,8} | {server.LastWireChars,13} | {ratio,4:F2}x | {server.TreeNodeCount,6}{(ok ? "" : "  !!! MISMATCH")}");
+        Console.WriteLine($"{p,6} | {server.LastRounds,8} | {server.LastTunnelChars,13} | {ratio,4:F2}x | {server.TreeNodeCount,6}{(ok ? "" : "  !!! MISMATCH")}");
     }
 
     Console.WriteLine();

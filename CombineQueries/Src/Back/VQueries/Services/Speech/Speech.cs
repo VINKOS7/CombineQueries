@@ -28,6 +28,10 @@ public class Speech : ISpeech
     // 0 там значит «полная строка» - здесь это int.MaxValue.
     public int LengthBatch { get; private set; } = Hyper.LengthBatchDefault;
 
+    // Сколько секунд форвард ждёт целевой API. Решает клиент параметром maxTickTime в connect; до
+    // первого connect - прежние 15.
+    public int MaxTickTime { get; private set; } = 15;
+
     public string DirectRunes { get; set; } = string.Empty;
     public string DirectUnruned { get; set; } = string.Empty;
     public bool Authorized { get; private set; }
@@ -704,6 +708,7 @@ public class Speech : ISpeech
         BaseForwardUrl = command.BaseForwardUrl;
         ResetHypers = command.ResetHypers;
         LengthBatch = command.LengthBatch < 0 ? Hyper.LengthBatchDefault : command.LengthBatch == 0 ? int.MaxValue : command.LengthBatch;
+        MaxTickTime = command.MaxTickTime > 0 ? command.MaxTickTime : 15;
 
         // Незавершённую сборку чистить незачем: OpenSigns выше завёл клиенту новый поток, а сборка
         // у потока своя и рождается пустой. Хайперы и фрагменты НЕ трогаем: при реконнекте они

@@ -3,7 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
-namespace CombineQueries.Tests.Wire;
+namespace CombineQueries.Tests.Tunnel;
 
 // Цель форварда для замеров: отвечает телом заданного размера на любой путь. Голый TCP, а не
 // HttpListener: у http.sys потолок строки запроса ~16 КБ и сегмента 260 символов, а меряем url
