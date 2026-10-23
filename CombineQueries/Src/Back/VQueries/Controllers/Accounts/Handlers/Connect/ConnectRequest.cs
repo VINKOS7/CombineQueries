@@ -14,7 +14,10 @@ public record ConnectRequest : IRequest<ConnectResponse>
     [FromQuery(Name = "baseQuery")]
     public required string baseForwardUrl { get; set; }
 
-    [JsonProperty("runeSize")] public int RuneSize { get; set; } = 2;
+    // Сколько символов в одной руне. Имя в протоколе прежнее - runeSize: оно запечено в ссылках мира.
+    [JsonProperty("runeSize")]
+    [FromQuery(Name = "runeSize")]
+    public int TunnelsCount { get; set; } = 2;
 
     [JsonProperty("scheme")] public string Scheme { get; set; } = "https";
 

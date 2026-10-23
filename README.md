@@ -60,7 +60,7 @@ that matters is how many requests a url takes, and that depends on what the serv
 
 A *symbol* is one letter or one of 35 common url parts (roots) the server hands over on connect. A
 *rune* is the four changing letters in a request's path, spelled in `RuneAlphabet`. Its **payload**
-is three symbols (`RuneSize`), or a dictionary fragment of any learned length, or a fragment plus
+is three symbols (`TunnelsCount`), or a dictionary fragment of any learned length, or a fragment plus
 one or two letters. One request carries one rune, and a url can be spelled entirely in fragments.
 
 | the server knows | road | requests |
@@ -110,12 +110,16 @@ with the `CQ_PROD` scripting define (Project Settings → Player → Scripting D
 | `RequireCode`, `Codeword` | the codeword gate; off unless the server sets `Auth:Codeword` |
 
 **The structure** lives in `const` fields at the top of `Core/CombineQueries.cs`, because `VRCUrl`
-only accepts constant expressions: `Alphabet`, `RuneAlphabet`, `RuneSize` (3), `dfaSize` (1024),
-`pageCount` (64), `hopCount` (64), `MaxChunks` (1024), `Scheme`. The client sends them in
+only accepts constant expressions: `Alphabet`, `RuneAlphabet`, `TunnelsCount` (3), `dfaSize` (1024),
+`pageCount` (64), `hopCount` (64), `Scheme`. The client sends them in
 `/connect`, so the server follows. Changing any of them rebakes the pools — rebuild the world.
 `LengthBatchStr` (2048) also goes to `/connect` as `lengthBatch`: the longest url the server stores as
 a hyper in its database; `"0"` stores the full string, whatever its length. It bakes nothing, so
 changing it needs no rebuild of the pools.
+
+Two inspector fields on the client bake nothing either: `HyperRingSize` (10240) — how many hyper
+urls the client remembers before the oldest is overwritten — and `MaxTicks` (2048) — how many
+loads one url may take.
 
 ### The one thing that will silently break everything
 
@@ -173,8 +177,9 @@ requests carry them, and the server assembles each client's url in its own buffe
 - **Lowercase only.** `Alphabet` has 59 characters and no uppercase letters; a url outside it is
   refused before a single request is spent. The scheme is fixed by `Scheme`, and a url asking for
   the other one is refused too.
-- **Length.** A url takes at most `MaxChunks` = 1024 pieces, which is 3070 characters spelled in plain
-  letters (more with fragments). The server stores hypers up to `lengthBatch` characters (2048 by
+- **Length.** The protocol does not limit the number of pieces in a url. The client refuses a url up
+  front, before a single request is spent, if it would take more than `MaxTicks` loads (2048 by
+  default, about 2.8 hours at one load per 5 seconds). The server stores hypers up to `lengthBatch` characters (2048 by
   default) and fragments up to 512. A longer url is still forwarded and works as a hyper until the
   server restarts, but it is not written to the database.
 - **Bodies up to 1 MB** — the server does not read further.

@@ -14,12 +14,18 @@ namespace CombineQueries.Tests;
 // Первый проход учит словарь, второй шлёт НОВЫЕ номера: собранные адреса становятся гиперами, и
 // повтор тех же ушёл бы прыжками, до фрагментов не дойдя. Новые собираются из выученных кусков.
 // Тела сверяются после каждого прохода: Inf, собранный не тем потомком, дал бы чужое тело.
-[TestFixture]
+[TestFixture, Order(2)]
 public class InfiniteTests
 {
     private const string Prefix = "https://dummyjson.com/";
 
-    private static readonly string[] Paths = ["products", "users", "posts", "carts", "todos", "comments", "quotes", "recipes"];
+    // Раздел и сколько в нём адресов. Номера берутся только незнакомые клиенту: известный адрес ушёл бы
+    // прыжком, до фрагментов не дойдя, - а база мира копит хайперы от прогона к прогону, и прежние
+    // 1..40 давно все в ней.
+    private static readonly (string Path, int Count)[] Paths =
+        [("products", 194), ("users", 208), ("posts", 251), ("carts", 50), ("todos", 254), ("comments", 340), ("quotes", 1454), ("recipes", 50)];
+
+    private const int PerPath = 20;
 
     [Test]
     public async Task InfiniteGoesByAncestorAndHop()
@@ -34,18 +40,31 @@ public class InfiniteTests
 
         await client.ConnectAsync();
 
-        TestContext.Out.WriteLine($"connect: {client.Fragments} фрагментов, из них Inf с адресом {client.Infinite}");
+        try
+        {
+            TestContext.Out.WriteLine($"connect: {client.Fragments} фрагментов, из них Inf с адресом {client.Infinite}");
 
-        await PassAsync(client, 1, 1);
-        await PassAsync(client, 2, 21);
+            await PassAsync(client, 1);
+            await PassAsync(client, 2);
 
-        Assert.That(client.Infinite, Is.GreaterThan(0), "сервер не дал ни одного адреса Inf - размеры не маленькие?");
-        Assert.That(client.HopsSent, Is.GreaterThan(0), "ни один Inf не уехал предком и номером");
+            Assert.That(client.Infinite, Is.GreaterThan(0), "сервер не дал ни одного адреса Inf - размеры не маленькие?");
+            Assert.That(client.HopsSent, Is.GreaterThan(0), "ни один Inf не уехал предком и номером");
+        }
+        finally
+        {
+            client.Release();
+        }
     }
 
-    private static async Task PassAsync(WireClient client, int pass, int first)
+    private static async Task PassAsync(WireClient client, int pass)
     {
-        string[] urls = [.. Paths.SelectMany(path => Enumerable.Range(first, 20).Select(number => $"{Prefix}{path}/{number}"))];
+        string[] urls = [.. Paths.SelectMany(path => Enumerable.Range(1, path.Count)
+            .Select(number => $"{Prefix}{path.Path}/{number}")
+            .Where(url => client.JumpOf(url) < 0)
+            .OrderBy(_ => Random.Shared.Next())
+            .Take(PerPath))];
+
+        Assert.That(urls, Is.Not.Empty, $"проход {pass}: незнакомых адресов не осталось");
 
         int queries = client.TotalQueries, hops = client.HopsSent;
 

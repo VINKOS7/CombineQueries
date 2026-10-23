@@ -17,7 +17,7 @@ namespace CombineQueries.Tests;
 //   CQ_TOKEN       - токен мира, по умолчанию Auth:Token из appsettings.json сервера;
 //   CQ_COOLDOWN_MS - пауза SDK между загрузками, 5000;
 //   CQ_HYPERS      - on/off, как MemHypers клиента. On копит цепочки в БД сервера.
-[TestFixture, Category("Wire"), NonParallelizable]
+[TestFixture, Category("Wire"), NonParallelizable, Order(6)]
 public class StepsTests
 {
     private const string Prefix = "https://dummyjson.com/products/";
@@ -54,7 +54,11 @@ public class StepsTests
     }
 
     [OneTimeTearDown]
-    public void Disconnect() => _http.Dispose();
+    public void Disconnect()
+    {
+        _client?.Release();
+        _http.Dispose();
+    }
 
     // Одно нажатие: обе пачки по очереди, у каждой своё время от своего vrequest.
     [TestCase(7)]

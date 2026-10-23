@@ -248,12 +248,12 @@ public class Translator : Entity, IAggregateRoot
         return value;
     }
 
-    public static int[] IndexesOf(string rune, string runeAlphabet, int runeSize, int symbols)
+    public static int[] IndexesOf(string rune, string runeAlphabet, int tunnelsCount, int symbols)
     {
         long value = ValueOf(rune, runeAlphabet);
-        var indexes = new int[runeSize];
+        var indexes = new int[tunnelsCount];
 
-        for (int i = runeSize - 1; i >= 0; i--)
+        for (int i = tunnelsCount - 1; i >= 0; i--)
         {
             indexes[i] = (int)(value % symbols);
             value /= symbols;
@@ -264,21 +264,21 @@ public class Translator : Entity, IAggregateRoot
 
     public static bool IsFragment(int index, string alphabet) => index >= alphabet.Length;
 
-    public static bool HasFragment(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    public static bool HasFragment(string rune, string runeAlphabet, string alphabet, int tunnelsCount, int symbols)
     {
-        foreach (int index in IndexesOf(rune, runeAlphabet, runeSize, symbols)) if (IsFragment(index, alphabet)) return true;
+        foreach (int index in IndexesOf(rune, runeAlphabet, tunnelsCount, symbols)) if (IsFragment(index, alphabet)) return true;
 
         return false;
     }
 
     public static readonly string[] DirectFragments = ["", "o", ".com/", "."];
 
-    public static string FragmentateUnrune(string rune, string runeAlphabet, string alphabet, int runeSize, int symbols)
+    public static string FragmentateUnrune(string rune, string runeAlphabet, string alphabet, int tunnelsCount, int symbols)
     {
-        int[] indexes = IndexesOf(rune, runeAlphabet, runeSize, symbols);
-        var parts = new string[runeSize];
+        int[] indexes = IndexesOf(rune, runeAlphabet, tunnelsCount, symbols);
+        var parts = new string[tunnelsCount];
 
-        for (int i = 0; i < runeSize; i++) parts[i] = SymbolOf(alphabet, indexes[i]);
+        for (int i = 0; i < tunnelsCount; i++) parts[i] = SymbolOf(alphabet, indexes[i]);
 
         return string.Concat(parts);
     }
@@ -303,19 +303,19 @@ public class Translator : Entity, IAggregateRoot
 
     public const char Pad = ':';
 
-    public static string TrimPad(string text, int runeSize)
+    public static string TrimPad(string text, int tunnelsCount)
     {
         int cut = 0;
 
-        while (cut < runeSize && cut < text.Length && text[text.Length - 1 - cut] == Pad) cut++;
+        while (cut < tunnelsCount && cut < text.Length && text[text.Length - 1 - cut] == Pad) cut++;
 
         return text[..^cut];
     }
 
-//    private static int BaseForRune(int runeSize)
+//    private static int BaseForRune(int tunnelsCount)
 //    {
-//        if (runeSize < 1) return 0;
-//        if (runeSize == 1) return int.MaxValue;
+//        if (tunnelsCount < 1) return 0;
+//        if (tunnelsCount == 1) return int.MaxValue;
 //
 //        int lo = 1, hi = 46340; // 46340^2 - предел даже для руны из двух разрядов
 //
@@ -323,7 +323,7 @@ public class Translator : Entity, IAggregateRoot
 //        {
 //            int mid = lo + (hi - lo + 1) / 2;
 //
-//            if (FitsInInt(mid, runeSize)) lo = mid;
+//            if (FitsInInt(mid, tunnelsCount)) lo = mid;
 //            else hi = mid - 1;
 //        }
 //
@@ -388,12 +388,12 @@ public class Translator : Entity, IAggregateRoot
 //        _ => throw new Exception($"domain error: unknown type symbol '{symbol}'")
 //    };
 
-//    private static bool FitsInInt(int b, int runeSize)
+//    private static bool FitsInInt(int b, int tunnelsCount)
 //    {
 //        long limit = (long)int.MaxValue + 1;
 //        long p = 1;
 //
-//        for (int i = 0; i < runeSize; i++)
+//        for (int i = 0; i < tunnelsCount; i++)
 //        {
 //            p *= b;
 //

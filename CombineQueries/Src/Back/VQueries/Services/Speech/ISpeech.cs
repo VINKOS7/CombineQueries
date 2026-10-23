@@ -33,7 +33,7 @@ public interface ISpeech
 
     string? RuneAlphabet { get; }
 
-    int RuneSize { get; }
+    int TunnelsCount { get; }
 
     string Scheme { get; }
 

@@ -14,7 +14,7 @@ namespace CombineQueries.Tests;
 // Ловит смешение потоков: руна и пара идут без подписи и достаются потоку, подписывавшему последним,
 // - при нескольких клиентах разом кусок может лечь в чужую сборку. Тогда тело приедет не тому или
 // адрес склеится из двух. Номера свежие (случайное окно), иначе адреса уйдут прыжками, мимо сборки.
-[TestFixture]
+[TestFixture, Order(3)]
 public class InstancesTests
 {
     private const string Prefix = "https://dummyjson.com/";
@@ -43,13 +43,15 @@ public class InstancesTests
                 var http = new HttpClient { BaseAddress = host, Timeout = TimeSpan.FromSeconds(90) };
                 var client = new WireClient(http, Token(), cooldown, true);
 
+                https.Add(http);
+
                 await client.ConnectAsync();
+
+                clients.Add(client);
 
                 var (path, count) = Paths[i % Paths.Length];
                 int first = Random.Shared.Next(1, count - Batch);
 
-                https.Add(http);
-                clients.Add(client);
                 batches.Add([.. Enumerable.Range(first, Batch).Select(number => $"{Prefix}{path}/{number}")]);
 
                 TestContext.Out.WriteLine($"инстанс {i}: {path}/{first}..{first + Batch - 1}");
@@ -88,6 +90,8 @@ public class InstancesTests
         }
         finally
         {
+            foreach (var client in clients) client.Release();
+
             foreach (var http in https) http.Dispose();
         }
     }

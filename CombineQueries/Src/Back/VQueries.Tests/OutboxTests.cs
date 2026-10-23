@@ -13,11 +13,13 @@ namespace CombineQueries.Tests;
 //
 // Сервер берётся из окружения: CQ_HOST (по умолчанию http://localhost:5017), CQ_TOKEN (по умолчанию
 // Auth:Token из appsettings.json сервера).
-[TestFixture, Category("Wire"), NonParallelizable]
+[TestFixture, Category("Wire"), NonParallelizable, Order(4)]
 public class OutboxTests
 {
     private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
     private const string Asked = "https://dummyjson.com/products/3";
+
+    private Streams.Lease? _foreign;
 
     private HttpClient _http = null!;
 
@@ -39,38 +41,35 @@ public class OutboxTests
 
         await mine.ConnectAsync();
 
-        // Второй только подключён и всё это время добирает долг - чужой ему доставаться не должен.
-        string ring = await ConnectAsync();
-
-        int position = 0;
-        var stolen = new List<string>();
-
-        await mine.RunAsync([Asked], () =>
+        try
         {
-            var (status, taken) = CreditAsync(ring[position]).GetAwaiter().GetResult();
+            // Второй только подключён и всё это время добирает долг - чужой ему доставаться не должен.
+            _foreign = await Streams.TakeAsync(_http, Streams.Query(AlphabetEncoded, "https", Token(), hypers: false));
 
-            // Отказ значит, что часть забрал сосед с таким же ожиданием: поток уже сдвинут, идём дальше.
-            position = (position + 1) % ring.Length;
+            string ring = _foreign.Signs;
+            var stolen = new List<string>();
 
-            if (status == 200) stolen.AddRange(taken);
-        });
+            await mine.RunAsync([Asked], () =>
+            {
+                var (status, taken) = CreditAsync(ring[_foreign.Position]).GetAwaiter().GetResult();
 
-        Assert.That(stolen, Is.Empty, "чужому клиенту досталось тело: " + string.Join(", ", stolen));
-        Assert.That(mine.BodyOf(Asked), Is.Not.Empty, "свой клиент тела не дождался");
-    }
+                // Отказ значит, что часть забрал сосед с таким же ожиданием: поток уже сдвинут, идём дальше.
+                _foreign.Position = (_foreign.Position + 1) % ring.Length;
 
-    private async Task<string> ConnectAsync()
-    {
-        string query = $"/connect?alphabet={AlphabetEncoded}&baseQuery=vink0s.com&runeSize=3&scheme=https&token={Token()}"
-            + "&dfaSize=1024&pageCount=64&hopCount=64&rememberInfinite=true&resetHypers=false&hypers=off";
+                if (status == 200) stolen.AddRange(taken);
+            });
 
-        using var response = await _http.GetAsync(query);
+            Assert.That(stolen, Is.Empty, "чужому клиенту досталось тело: " + string.Join(", ", stolen));
+            Assert.That(mine.BodyOf(Asked), Is.Not.Empty, "свой клиент тела не дождался");
+        }
+        finally
+        {
+            mine.Release();
 
-        string body = await response.Content.ReadAsStringAsync();
+            Streams.Give(_foreign);
 
-        Assert.That((int)response.StatusCode, Is.EqualTo(200), $"connect -> {(int)response.StatusCode}: {body}");
-
-        return JsonNode.Parse(body)?["signs"]?.GetValue<string>() ?? "";
+            _foreign = null;
+        }
     }
 
     // Добор долга чужим клиентом: что он унёс, то и украдено.

@@ -8,22 +8,42 @@ namespace CombineQueries.Tests.Wire;
 // что в мире, и тест меряет другую систему.
 public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool hypers)
 {
-    private const string AlphabetEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
-    private const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
-    private const string RuneAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:@!$&'()*+,;=";
+    private const string WorldEncoded = "abcdefghijklmnopqrstuvwxyz0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
+    private const string WorldAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%";
+    private const string WorldRunes = "abcdefghijklmnopqrstuvwxyz0123456789-._~:@!$&'()*+,;=";
+
+    // Тот же алфавит с переставленными y и z. Словарь сервер заводит на каждый алфавит свой и пишет
+    // выученное в базу всегда, при любом hypers: синтетика на мировом алфавите осела бы в словаре
+    // мира и уехала бы в Udon-клиент. На этом она учит отдельный.
+    private const string IsolatedEncoded = "abcdefghijklmnopqrstuvwxzy0123456789-._~%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25";
+    private const string IsolatedAlphabet = "abcdefghijklmnopqrstuvwxzy0123456789-._~:/?#[]@!$&'()*+,;=%";
+    private const string IsolatedRunes = "abcdefghijklmnopqrstuvwxzy0123456789-._~:@!$&'()*+,;=";
+
     private const string Digits = "0123456789";
-    private const string Scheme = "https";
+
+    // Контекст сервера, который ставит connect этого клиента. Любое отличие от мирового - и поток
+    // берётся новым connect, а не из свободных: свободный живёт с тем контекстом, что уже стоит.
+    public string Scheme { get; init; } = "https";
+
+    public bool Isolated { get; init; }
+
+    public int? LengthBatch { get; init; }
+
+    public bool Fresh { get; init; }
+
+    private string Alphabet => Isolated ? IsolatedAlphabet : WorldAlphabet;
+
+    private string RuneAlphabet => Isolated ? IsolatedRunes : WorldRunes;
 
     private const int Symbols = 59 + 35;
-    private const int RuneSize = 3;
-    private const int RuneWidth = 4;
+    private const int TunnelsCount = 3;
+    private const int RuneLength = 4;
     private const int NumSize = 4;
     // Размеры VF-пула. Синтетика Infinite подключается с маленькими (CQ_DFA x CQ_PAGES), чтобы дойти
     // до Inf за сотню строк, а не за 65 536, - как dev-режим сервера.
     private static readonly int DfaSize = int.Parse(Environment.GetEnvironmentVariable("CQ_DFA") ?? "1024");
     private static readonly int PageCount = int.Parse(Environment.GetEnvironmentVariable("CQ_PAGES") ?? "64");
     private const int HopCount = 64;
-    private const int MaxChunks = 1024;
     private const int MaxJumps = 4096;
     private const int HeadLimit = 2048;
     private const int HeadBases = 8;
@@ -50,6 +70,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
     private readonly Dictionary<string, string> _bodies = [];
     private readonly Dictionary<string, int> _spent = [];
 
+    private Streams.Lease? _lease;
     private string _signs = "";
     private int _signPosition;
     private int _pending;
@@ -71,6 +92,13 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
     public int Jumps => _jumps.Count;
 
+    // Последняя загрузка: сколько байт пришло и сколько она шла.
+    public int LastBytes { get; private set; }
+
+    public long LastMs { get; private set; }
+
+    public int JumpOf(string url) => _jumps.GetValueOrDefault(PayloadOf(url), -1);
+
     public string BodyOf(string url) => _bodies.GetValueOrDefault(PayloadOf(url), "");
 
     // Номер запроса, на котором приехало тело: 0 - сам vrequest, дальше - запросы после него. Как слот 2 коробки у клиента.
@@ -78,19 +106,65 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
     public async Task ConnectAsync()
     {
-        var answer = await LoadAsync($"/connect?alphabet={AlphabetEncoded}&baseQuery=vink0s.com&runeSize={RuneSize}&scheme={Scheme}&token={token}"
-            + $"&dfaSize={DfaSize}&pageCount={PageCount}&hopCount={HopCount}&rememberInfinite=true&resetHypers=false&hypers={(hypers ? "on" : "off")}");
+        string query = Streams.Query(Isolated ? IsolatedEncoded : WorldEncoded, Scheme, token, hypers, LengthBatch);
+
+        bool fresh = Fresh || Isolated || Scheme != "https" || LengthBatch is not null;
+
+        _lease = fresh ? await Streams.ConnectAsync(http, query) : await Streams.TakeAsync(http, query);
+
+        var answer = _lease.Answer;
 
         _roots.Clear();
 
         foreach (var root in Items(answer, "roots")) _roots.Add(root!.GetValue<string>());
 
-        _signs = answer["signs"]?.GetValue<string>() ?? "";
-        _signPosition = 0;
+        _signs = _lease.Signs;
+        _signPosition = _lease.Position;
 
         foreach (var jump in Items(answer, "jumps")) _jumps[PayloadOf(Text(jump, "url"))] = Number(jump, "jump");
 
         Learn(answer);
+    }
+
+    // Отпускает поток следующему тесту - вместе с тем, докуда дошло кольцо подписей.
+    public void Release()
+    {
+        if (_lease is null) return;
+
+        _lease.Signs = _signs;
+        _lease.Position = _signPosition;
+
+        Streams.Give(_lease);
+
+        _lease = null;
+    }
+
+    // Один прыжок диапазоном как есть - ответ целиком, для замеров. Названное и доспевшее оседает,
+    // как при обычной дороге.
+    public async Task<JsonNode> HyperAsync(int jump, int count)
+    {
+        var answer = await LoadAsync($"/h/{Num(jump)}/{Num(count)}/{NextSign()}");
+
+        TakeSent(answer);
+        Debt(answer);
+
+        return answer;
+    }
+
+    // Добирает долги, пока сервер не скажет, что в полёте пусто: следующий замер не должен получить
+    // тела предыдущего.
+    public async Task DrainAsync()
+    {
+        for (int round = 0; round < 100; round++)
+        {
+            var answer = await LoadAsync($"/tc/{NextSign()}");
+
+            Debt(answer);
+
+            if (_pending == 0 && !Items(answer, "ready").Any()) return;
+
+            await Task.Delay(100);
+        }
     }
 
     // Result: выпускает пачку и держит её, пока не приедут все тела. step зовётся после каждого
@@ -178,7 +252,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
                 var (anchor, hop) = _infinite.GetValueOrDefault(id, (id, 0));
                 int cost = hop > 0 ? 2 : 1;
 
-                if (id >= 0 && cost <= (length + RuneSize - 1) / RuneSize && values.Count + cost <= MaxChunks)
+                if (id >= 0 && cost <= (length + TunnelsCount - 1) / TunnelsCount)
                 {
                     values.Add(anchor);
                     kinds.Add(Fragment);
@@ -200,7 +274,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
             // Первая руна адреса: «:» последним символом - «будет ещё». Без метки она уходит, только
             // если адрес ею и кончается; настоящий «:» на этом месте едет первым в следующем куске.
-            if (values.Count == 0 && accumulatedLength == RuneSize - 1 && position < payload.Length)
+            if (values.Count == 0 && accumulatedLength == TunnelsCount - 1 && position < payload.Length)
             {
                 var (next, nextLength) = SymbolAt(payload, position);
 
@@ -219,7 +293,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
                 }
             }
 
-            if (accumulatedLength < RuneSize) continue;
+            if (accumulatedLength < TunnelsCount) continue;
 
             values.Add(accumulated);
             kinds.Add(Chunk);
@@ -273,13 +347,13 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
             answer = await LoadAsync(kinds[i] switch
             {
-                Chunk => $"/c/{Runes(values[i], RuneAlphabet, RuneWidth)}/0/0/0/0",
-                Fragment => $"/c/{Runes(0, RuneAlphabet, RuneWidth)}/{values[i] % DfaSize}/{values[i] / DfaSize}/0/1/{NextSign()}",
-                Hop => $"/c/{Runes(0, RuneAlphabet, RuneWidth)}/0/0/{values[i]}/1/{NextSign()}",
+                Chunk => $"/c/{Runes(values[i], RuneAlphabet, RuneLength)}/0/0/0/0",
+                Fragment => $"/c/{Runes(0, RuneAlphabet, RuneLength)}/{values[i] % DfaSize}/{values[i] / DfaSize}/0/1/{NextSign()}",
+                Hop => $"/c/{Runes(0, RuneAlphabet, RuneLength)}/0/0/{values[i]}/1/{NextSign()}",
                 // Флаг склейки: 1 - закрывает цепочку, 0 - адрес весь в этом запросе.
                 SingleFragment => $"/sf/{Num(values[i])}/{(i > 0 ? 1 : 0)}/{NextSign()}",
                 Pair => $"/c/{PairRune(values[i] % Alphabet.Length)}/{values[i] / Alphabet.Length % DfaSize}/{values[i] / Alphabet.Length / DfaSize}/0/2",
-                Pair2 => $"/c/{Runes(values[i] % (Symbols * Symbols) * Symbols + Alphabet.IndexOf(':'), RuneAlphabet, RuneWidth)}/{values[i] / (Symbols * Symbols) % DfaSize}/{values[i] / (Symbols * Symbols) / DfaSize}/0/2",
+                Pair2 => $"/c/{Runes(values[i] % (Symbols * Symbols) * Symbols + Alphabet.IndexOf(':'), RuneAlphabet, RuneLength)}/{values[i] / (Symbols * Symbols) % DfaSize}/{values[i] / (Symbols * Symbols) / DfaSize}/0/2",
                 _ => $"/t/{TailRunes(values[i])}/{(i > 0 ? 1 : 0)}/{NextSign()}"
             });
 
@@ -453,6 +527,9 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
         string text = await response.Content.ReadAsStringAsync();
 
+        LastMs = (long)(DateTime.UtcNow - _lastLoad).TotalMilliseconds;
+        LastBytes = System.Text.Encoding.UTF8.GetByteCount(text);
+
         if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"{path} -> {(int)response.StatusCode}: {text}");
 
         return (text.StartsWith('{') ? JsonNode.Parse(text) : null) ?? new JsonObject();
@@ -474,7 +551,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
         }
     }
 
-    private static string TailRunes(int value)
+    private string TailRunes(int value)
     {
         int pad = Alphabet.IndexOf(':');
 
@@ -483,12 +560,12 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
 
         int runes = first * Symbols + second;
 
-        for (int i = 2; i < RuneSize; i++) runes = runes * Symbols + pad;
+        for (int i = 2; i < TunnelsCount; i++) runes = runes * Symbols + pad;
 
-        return Runes(runes, RuneAlphabet, RuneWidth);
+        return Runes(runes, RuneAlphabet, RuneLength);
     }
 
-    private static string PairRune(int letter) => Runes((letter * Symbols + Alphabet.IndexOf(':')) * Symbols + Alphabet.IndexOf(':'), RuneAlphabet, RuneWidth);
+    private string PairRune(int letter) => Runes((letter * Symbols + Alphabet.IndexOf(':')) * Symbols + Alphabet.IndexOf(':'), RuneAlphabet, RuneLength);
 
     private static string Num(int value) => Runes(value, Digits, NumSize);
 
@@ -505,7 +582,7 @@ public class WireClient(HttpClient http, string token, TimeSpan cooldown, bool h
         return new string(runes);
     }
 
-    private static string PayloadOf(string url) => url.StartsWith(Scheme + "://", StringComparison.Ordinal) ? url[(Scheme.Length + 3)..] : url;
+    private string PayloadOf(string url) => url.StartsWith(Scheme + "://", StringComparison.Ordinal) ? url[(Scheme.Length + 3)..] : url;
 
     private static IEnumerable<JsonNode?> Items(JsonNode answer, string field) => answer[field] as JsonArray ?? [];
 

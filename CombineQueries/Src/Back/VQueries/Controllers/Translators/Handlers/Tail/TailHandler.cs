@@ -59,8 +59,8 @@ public class TailHandler(ILogger<TailHandler> logger, IOutbox outbox, ISpeak spe
         string tail = request.Runes.Length == 0
             ? ""
             : Translator.TrimPad(request.Type == TypeQuery.Direct
-                ? Translator.DirectUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize)
-                : Translator.FragmentateUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.RuneSize, speech.SymbolsOf(request.Type)), speech.RuneSize);
+                ? Translator.DirectUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.TunnelsCount)
+                : Translator.FragmentateUnrune(request.Runes, speech.RuneAlphabet, speech.Alphabet, speech.TunnelsCount, speech.SymbolsOf(request.Type)), speech.TunnelsCount);
 
         var assembled = speech.Close(tail, request.Type);
 
